@@ -36,6 +36,7 @@ from keepwatch.paths import PathError, Paths, ensure_private_dir, remove_stale_p
 from keepwatch.pollengine import Fake, PollEngine, PollReport, parse_fakes
 from keepwatch.runner import Runner
 from keepwatch.state import initial_state
+from keepwatch.validation import validate_watches
 
 COMMAND_GROUPS = {"keepwatch": [{"name": "Develop", "commands": ["validate", "poll"]}]}
 _PLAIN_BOXES = {
@@ -206,6 +207,43 @@ def poll(
     if as_json:
         click.echo(json.dumps({"polls": [r.to_dict() for r in reports], "records": records}, indent=2, default=str))
     raise SystemExit(1 if any(report.failed for report in reports) else 0)
+
+
+@cli.command()
+@click.argument("names", nargs=-1)
+@click.option("--json", "as_json", is_flag=True, help="Print the result as one JSON document.")
+@click.pass_obj
+def validate(app: App, names: tuple[str, ...], as_json: bool) -> None:
+    """Check watches for config and code problems, reporting every problem at once.
+
+    Checks each watch's config.toml (types, unknown keys, with line numbers), that it has a check, that no
+    hook is defined twice, that command hooks' programs exist, and that watch.py imports cleanly (in a
+    worker process, exactly as a poll loads it). With no NAMES, checks every watch.
+
+    Exit status: 0 if everything is valid, 1 if any problem was found.
+    """
+    try:
+        global_config = app.load_global()
+    except ConfigError as exc:
+        _fail("\n".join(str(problem) for problem in exc.problems))
+    discovery = discover_watches(global_config)
+    with _process_dir(app.paths) as pid:
+        general, checks = validate_watches(global_config, discovery, list(names), Runner(), app.paths, pid)
+    ok = (not general or bool(names)) and all(check.ok for check in checks)
+    if as_json:
+        document = {"ok": ok, "problems": general, "watches": [check.to_dict() for check in checks]}
+        click.echo(json.dumps(document, indent=2))
+    else:
+        console = make_console()
+        for problem in general:
+            console.print(f"problem  {problem}")
+        for check in checks:
+            console.print(f"{'ok' if check.ok else 'FAIL':<4} {check.name}")
+            for problem in check.problems:
+                console.print(f"     {problem}")
+        if not checks and not general:
+            console.print("no watches found")
+    raise SystemExit(0 if ok else 1)
 
 
 def main() -> None:
