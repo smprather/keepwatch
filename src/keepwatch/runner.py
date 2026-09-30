@@ -1,0 +1,376 @@
+"""Run one hook call in a child process: a Python worker or a command.
+
+Every call gets its own session (process group). At the deadline the group
+gets SIGTERM, then SIGKILL after kill_grace seconds. stdout and stderr are
+captured (head and tail kept); everything is returned as a HookResult.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import IO, Any
+
+from keepwatch import __version__
+from keepwatch.config import Command, ExitCodes, WatchConfig
+from keepwatch.durations import format_duration
+from keepwatch.hooks import CHECK
+from keepwatch.protocol import PROTOCOL_VERSION, decode_lines, normalize_payload
+from keepwatch.state import Outcome
+
+KILL_GRACE = 5.0
+DRAIN_GRACE = 2.0
+_EXPECTED_VERSION = __version__
+
+
+@dataclass(frozen=True)
+class HookCall:
+    watch: WatchConfig
+    hook: str
+    poll_id: str
+    condition: bool
+    payload: Any
+    data_dir: Path
+    run_dir: Path
+    timeout: float
+    capture_bytes: int = 65_536
+    environment: Mapping[str, str] = field(default_factory=dict)
+    mode: str = "call"
+
+
+@dataclass
+class HookResult:
+    hook: str
+    kind: str
+    target: str
+    status: str
+    payload: Any = None
+    reason: str | None = None
+    exit_code: int | None = None
+    signal: int | None = None
+    exception: dict[str, str] | None = None
+    stdout: str = ""
+    stderr: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    duration: float = 0.0
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    hooks: list[str] | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.status == "ok"
+
+    def outcome(self) -> Outcome:
+        return Outcome(self.status)
+
+    def to_record(self) -> dict[str, Any]:
+        record = asdict(self)
+        del record["messages"]
+        del record["hooks"]
+        return record
+
+
+class _Reader(threading.Thread):
+    """Drains one pipe. With a limit, keeps only the first and last limit/2 bytes."""
+
+    def __init__(self, stream: IO[bytes], limit: int | None) -> None:
+        super().__init__(daemon=True)
+        self._stream = stream
+        self._limit = limit
+        self.head = bytearray()
+        self.tail = bytearray()
+        self.total = 0
+
+    def run(self) -> None:
+        fd = self._stream.fileno()
+        try:
+            while chunk := os.read(fd, 65536):
+                self.total += len(chunk)
+                if self._limit is None:
+                    self.head += chunk
+                    continue
+                half = max(self._limit // 2, 1)
+                room = half - len(self.head)
+                if room > 0:
+                    self.head += chunk[:room]
+                    chunk = chunk[room:]
+                if chunk:
+                    self.tail += chunk
+                    if len(self.tail) > half:
+                        del self.tail[:-half]
+        finally:
+            self._stream.close()
+
+    def raw(self) -> bytes:
+        return bytes(self.head) + bytes(self.tail)
+
+    def text(self) -> tuple[str, bool]:
+        omitted = self.total - len(self.head) - len(self.tail)
+        head = self.head.decode("utf-8", errors="replace")
+        tail = self.tail.decode("utf-8", errors="replace")
+        if omitted <= 0:
+            return (bytes(self.head) + bytes(self.tail)).decode("utf-8", errors="replace"), False
+        return f"{head}\n…[{omitted} bytes omitted]…\n{tail}", True
+
+
+class _Writer(threading.Thread):
+    def __init__(self, fd: int, data: bytes) -> None:
+        super().__init__(daemon=True)
+        self._fd = fd
+        self._data = data
+
+    def run(self) -> None:
+        try:
+            with os.fdopen(self._fd, "wb") as handle:
+                handle.write(self._data)
+        except BrokenPipeError:
+            pass
+
+
+def _signal_group(pgid: int, sig: signal.Signals) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _signal_name(number: int) -> str:
+    try:
+        return signal.Signals(number).name
+    except ValueError:
+        return str(number)
+
+
+def classify_exit(code: int, codes: ExitCodes) -> str:
+    """Map a command check's exit code to an outcome value via [check_exit_codes]."""
+    if code in codes.true:
+        return "true"
+    if code in codes.false:
+        return "false"
+    if code in codes.unknown:
+        return "unknown"
+    return "error"
+
+
+def setting_variables(settings: Mapping[str, Any]) -> dict[str, str]:
+    """KEEPWATCH_SETTING_<KEY> for each top-level scalar setting."""
+    variables = {}
+    for key, value in settings.items():
+        if isinstance(value, bool):
+            text = "true" if value else "false"
+        elif isinstance(value, (str, int, float)):
+            text = str(value)
+        else:
+            continue
+        variables[f"KEEPWATCH_SETTING_{re.sub(r'[^A-Za-z0-9]', '_', key).upper()}"] = text
+    return variables
+
+
+class Runner:
+    def __init__(self, *, python: str = sys.executable, kill_grace: float = KILL_GRACE) -> None:
+        self.python = python
+        self.kill_grace = kill_grace
+
+    def run(self, call: HookCall) -> HookResult:
+        if call.mode == "call" and call.hook in call.watch.hooks:
+            return self._run_command(call, call.watch.hooks[call.hook])
+        return self._run_python(call)
+
+    # -- shared -------------------------------------------------------------
+
+    def _failure_status(self, call: HookCall) -> str:
+        return "error" if call.hook == CHECK or call.mode == "describe" else "failed"
+
+    def _error(self, call: HookCall, kind: str, target: str, started: float, reason: str) -> HookResult:
+        return HookResult(
+            hook=call.hook,
+            kind=kind,
+            target=target,
+            status=self._failure_status(call),
+            reason=reason,
+            duration=time.monotonic() - started,
+        )
+
+    def _environment(self, call: HookCall) -> dict[str, str]:
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("KEEPWATCH_") or key == "KEEPWATCH_CONFIG"
+        }
+        env.update(call.environment)
+        env.update(call.watch.environment)
+        env.update(setting_variables(call.watch.settings))
+        env.update(
+            {
+                "KEEPWATCH_WATCH": call.watch.name,
+                "KEEPWATCH_HOOK": call.hook,
+                "KEEPWATCH_POLL_ID": call.poll_id,
+                "KEEPWATCH_CONDITION": "true" if call.condition else "false",
+                "KEEPWATCH_WATCH_DIR": str(call.watch.watch_dir),
+                "KEEPWATCH_DATA_DIR": str(call.data_dir),
+                "KEEPWATCH_RUN_DIR": str(call.run_dir),
+            }
+        )
+        return env
+
+    def _supervise(self, proc: subprocess.Popen[bytes], readers: Sequence[_Reader], timeout: float) -> tuple[int, bool]:
+        timed_out = False
+        try:
+            proc.wait(timeout=max(timeout, 0.0))
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _signal_group(proc.pid, signal.SIGTERM)
+            try:
+                proc.wait(timeout=self.kill_grace)
+            except subprocess.TimeoutExpired:
+                pass
+            _signal_group(proc.pid, signal.SIGKILL)
+            proc.wait()
+        drain_until = time.monotonic() + DRAIN_GRACE
+        for reader in readers:
+            reader.join(max(drain_until - time.monotonic(), 0.0))
+        if any(reader.is_alive() for reader in readers):
+            # A leftover child still holds a pipe open: kill the whole group.
+            _signal_group(proc.pid, signal.SIGKILL)
+            for reader in readers:
+                reader.join(DRAIN_GRACE)
+        return proc.returncode, timed_out
+
+    def _captured(self, out: _Reader, err: _Reader, returncode: int, started: float) -> dict[str, Any]:
+        stdout, stdout_cut = out.text()
+        stderr, stderr_cut = err.text()
+        return {
+            "stdout": stdout,
+            "stderr": stderr,
+            "stdout_truncated": stdout_cut,
+            "stderr_truncated": stderr_cut,
+            "exit_code": returncode if returncode >= 0 else None,
+            "signal": -returncode if returncode < 0 else None,
+            "duration": time.monotonic() - started,
+        }
+
+    # -- Python hooks ---------------------------------------------------------
+
+    def _run_python(self, call: HookCall) -> HookResult:
+        target = f"watch.py:{call.hook}" if call.mode == "call" else "watch.py (describe)"
+        started = time.monotonic()
+        if call.watch.python_dependencies:
+            return self._error(
+                call,
+                "python",
+                target,
+                started,
+                "python_dependencies is not supported by this version of keepwatch; remove it from config.toml",
+            )
+        request = {
+            "watch": call.watch.name,
+            "hook": call.hook,
+            "watch_dir": str(call.watch.watch_dir),
+            "data_dir": str(call.data_dir),
+            "run_dir": str(call.run_dir),
+            "poll_id": call.poll_id,
+            "condition": call.condition,
+            "payload": call.payload,
+            "settings": dict(call.watch.settings),
+            "deadline": time.time() + call.timeout,
+            "capture_bytes": call.capture_bytes,
+            "mode": call.mode,
+        }
+        env = self._environment(call)
+        env["PYTHONUNBUFFERED"] = "1"
+        req_r, req_w = os.pipe()
+        res_r, res_w = os.pipe()
+        argv = [self.python, "-m", "keepwatch.worker", "--request-fd", str(req_r), "--result-fd", str(res_w)]
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=call.watch.watch_dir,
+                env=env,
+                pass_fds=(req_r, res_w),
+                start_new_session=True,
+            )
+        except OSError as exc:
+            for fd in (req_r, req_w, res_r, res_w):
+                os.close(fd)
+            return self._error(call, "python", target, started, f"cannot start the Python worker ({self.python}): {exc}")
+        os.close(req_r)
+        os.close(res_w)
+        _Writer(req_w, json.dumps(request).encode("utf-8")).start()
+        out = _Reader(proc.stdout, call.capture_bytes)
+        err = _Reader(proc.stderr, call.capture_bytes)
+        results = _Reader(os.fdopen(res_r, "rb"), None)
+        for reader in (out, err, results):
+            reader.start()
+        returncode, timed_out = self._supervise(proc, (out, err, results), call.timeout)
+        messages, bad = decode_lines(results.raw())
+        base = self._captured(out, err, returncode, started)
+        base["messages"] = [message for message in messages if message.get("type") in ("log", "command")]
+        if bad:
+            base["messages"].append(
+                {
+                    "type": "log",
+                    "level": "WARNING",
+                    "logger": "keepwatch.worker",
+                    "message": f"ignored {len(bad)} malformed message(s) from the worker",
+                    "fields": {},
+                }
+            )
+        common = {"hook": call.hook, "kind": "python", "target": target, **base}
+        failure = self._failure_status(call)
+        if timed_out:
+            return HookResult(status="timeout", reason=f"timed out after {format_duration(call.timeout)}", **common)
+        hello = next((m for m in messages if m.get("type") == "hello"), None)
+        result = next((m for m in messages if m.get("type") == "result"), None)
+        if hello is None:
+            return HookResult(
+                status=failure,
+                reason=f"the Python worker exited (code {returncode}) before starting; see stderr",
+                **common,
+            )
+        if hello.get("protocol") != PROTOCOL_VERSION or hello.get("version") != _EXPECTED_VERSION:
+            return HookResult(
+                status=failure,
+                reason=(
+                    f"keepwatch version mismatch: service {_EXPECTED_VERSION} (protocol {PROTOCOL_VERSION}), "
+                    f"worker {hello.get('version')} (protocol {hello.get('protocol')})"
+                ),
+                **common,
+            )
+        if result is None:
+            return HookResult(
+                status=failure,
+                reason=f"the Python worker exited (code {returncode}) without reporting a result; see stderr",
+                **common,
+            )
+        status = result.get("status")
+        details = {"reason": result.get("reason"), "exception": result.get("exception")}
+        if call.mode == "describe":
+            return HookResult(status="ok" if status == "ok" else "error", hooks=result.get("hooks"), **details, **common)
+        if call.hook == CHECK:
+            if status == "answer":
+                mapped = "true" if result.get("answer") else "false"
+            elif status == "unknown":
+                mapped = "unknown"
+            else:
+                mapped = "error"
+            return HookResult(status=mapped, payload=result.get("payload"), **details, **common)
+        return HookResult(status="ok" if status == "ok" else "failed", **details, **common)
+
+    # -- command hooks (Task 9) -----------------------------------------------
+
+    def _run_command(self, call: HookCall, command: Command) -> HookResult:
+        started = time.monotonic()
+        return self._error(call, "command", command.display(), started, "command hooks are added in Task 9")
