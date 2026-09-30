@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import os
 import re
 import shlex
 import tomllib
@@ -14,6 +15,7 @@ from typing import Any
 
 from keepwatch.durations import DurationError, parse_duration
 from keepwatch.hooks import HOOK_NAMES
+from keepwatch.paths import Paths
 
 CONFIG_NAME = "config.toml"
 
@@ -334,3 +336,200 @@ def load_watch_config(watch_dir: Path, defaults: Mapping[str, Any] | None = None
         settings=MappingProxyType(settings),
         **values,
     )
+
+
+@dataclass(frozen=True)
+class LogSettings:
+    max_bytes: int = 10_000_000
+    backups: int = 10
+    capture_bytes: int = 65_536
+
+
+@dataclass(frozen=True)
+class GlobalConfig:
+    path: Path
+    watch_dirs: tuple[Path, ...]
+    reload_interval: float = 5.0
+    alert_command: Command | None = None
+    defaults: Mapping[str, Any] = field(default_factory=dict)
+    environment: Mapping[str, str] = field(default_factory=dict)
+    log: LogSettings = LogSettings()
+
+
+GLOBAL_KEYS = (
+    Key(
+        "watch_dirs",
+        "path_list",
+        None,
+        "Directories whose subdirectories are watches. Earlier entries win name clashes. "
+        "Default: $XDG_CONFIG_HOME/keepwatch/watches.",
+    ),
+    Key("reload_interval", "interval", 5.0, "Master tick: how often config changes are picked up."),
+    Key("alert_command", "command", None, "Run when a watch goes offline or comes back online."),
+)
+
+GLOBAL_TABLES = {
+    "defaults": "Default values for defaultable watch keys.",
+    "environment": "Extra environment variables for every hook.",
+    "log": "Log rotation and output capture limits.",
+}
+
+LOG_KEYS = (
+    Key("max_bytes", "int", 10_000_000, "Rotate the log at this size."),
+    Key("backups", "int", 10, "Rotated log files kept."),
+    Key(
+        "capture_bytes",
+        "int",
+        65_536,
+        "Per stream (stdout, stderr) captured into a log record; longer output keeps head and tail.",
+    ),
+)
+
+
+def _watch_dirs(collector: _Collector, value: Any, base: Path) -> tuple[Path, ...] | None:
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) and item for item in value):
+        collector.add(f"'watch_dirs' must be a non-empty list of directory paths, got {value!r}", key="watch_dirs")
+        return None
+    dirs = []
+    for item in value:
+        expanded = Path(os.path.expandvars(os.path.expanduser(item)))
+        dirs.append(expanded if expanded.is_absolute() else base / expanded)
+    return tuple(dirs)
+
+
+def _defaults_table(collector: _Collector, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        collector.add("'defaults' must be a table ([defaults])", key="defaults")
+        return {}
+    by_name = {key.name: key for key in WATCH_KEYS}
+    allowed = [key.name for key in WATCH_KEYS if key.defaultable]
+    defaults = {}
+    for name, raw in value.items():
+        if name not in by_name:
+            _unknown_key(collector, name, allowed, table="defaults")
+            continue
+        if not by_name[name].defaultable:
+            collector.add(
+                f"'{name}' cannot be set in [defaults]; defaultable keys: {', '.join(allowed)}",
+                key=name,
+                table="defaults",
+            )
+            continue
+        converted = _convert(collector, by_name[name], raw, table="defaults")
+        if converted is not _INVALID:
+            defaults[name] = converted
+    return defaults
+
+
+def _log_table(collector: _Collector, value: Any) -> LogSettings:
+    if not isinstance(value, dict):
+        collector.add("'log' must be a table ([log])", key="log")
+        return LogSettings()
+    by_name = {key.name: key for key in LOG_KEYS}
+    values = {}
+    for name, raw in value.items():
+        if name not in by_name:
+            _unknown_key(collector, name, by_name, table="log")
+            continue
+        converted = _convert(collector, by_name[name], raw, table="log")
+        if converted is _INVALID:
+            continue
+        if converted < 1:
+            collector.add(f"'{name}' must be at least 1, got {raw!r}", key=name, table="log")
+            continue
+        values[name] = converted
+    return LogSettings(**values)
+
+
+def load_global_config(path: Path, paths: Paths) -> GlobalConfig:
+    """Read and validate the global config. A missing file means all defaults."""
+    if not path.exists():
+        return GlobalConfig(path=path, watch_dirs=(paths.default_watches_dir,))
+    data, collector = _read(path)
+    by_name = {key.name: key for key in GLOBAL_KEYS}
+    watch_dirs: tuple[Path, ...] | None = (paths.default_watches_dir,)
+    reload_interval = 5.0
+    alert_command = None
+    defaults: dict[str, Any] = {}
+    environment: dict[str, str] = {}
+    log = LogSettings()
+    for name, value in data.items():
+        if name == "watch_dirs":
+            watch_dirs = _watch_dirs(collector, value, path.parent)
+        elif name == "reload_interval":
+            converted = _convert(collector, by_name[name], value)
+            if converted is not _INVALID:
+                reload_interval = converted
+        elif name == "alert_command":
+            alert_command = _command(collector, value, key=name, table=None, topic="failures")
+        elif name == "defaults":
+            defaults = _defaults_table(collector, value)
+        elif name == "environment":
+            environment = _string_table(collector, value, "environment")
+        elif name == "log":
+            log = _log_table(collector, value)
+        else:
+            _unknown_key(collector, name, [*by_name, *GLOBAL_TABLES])
+    if collector.problems or watch_dirs is None:
+        raise ConfigError(collector.problems)
+    return GlobalConfig(
+        path=path,
+        watch_dirs=watch_dirs,
+        reload_interval=reload_interval,
+        alert_command=alert_command,
+        defaults=MappingProxyType(defaults),
+        environment=MappingProxyType(environment),
+        log=log,
+    )
+
+
+_WATCH_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+
+
+@dataclass(frozen=True)
+class Discovery:
+    watches: Mapping[str, Path]
+    problems: tuple[ConfigProblem, ...]
+
+
+def discover_watches(global_config: GlobalConfig) -> Discovery:
+    """Find watch directories in watch_dirs order. Earlier directories win duplicate names."""
+    found: dict[str, Path] = {}
+    problems: list[ConfigProblem] = []
+    for base in global_config.watch_dirs:
+        if not base.is_dir():
+            problems.append(ConfigProblem(base, None, "watches directory does not exist (create it or fix watch_dirs)"))
+            continue
+        for entry in sorted(base.iterdir()):
+            if not entry.is_dir() or entry.name.startswith((".", "_")):
+                continue
+            if not _WATCH_NAME.fullmatch(entry.name):
+                problems.append(
+                    ConfigProblem(entry, None, "watch directory names may contain only letters, digits, '_', '.' and '-'")
+                )
+                continue
+            if entry.name in found:
+                problems.append(
+                    ConfigProblem(
+                        entry,
+                        None,
+                        f"duplicate watch name '{entry.name}': {found[entry.name]} wins "
+                        "(it comes first in watch_dirs); this one is skipped",
+                    )
+                )
+                continue
+            found[entry.name] = entry
+    return Discovery(MappingProxyType(found), tuple(problems))
+
+
+class WatchNotFound(Exception):
+    """No watch with the requested name."""
+
+
+def find_watch(discovery: Discovery, name: str) -> Path:
+    if name in discovery.watches:
+        return discovery.watches[name]
+    close = difflib.get_close_matches(name, list(discovery.watches), n=1)
+    hint = f" (did you mean '{close[0]}'?)" if close else ""
+    known = ", ".join(discovery.watches) or "none"
+    raise WatchNotFound(f"no watch named '{name}'{hint}; known watches: {known}")
