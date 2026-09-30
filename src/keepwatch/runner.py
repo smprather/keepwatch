@@ -369,8 +369,92 @@ class Runner:
             return HookResult(status=mapped, payload=result.get("payload"), **details, **common)
         return HookResult(status="ok" if status == "ok" else "failed", **details, **common)
 
-    # -- command hooks (Task 9) -----------------------------------------------
+    # -- command hooks --------------------------------------------------------
 
     def _run_command(self, call: HookCall, command: Command) -> HookResult:
         started = time.monotonic()
-        return self._error(call, "command", command.display(), started, "command hooks are added in Task 9")
+        target = command.display()
+        env = self._environment(call)
+        temp_files: list[Path] = []
+        try:
+            call.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            call.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            stem = f"{call.poll_id}-{call.hook}"
+            settings_file = call.run_dir / f"{stem}-settings.json"
+            settings_file.write_text(json.dumps(dict(call.watch.settings)), encoding="utf-8")
+            temp_files.append(settings_file)
+            env["KEEPWATCH_SETTINGS_FILE"] = str(settings_file)
+            payload_out: Path | None = None
+            if call.hook == CHECK:
+                payload_out = call.run_dir / f"{stem}-payload-out.json"
+                payload_out.unlink(missing_ok=True)
+                temp_files.append(payload_out)
+                env["KEEPWATCH_PAYLOAD_OUT"] = str(payload_out)
+            elif call.payload is not None:
+                payload_file = call.run_dir / f"{stem}-payload.json"
+                payload_file.write_text(json.dumps(call.payload), encoding="utf-8")
+                temp_files.append(payload_file)
+                env["KEEPWATCH_PAYLOAD_FILE"] = str(payload_file)
+            try:
+                proc = subprocess.Popen(
+                    command.to_argv(),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd=call.watch.watch_dir,
+                    env=env,
+                    start_new_session=True,
+                )
+            except OSError as exc:
+                return self._error(call, "command", target, started, f"cannot start command: {exc.strerror or exc}")
+            out = _Reader(proc.stdout, call.capture_bytes)
+            err = _Reader(proc.stderr, call.capture_bytes)
+            out.start()
+            err.start()
+            returncode, timed_out = self._supervise(proc, (out, err), call.timeout)
+            common = {
+                "hook": call.hook,
+                "kind": "command",
+                "target": target,
+                **self._captured(out, err, returncode, started),
+            }
+            if timed_out:
+                return HookResult(status="timeout", reason=f"timed out after {format_duration(call.timeout)}", **common)
+            if returncode < 0:
+                return HookResult(
+                    status=self._failure_status(call),
+                    reason=f"killed by signal {_signal_name(-returncode)}",
+                    **common,
+                )
+            if call.hook != CHECK:
+                if returncode == 0:
+                    return HookResult(status="ok", **common)
+                return HookResult(status="failed", reason=f"exit code {returncode}", **common)
+            status = classify_exit(returncode, call.watch.exit_codes)
+            if status == "error":
+                codes = call.watch.exit_codes
+                return HookResult(
+                    status="error",
+                    reason=(
+                        f"exit code {returncode} is not listed in [check_exit_codes] "
+                        f"(true={list(codes.true)}, false={list(codes.false)}, unknown={list(codes.unknown)})"
+                    ),
+                    **common,
+                )
+            payload, problem = self._read_payload(payload_out)
+            if problem is not None:
+                return HookResult(status="error", reason=problem, **common)
+            return HookResult(status=status, payload=payload, **common)
+        finally:
+            for path in temp_files:
+                path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _read_payload(path: Path | None) -> tuple[Any, str | None]:
+        if path is None or not path.exists() or path.stat().st_size == 0:
+            return None, None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return None, f"$KEEPWATCH_PAYLOAD_OUT does not contain valid JSON: {exc}"
+        return normalize_payload(raw)
