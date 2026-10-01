@@ -23,7 +23,7 @@ from typing import NoReturn
 import rich_click as click
 from rich.markdown import Markdown
 
-from keepwatch import __version__, systemd
+from keepwatch import __version__, platform, systemd, winsched
 from keepwatch.config import (
     ConfigError,
     Discovery,
@@ -585,13 +585,47 @@ def _systemctl_or_fail(*args: str) -> None:
         _fail(f"systemctl --user {' '.join(args)} failed ({completed.returncode}): {completed.stderr.strip()}")
 
 
+def _on_windows() -> bool:
+    return platform.IS_WINDOWS
+
+
+def _last_line(text: str) -> str:
+    lines = [line for line in text.strip().splitlines() if line.strip()]
+    return lines[-1] if lines else "no details"
+
+
+def _install_windows(app: App, dry_run: bool) -> None:
+    custom_config = app.config_path.resolve() if app.config_path != app.paths.config_file else None
+    executable = winsched.pythonw()
+    arguments = winsched.run_arguments(custom_config)
+    register = winsched.register_script(executable, arguments)
+    shortcut = winsched.shortcut_script(executable, arguments)
+    if dry_run:
+        click.echo("would run in PowerShell:\n")
+        click.echo(register)
+        click.echo("\nand, if Task Scheduler refuses, create a Startup-folder shortcut:\n")
+        click.echo(shortcut)
+        return
+    result = winsched.run_powershell(register)
+    if result.returncode == 0:
+        click.echo(f"registered Task Scheduler task '{winsched.TASK_NAME}' (at logon, restarted on failure) and started it")
+    else:
+        click.echo(f"Task Scheduler refused ({_last_line(result.stderr)}); using a Startup-folder shortcut instead")
+        fallback = winsched.run_powershell(shortcut)
+        if fallback.returncode != 0:
+            _fail(f"could not create the Startup-folder shortcut either: {_last_line(fallback.stderr)}")
+        click.echo("created a Startup-folder shortcut (keepwatch.lnk) and started keepwatch")
+    click.echo("check it with: keepwatch status")
+
+
 @cli.command()
 @click.option("--dry-run", is_flag=True, help="Print the unit file and the commands without changing anything.")
 @click.pass_obj
 def install(app: App, dry_run: bool) -> None:
-    """Start keepwatch at login: install and start a systemd user service running `keepwatch run`.
+    """Start keepwatch at login: a systemd user service on Linux, a Task Scheduler logon task on Windows.
 
-    A --config given to install is passed on to the service.
+    On Windows it registers a Task Scheduler task "keepwatch" that runs pythonw.exe -m keepwatch run at logon
+    (no console window, restarted on failure); if policy forbids that, it creates a Startup-folder shortcut instead.
 
     Writes $XDG_CONFIG_HOME/systemd/user/keepwatch.service with this keepwatch's absolute path and the
     current PATH (so hooks find the same programs as your shell), then runs `systemctl --user daemon-reload`
@@ -602,6 +636,9 @@ def install(app: App, dry_run: bool) -> None:
 
     Exit status: 0, or 1 if systemctl fails.
     """
+    if _on_windows():
+        _install_windows(app, dry_run)
+        return
     unit_path = systemd.unit_dir(app.paths) / systemd.UNIT_NAME
     custom_config = app.config_path.resolve() if app.config_path != app.paths.config_file else None
     text = systemd.unit_text(systemd.find_executable(), os.environ.get("PATH", ""), custom_config)
@@ -629,12 +666,30 @@ def install(app: App, dry_run: bool) -> None:
 @cli.command()
 @click.pass_obj
 def uninstall(app: App) -> None:
-    """Stop and remove the systemd user service installed by `keepwatch install`.
+    """Stop and remove what keepwatch install set up (systemd user service, or Windows logon task/shortcut).
 
     Watches, state and logs are left alone.
 
     Exit status: 0, or 1 if systemctl daemon-reload fails.
     """
+    if _on_windows():
+        if service_running(app.paths) and not _request_stop(app.paths, 30.0):
+            click.echo("warning: the running service did not stop within 30s")
+        result = winsched.run_powershell(winsched.unregister_script())
+        if result.returncode != 0:
+            _fail(f"could not remove the logon task: {_last_line(result.stderr)}")
+        click.echo("removed the logon task and the Startup-folder shortcut (whichever existed)")
+        click.echo("keepwatch will no longer start at logon")
+        return
+    if _on_windows():
+        if service_running(app.paths) and not _request_stop(app.paths, 30.0):
+            click.echo("warning: the running service did not stop within 30s")
+        result = winsched.run_powershell(winsched.unregister_script())
+        if result.returncode != 0:
+            _fail(f"could not remove the logon task: {_last_line(result.stderr)}")
+        click.echo("removed the logon task and the Startup-folder shortcut (whichever existed)")
+        click.echo("keepwatch will no longer start at logon")
+        return
     unit_path = systemd.unit_dir(app.paths) / systemd.UNIT_NAME
     try:
         systemd.systemctl("disable", "--now", systemd.UNIT_NAME)

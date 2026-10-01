@@ -1,8 +1,11 @@
+import subprocess as _subprocess
 import sys
 
+import pytest
 from click.testing import CliRunner
 
-from keepwatch import systemd
+from keepwatch import cli as cli_module
+from keepwatch import systemd, winsched
 from keepwatch.cli import cli
 
 
@@ -24,6 +27,7 @@ def unit_file(xdg):
     return xdg.config_home.parent / "systemd" / "user" / "keepwatch.service"
 
 
+@pytest.mark.posix_only
 def test_install_writes_the_unit_and_enables_it(xdg, tmp_path, monkeypatch):
     calls = fake_systemctl(tmp_path, monkeypatch)
     monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
@@ -37,6 +41,7 @@ def test_install_writes_the_unit_and_enables_it(xdg, tmp_path, monkeypatch):
     assert "SSH_AUTH_SOCK" not in result.output
 
 
+@pytest.mark.posix_only
 def test_install_warns_about_ssh_agent(xdg, tmp_path, monkeypatch):
     fake_systemctl(tmp_path, monkeypatch)
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/ssh-XXXX/agent.123")
@@ -45,6 +50,7 @@ def test_install_warns_about_ssh_agent(xdg, tmp_path, monkeypatch):
     assert "SSH_AUTH_SOCK" in result.output and "keepwatch docs environment" in result.output
 
 
+@pytest.mark.posix_only
 def test_install_dry_run_changes_nothing(xdg, tmp_path, monkeypatch):
     calls = fake_systemctl(tmp_path, monkeypatch)
     result = run("install", "--dry-run")
@@ -53,6 +59,7 @@ def test_install_dry_run_changes_nothing(xdg, tmp_path, monkeypatch):
     assert not unit_file(xdg).exists() and not calls.exists()
 
 
+@pytest.mark.posix_only
 def test_install_reports_systemctl_failure(xdg, tmp_path, monkeypatch):
     fake_systemctl(tmp_path, monkeypatch, exit_code=1)
     result = run("install")
@@ -60,6 +67,7 @@ def test_install_reports_systemctl_failure(xdg, tmp_path, monkeypatch):
     assert "fake failure" in result.output
 
 
+@pytest.mark.posix_only
 def test_uninstall(xdg, tmp_path, monkeypatch):
     calls = fake_systemctl(tmp_path, monkeypatch)
     assert run("install").exit_code == 0
@@ -69,6 +77,7 @@ def test_uninstall(xdg, tmp_path, monkeypatch):
     assert calls.read_text().splitlines()[-2:] == ["--user disable --now keepwatch.service", "--user daemon-reload"]
 
 
+@pytest.mark.posix_only
 def test_install_keeps_a_custom_config(xdg, tmp_path, monkeypatch):
     fake_systemctl(tmp_path, monkeypatch)
     custom = tmp_path / "custom.toml"
@@ -79,9 +88,68 @@ def test_install_keeps_a_custom_config(xdg, tmp_path, monkeypatch):
     assert "--config" not in unit_file(xdg).read_text()
 
 
+@pytest.mark.posix_only
 def test_find_executable_prefers_the_running_script(tmp_path, monkeypatch):
     script = tmp_path / "bin" / "keepwatch"
     script.parent.mkdir()
     script.write_text("#!/bin/sh\n")
     monkeypatch.setattr(sys, "argv", [str(script), "install"])
     assert systemd.find_executable() == str(script)
+
+
+def on_windows(monkeypatch, exit_codes=()):
+    scripts = []
+    codes = list(exit_codes)
+
+    def fake_powershell(script):
+        scripts.append(script)
+        code = codes.pop(0) if codes else 0
+        return _subprocess.CompletedProcess(["powershell.exe"], code, "", "refused by policy" if code else "")
+
+    monkeypatch.setattr(cli_module, "_on_windows", lambda: True)
+    monkeypatch.setattr(winsched, "run_powershell", fake_powershell)
+    return scripts
+
+
+def test_windows_install_registers_a_logon_task(xdg, monkeypatch):
+    scripts = on_windows(monkeypatch)
+    result = run("install")
+    assert result.exit_code == 0, result.output
+    (script,) = scripts
+    assert "Register-ScheduledTask" in script and "New-ScheduledTaskTrigger -AtLogOn" in script
+    assert "-m keepwatch run" in script
+    assert "registered Task Scheduler task 'keepwatch'" in result.output
+
+
+def test_windows_install_falls_back_to_a_startup_shortcut(xdg, monkeypatch):
+    scripts = on_windows(monkeypatch, exit_codes=(1, 0))
+    result = run("install")
+    assert result.exit_code == 0, result.output
+    assert "CreateShortcut" in scripts[1]
+    assert "Startup-folder shortcut" in result.output
+
+
+def test_windows_install_fails_when_both_methods_fail(xdg, monkeypatch):
+    on_windows(monkeypatch, exit_codes=(1, 1))
+    result = run("install")
+    assert result.exit_code == 1
+    assert "refused by policy" in result.output
+
+
+def test_windows_install_dry_run_and_custom_config(xdg, tmp_path, monkeypatch):
+    scripts = on_windows(monkeypatch)
+    custom = tmp_path / "custom.toml"
+    custom.write_text("")
+    result = run("--config", str(custom), "install", "--dry-run")
+    assert result.exit_code == 0
+    assert scripts == []
+    assert "Register-ScheduledTask" in result.output and "CreateShortcut" in result.output
+    assert f'--config "{custom.resolve()}" run' in result.output
+
+
+def test_windows_uninstall(xdg, monkeypatch):
+    scripts = on_windows(monkeypatch)
+    result = run("uninstall")
+    assert result.exit_code == 0, result.output
+    (script,) = scripts
+    assert "Unregister-ScheduledTask" in script and "keepwatch.lnk" in script
