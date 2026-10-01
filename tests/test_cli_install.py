@@ -1,0 +1,66 @@
+from click.testing import CliRunner
+
+from keepwatch.cli import cli
+
+
+def run(*args):
+    return CliRunner().invoke(cli, list(args))
+
+
+def fake_systemctl(tmp_path, monkeypatch, exit_code=0):
+    calls = tmp_path / "calls.txt"
+    script = tmp_path / "systemctl"
+    script.write_text(f'#!/bin/sh\necho "$@" >> "{calls}"\necho "fake failure" >&2\nexit {exit_code}\n'
+                      if exit_code else f'#!/bin/sh\necho "$@" >> "{calls}"\n')
+    script.chmod(0o755)
+    monkeypatch.setenv("KEEPWATCH_SYSTEMCTL", str(script))
+    return calls
+
+
+def unit_file(xdg):
+    return xdg.config_home.parent / "systemd" / "user" / "keepwatch.service"
+
+
+def test_install_writes_the_unit_and_enables_it(xdg, tmp_path, monkeypatch):
+    calls = fake_systemctl(tmp_path, monkeypatch)
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    result = run("install")
+    assert result.exit_code == 0, result.output
+    text = unit_file(xdg).read_text()
+    assert "ExecStart=" in text and " run" in text
+    assert 'Environment="PATH=' in text and "WantedBy=default.target" in text
+    assert calls.read_text().splitlines() == ["--user daemon-reload", "--user enable --now keepwatch.service"]
+    assert "systemctl --user status keepwatch" in result.output
+    assert "SSH_AUTH_SOCK" not in result.output
+
+
+def test_install_warns_about_ssh_agent(xdg, tmp_path, monkeypatch):
+    fake_systemctl(tmp_path, monkeypatch)
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/ssh-XXXX/agent.123")
+    result = run("install")
+    assert result.exit_code == 0
+    assert "SSH_AUTH_SOCK" in result.output and "keepwatch docs environment" in result.output
+
+
+def test_install_dry_run_changes_nothing(xdg, tmp_path, monkeypatch):
+    calls = fake_systemctl(tmp_path, monkeypatch)
+    result = run("install", "--dry-run")
+    assert result.exit_code == 0
+    assert "[Service]" in result.output and "systemctl --user enable --now keepwatch.service" in result.output
+    assert not unit_file(xdg).exists() and not calls.exists()
+
+
+def test_install_reports_systemctl_failure(xdg, tmp_path, monkeypatch):
+    fake_systemctl(tmp_path, monkeypatch, exit_code=1)
+    result = run("install")
+    assert result.exit_code == 1
+    assert "fake failure" in result.output
+
+
+def test_uninstall(xdg, tmp_path, monkeypatch):
+    calls = fake_systemctl(tmp_path, monkeypatch)
+    assert run("install").exit_code == 0
+    result = run("uninstall")
+    assert result.exit_code == 0, result.output
+    assert not unit_file(xdg).exists()
+    assert calls.read_text().splitlines()[-2:] == ["--user disable --now keepwatch.service", "--user daemon-reload"]

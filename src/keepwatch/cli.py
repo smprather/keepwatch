@@ -21,7 +21,7 @@ from typing import NoReturn
 
 import rich_click as click
 
-from keepwatch import __version__
+from keepwatch import __version__, systemd
 from keepwatch.config import (
     ConfigError,
     Discovery,
@@ -557,6 +557,76 @@ def init(app: App) -> None:
         watches.mkdir(parents=True)
         click.echo(f"created {watches}")
     click.echo("next: keepwatch new <name>, then keepwatch install to start the service at login")
+
+
+def _systemctl_or_fail(*args: str) -> None:
+    try:
+        completed = systemd.systemctl(*args)
+    except OSError as exc:
+        _fail(f"cannot run systemctl: {exc}")
+    if completed.returncode != 0:
+        _fail(f"systemctl --user {' '.join(args)} failed ({completed.returncode}): {completed.stderr.strip()}")
+
+
+@cli.command()
+@click.option("--dry-run", is_flag=True, help="Print the unit file and the commands without changing anything.")
+@click.pass_obj
+def install(app: App, dry_run: bool) -> None:
+    """Start keepwatch at login: install and start a systemd user service running `keepwatch run`.
+
+    Writes $XDG_CONFIG_HOME/systemd/user/keepwatch.service with this keepwatch's absolute path and the
+    current PATH (so hooks find the same programs as your shell), then runs `systemctl --user daemon-reload`
+    and `systemctl --user enable --now keepwatch.service`. Re-running it updates the unit.
+
+    The service does not see your shell's ssh-agent unless its socket is set in [environment] of the
+    global config; see: keepwatch docs environment.
+
+    Exit status: 0, or 1 if systemctl fails.
+    """
+    unit_path = systemd.unit_dir(app.paths) / systemd.UNIT_NAME
+    text = systemd.unit_text(systemd.find_executable(), os.environ.get("PATH", ""))
+    commands = ["systemctl --user daemon-reload", f"systemctl --user enable --now {systemd.UNIT_NAME}"]
+    if dry_run:
+        click.echo(f"would write {unit_path}:\n")
+        click.echo(text)
+        click.echo("would run:\n  " + "\n  ".join(commands))
+        return
+    unit_path.parent.mkdir(parents=True, exist_ok=True)
+    unit_path.write_text(text, encoding="utf-8")
+    click.echo(f"wrote {unit_path}")
+    _systemctl_or_fail("daemon-reload")
+    _systemctl_or_fail("enable", "--now", systemd.UNIT_NAME)
+    click.echo(f"ran: {'; '.join(commands)}")
+    click.echo("check it with: systemctl --user status keepwatch   and   keepwatch status")
+    if os.environ.get("SSH_AUTH_SOCK"):
+        click.echo(
+            "warning: SSH_AUTH_SOCK is set in this shell, but the service will not see that ssh-agent. "
+            "Hooks that use ssh/scp need a key without a passphrase, or a stable agent socket set as "
+            "SSH_AUTH_SOCK in [environment] of the global config; see: keepwatch docs environment"
+        )
+
+
+@cli.command()
+@click.pass_obj
+def uninstall(app: App) -> None:
+    """Stop and remove the systemd user service installed by `keepwatch install`.
+
+    Watches, state and logs are left alone.
+
+    Exit status: 0, or 1 if systemctl daemon-reload fails.
+    """
+    unit_path = systemd.unit_dir(app.paths) / systemd.UNIT_NAME
+    try:
+        systemd.systemctl("disable", "--now", systemd.UNIT_NAME)
+    except OSError as exc:
+        _fail(f"cannot run systemctl: {exc}")
+    if unit_path.exists():
+        unit_path.unlink()
+        click.echo(f"removed {unit_path}")
+    else:
+        click.echo(f"{unit_path} was not installed")
+    _systemctl_or_fail("daemon-reload")
+    click.echo("keepwatch will no longer start at login")
 
 
 def main() -> None:
