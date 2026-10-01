@@ -258,6 +258,23 @@ class Runner:
     def __init__(self, *, python: str = sys.executable, kill_grace: float = KILL_GRACE) -> None:
         self.python = python
         self.kill_grace = kill_grace
+        self._active: set[int] = set()
+        self._active_lock = threading.Lock()
+
+    def terminate_all(self) -> None:
+        """Send SIGTERM to every hook process group that is running now (used at shutdown)."""
+        with self._active_lock:
+            groups = list(self._active)
+        for pgid in groups:
+            _signal_group(pgid, signal.SIGTERM)
+
+    def _track(self, pid: int) -> None:
+        with self._active_lock:
+            self._active.add(pid)
+
+    def _untrack(self, pid: int) -> None:
+        with self._active_lock:
+            self._active.discard(pid)
 
     def run(self, call: HookCall) -> HookResult:
         """Run one hook call. Never raises: any unexpected failure becomes a failed result."""
@@ -406,7 +423,11 @@ class Runner:
         results = _MessageReader(os.fdopen(res_r, "rb"), RESULT_LIMIT, call.on_message)
         for reader in (out, err, results):
             reader.start()
-        returncode, timed_out = self._supervise(proc, (out, err, results), call.timeout)
+        self._track(proc.pid)
+        try:
+            returncode, timed_out = self._supervise(proc, (out, err, results), call.timeout)
+        finally:
+            self._untrack(proc.pid)
         base = self._captured(out, err, returncode, started)
         if results.bad:
             results.deliver(
@@ -524,7 +545,11 @@ class Runner:
             err = _Reader(proc.stderr, call.capture_bytes)
             out.start()
             err.start()
-            returncode, timed_out = self._supervise(proc, (out, err), call.timeout)
+            self._track(proc.pid)
+            try:
+                returncode, timed_out = self._supervise(proc, (out, err), call.timeout)
+            finally:
+                self._untrack(proc.pid)
             common = {
                 "hook": call.hook,
                 "kind": "command",

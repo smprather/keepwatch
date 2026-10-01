@@ -1,5 +1,7 @@
 import json
 import os
+import threading
+import time
 
 from keepwatch.runner import Runner
 
@@ -139,3 +141,16 @@ def test_unwritable_run_dir_is_a_failed_hook(make_watch, call_for):
     result = Runner().run(call)
     assert result.status == "failed"
     assert result.reason.startswith("cannot prepare the hook's files in")
+
+
+def test_terminate_all_stops_running_hooks(make_watch, call_for):
+    watch_dir = make_watch("cmd", config='[hooks]\ncheck = "sleep 30"\n')
+    runner = Runner()
+    results = []
+    thread = threading.Thread(target=lambda: results.append(runner.run(call_for(watch_dir))))
+    thread.start()
+    time.sleep(0.5)
+    runner.terminate_all()
+    thread.join(10)
+    assert results and results[0].status == "error"
+    assert results[0].signal == 15
