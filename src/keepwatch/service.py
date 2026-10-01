@@ -226,6 +226,7 @@ class Service:
             timeout=float(config.defaults.get("action_timeout", 60.0)),
             sink=self._sink,
             capture_bytes=config.log.capture_bytes,
+            base=self.config_path.parent,
         )
 
     def stop(self) -> None:

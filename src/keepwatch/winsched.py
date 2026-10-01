@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from keepwatch import platform
+
 TASK_NAME = "keepwatch"
 _SHORTCUT = "(Join-Path ([Environment]::GetFolderPath('Startup')) 'keepwatch.lnk')"
 
@@ -77,4 +79,5 @@ def run_powershell(script: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         errors="replace",
+        creationflags=platform.NO_WINDOW,
     )

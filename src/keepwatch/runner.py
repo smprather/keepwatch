@@ -454,6 +454,7 @@ class Runner:
                 text=True,
                 errors="replace",
                 timeout=timeout,
+                creationflags=platform.NO_WINDOW,
             )
         except subprocess.TimeoutExpired:
             return f"building the environment for python_dependencies timed out after {format_duration(timeout)}"

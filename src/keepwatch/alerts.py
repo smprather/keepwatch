@@ -6,8 +6,10 @@ import os
 import subprocess
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
+from keepwatch import platform
 from keepwatch.config import Command
 from keepwatch.durations import format_duration
 from keepwatch.logstore import Sink, make_record
@@ -24,6 +26,7 @@ def run_alert(
     timeout: float,
     sink: Sink,
     capture_bytes: int = 65_536,
+    base: Path | None = None,
 ) -> None:
     """Run alert_command and log one alert.end record. Never raises."""
     if command is None:
@@ -45,9 +48,12 @@ def run_alert(
         "stderr": "",
     }
     started = time.monotonic()
+    argv = command.to_argv()
+    if command.argv is not None and base is not None:
+        argv = platform.command_argv(argv, base)
     try:
         completed = subprocess.run(
-            command.to_argv(),
+            argv,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -55,6 +61,7 @@ def run_alert(
             timeout=timeout,
             env=env,
             start_new_session=True,
+            creationflags=platform.NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         status = "timeout"

@@ -43,3 +43,13 @@ def test_failing_and_slow_alerts_are_recorded_not_raised(tmp_path):
     assert [(r["status"], r["level"]) for r in records] == [("failed", "WARNING"), ("timeout", "WARNING"), ("failed", "WARNING")]
     assert records[0]["stderr"] == "bad" and records[0]["exit_code"] == 3
     assert records[2]["reason"].startswith("cannot start alert_command")
+
+
+def test_alert_list_programs_are_relative_to_the_config_dir(tmp_path):
+    helper = tmp_path / "alert.py"
+    helper.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(4)\n")
+    helper.chmod(0o755)
+    records = []
+    run_alert(Command(argv=("./alert.py",)), event="offline", watch="w", reason="r", environment={},
+              timeout=10, sink=records.append, base=tmp_path)
+    assert (records[0]["status"], records[0]["exit_code"]) == ("failed", 4)
