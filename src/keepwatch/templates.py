@@ -106,3 +106,36 @@ TEMPLATES: dict[str, dict[str, str]] = {
 
 def render(template: str, name: str) -> dict[str, str]:
     return {path: content.replace("{name}", name) for path, content in TEMPLATES[template].items()}
+
+
+GLOBAL_CONFIG = '''# keepwatch global config. Every key: keepwatch docs config
+# Every key is optional; the commented values are the defaults. Changes apply live.
+
+# Directories whose subdirectories are watches (earlier entries win name clashes).
+# watch_dirs = ["~/.config/keepwatch/watches"]
+
+# How often the service picks up config changes.
+# reload_interval = "5s"
+
+# Run when a watch goes offline or comes back online. Receives KEEPWATCH_ALERT_EVENT
+# (offline/online), KEEPWATCH_WATCH and KEEPWATCH_ALERT_REASON.
+# alert_command = 'notify-send "keepwatch: $KEEPWATCH_WATCH $KEEPWATCH_ALERT_EVENT" "$KEEPWATCH_ALERT_REASON"'
+
+[defaults]
+# Defaults for every watch's config.toml.
+# interval = "60s"
+# check_timeout = "60s"
+# action_timeout = "60s"
+# max_failures = 5
+# retry_after = "1h"
+# initial_condition = false
+
+[environment]
+# Extra environment variables for every hook, e.g. a stable ssh-agent socket:
+# SSH_AUTH_SOCK = "/run/user/1000/ssh-agent.socket"
+
+[log]
+# max_bytes = 10000000
+# backups = 10
+# capture_bytes = 65536
+'''

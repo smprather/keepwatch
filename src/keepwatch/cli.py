@@ -45,7 +45,7 @@ from keepwatch.runner import Runner
 from keepwatch.service import Service
 from keepwatch.state import initial_state
 from keepwatch.statusview import collect_status, format_status
-from keepwatch.templates import TEMPLATES, render
+from keepwatch.templates import GLOBAL_CONFIG, TEMPLATES, render
 from keepwatch.validation import validate_watches
 
 COMMAND_GROUPS = {
@@ -54,6 +54,7 @@ COMMAND_GROUPS = {
         {"name": "Develop", "commands": ["new", "validate", "poll"]},
         {"name": "Inspect", "commands": ["status", "logs"]},
         {"name": "Control", "commands": ["enable", "disable", "rename"]},
+        {"name": "Setup", "commands": ["init", "install", "uninstall"]},
     ]
 }
 _PLAIN_BOXES = {
@@ -531,6 +532,31 @@ def new(app: App, name: str, template: str, base: Path | None) -> None:
             path.chmod(0o755)
     click.echo(f"created {watch_dir} from the {template} template")
     click.echo(f"next: edit it, then run `keepwatch validate {name}` and `keepwatch poll {name} --dry-run`")
+
+
+@cli.command()
+@click.pass_obj
+def init(app: App) -> None:
+    """Create the global config file (all defaults, commented) and the default watches directory.
+
+    Never overwrites anything: each path is reported as created or exists.
+
+    Exit status: 0.
+    """
+    config_path = app.config_path
+    if config_path.exists():
+        click.echo(f"exists  {config_path}")
+    else:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(GLOBAL_CONFIG, encoding="utf-8")
+        click.echo(f"created {config_path}")
+    watches = app.paths.default_watches_dir
+    if watches.is_dir():
+        click.echo(f"exists  {watches}")
+    else:
+        watches.mkdir(parents=True)
+        click.echo(f"created {watches}")
+    click.echo("next: keepwatch new <name>, then keepwatch install to start the service at login")
 
 
 def main() -> None:
