@@ -1,11 +1,12 @@
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
 
 import pytest
 
-from keepwatch import CommandFailed, Ctx, Ledger, LedgerReadOnly
+from keepwatch import CommandFailed, Ctx, Ledger, LedgerCorrupt, LedgerReadOnly
 
 
 def make_ctx(tmp_path, hook="on_true", emitted=None, deadline_in=30.0):
@@ -134,3 +135,11 @@ def test_dirs_created_on_access(tmp_path):
     ctx = make_ctx(tmp_path)
     assert not (tmp_path / "data").exists()
     assert ctx.data_dir.is_dir() and ctx.run_dir.is_dir()
+
+
+@pytest.mark.parametrize("content", ["{not json", '{"entries": {"k": "soon"}}', "[]"])
+def test_corrupt_ledger_names_the_file(tmp_path, content):
+    path = tmp_path / "sent.json"
+    path.write_text(content)
+    with pytest.raises(LedgerCorrupt, match=re.escape(str(path))):
+        Ledger(path)

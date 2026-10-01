@@ -51,6 +51,10 @@ class LedgerReadOnly(Exception):
     """Raised when a check tries to change a ledger. Checks must only observe."""
 
 
+class LedgerCorrupt(Exception):
+    """A ledger file exists but cannot be read. The message names the file to fix or delete."""
+
+
 def _as_text(value: str | bytes | None) -> str:
     if value is None:
         return ""
@@ -77,11 +81,17 @@ class Ledger:
 
     def _load(self) -> dict[str, float]:
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return {}
-        entries = data.get("entries", {}) if isinstance(data, dict) else {}
-        return {str(key): float(stamp) for key, stamp in entries.items()}
+        try:
+            entries = json.loads(text)["entries"]
+            return {str(key): float(stamp) for key, stamp in entries.items()}
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise LedgerCorrupt(
+                f"ledger file {self.path} is unreadable ({type(exc).__name__}: {exc}); "
+                "fix it, or delete it to start with an empty ledger"
+            ) from exc
 
     def _live(self) -> dict[str, float]:
         if self.expire is None:
