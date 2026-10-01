@@ -132,14 +132,14 @@ class WatchRunner:
         wait = self.seconds_until_due(now)
         if wait is None or wait > 0:
             return None
-        if not self._config.watch_dir.is_dir():
-            # Renamed or deleted since the last master tick; the next tick removes this runner.
-            return None
         config = self._config
-        trial = self.offline is not None
-        if trial:
-            self.last_trial = now
         with hold_lock(self._paths.watch_lock(self.name)):
+            # Checked under the lock: `keepwatch rename` moves the directory while holding it.
+            if not config.watch_dir.is_dir():
+                return None
+            trial = self.offline is not None
+            if trial:
+                self.last_trial = now
             report = self._engine.poll(config, self.state, trial=trial)
         self.state = report.after
         finished = self._clock()
@@ -154,6 +154,12 @@ class WatchRunner:
         )
         if self._stop.is_set():
             return report
+        current = read_offline(self._paths, self.name)
+        if current is not None and current.by_user:
+            # `keepwatch disable` ran during this poll: the user's marker wins, and the next
+            # _refresh_offline picks it up.
+            self.next_due = finished + next_delay(config.interval, self.state.failures)
+            return report
         if trial:
             if not report.failed and report.outcome in ANSWERS:
                 clear_offline(self._paths, self.name)
@@ -162,7 +168,7 @@ class WatchRunner:
                 self.next_due = finished + config.interval
                 self._went_online("trial poll succeeded")
             return report
-        if should_go_offline(self.state.failures, config.max_failures):
+        if report.failed and should_go_offline(self.state.failures, config.max_failures):
             marker = OfflineMarker(
                 reason=f"{self.state.failures} consecutive failed polls",
                 since=iso_time(finished),

@@ -1,13 +1,16 @@
+import contextlib
 import os
 import time
 
 import pytest
 
+from keepwatch import scheduler as scheduler_module
 from keepwatch.config import load_global_config, load_watch_config
 from keepwatch.offline import OfflineMarker, clear_offline, iso_time, read_offline, write_offline
 from keepwatch.pollengine import PollEngine
 from keepwatch.runner import Runner
 from keepwatch.scheduler import WatchRunner
+from keepwatch.state import Outcome, WatchState
 
 
 class Clock:
@@ -181,3 +184,68 @@ def test_missing_watch_dir_is_not_polled(xdg, make_watch, runner_for):
     assert runner.state.failures == 0
     assert not xdg.watch_state_dir("w").exists()
     assert records == []
+
+
+def disable_during_poll(runner, xdg):
+    real_poll = runner._engine.poll
+
+    def poll(*args, **kwargs):
+        write_offline(xdg, runner.name, OfflineMarker(reason="disabled by user", since=iso_time(1.0), by_user=True))
+        return real_poll(*args, **kwargs)
+
+    runner._engine.poll = poll
+
+
+def test_directory_renamed_while_waiting_for_the_lock(xdg, make_watch, runner_for, monkeypatch):
+    watch_dir = make_watch("w", config='[hooks]\ncheck = ["true"]\n')
+    clock, records = Clock(), []
+    runner = runner_for(watch_dir, records, [], clock)
+    real_hold_lock = scheduler_module.hold_lock
+
+    @contextlib.contextmanager
+    def renaming_lock(path, **kwargs):
+        watch_dir.rename(watch_dir.parent / "renamed")
+        with real_hold_lock(path, **kwargs):
+            yield
+
+    monkeypatch.setattr(scheduler_module, "hold_lock", renaming_lock)
+    assert runner.poll_once(clock()) is None
+    assert runner.state.failures == 0
+    assert not xdg.watch_state_dir("w").exists()
+
+
+def test_unknown_poll_never_takes_a_watch_offline(xdg, make_watch, runner_for):
+    watch_dir = make_watch("w", config='max_failures = 2\n[hooks]\ncheck = "exit 3"\n[check_exit_codes]\nunknown = [3]\n')
+    clock = Clock()
+    runner = runner_for(watch_dir, [], [], clock)
+    runner.state = WatchState(False, None, 3)
+    report = runner.poll_once(clock())
+    assert report.outcome is Outcome.UNKNOWN and not report.failed
+    assert read_offline(xdg, "w") is None
+
+
+def test_user_disable_during_a_poll_wins(xdg, make_watch, runner_for):
+    # Going offline: the user's marker is not replaced by an automatic one.
+    watch_dir = make_watch("a", config='max_failures = 1\n[hooks]\ncheck = "exit 9"\n')
+    clock, records, alerts = Clock(), [], []
+    runner = runner_for(watch_dir, records, alerts, clock)
+    disable_during_poll(runner, xdg)
+    runner.poll_once(clock())
+    assert read_offline(xdg, "a").by_user is True
+    assert alerts == []
+    assert not [r for r in records if r["event"] == "watch.offline" and r["level"] == "CRITICAL"]
+
+    # A successful trial poll does not clear a marker the user wrote during it.
+    watch_dir = make_watch("b", config='max_failures = 1\nretry_after = "1m"\n[hooks]\ncheck = "test -f ok || exit 9"\n')
+    clock, records, alerts = Clock(), [], []
+    runner = runner_for(watch_dir, records, alerts, clock)
+    runner.poll_once(clock())
+    assert read_offline(xdg, "b").by_user is False
+    (watch_dir / "ok").write_text("")
+    disable_during_poll(runner, xdg)
+    clock.now += 60
+    report = runner.poll_once(clock())
+    assert report.trial is True and not report.failed
+    assert read_offline(xdg, "b").by_user is True
+    assert [event for event, _, _ in alerts] == ["offline"]
+    assert not [r for r in records if r["event"] == "watch.online"]
