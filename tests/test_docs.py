@@ -1,3 +1,4 @@
+import pytest
 from click.testing import CliRunner
 
 from keepwatch.cli import cli
@@ -43,3 +44,23 @@ def test_unknown_topic_suggests(xdg):
 
 def test_help_points_agents_at_the_docs(xdg):
     assert "keepwatch docs agent" in run("--help").output
+
+
+KEY_FACTS = {
+    "python": ["keepwatch.Unknown", "(True, payload)", "1 MiB", "keepwatch_watch", "top-level"],
+    "executables": ["KEEPWATCH_PAYLOAD_OUT", "KEEPWATCH_PAYLOAD_FILE", "KEEPWATCH_SETTINGS_FILE", "[check_exit_codes]", "/bin/sh -c"],
+    "states": ["| `true` |", "initial_condition", "stop at the first failure", "never overlap"],
+    "failures": ["max_failures", "retry_after", "alert_command", "KEEPWATCH_ALERT_EVENT", "offline.json"],
+    "storage": ["ctx.data_dir", "ctx.run_dir", "file_key", "LedgerCorrupt", "keepwatch rename"],
+    "logging": ["keepwatch.jsonl", "poll_id", "hook.end", "check.outcome", "extra="],
+    "environment": ["/dev/null", "SIGTERM", "SSH_AUTH_SOCK", "BatchMode=yes", "[environment]"],
+    "dependencies": ["python_dependencies", "uv run", "--offline", "keepwatch validate"],
+    "reload": ["reload_interval", "last valid", "watch.removed", "offline.json"],
+}
+
+
+@pytest.mark.parametrize("topic", sorted(KEY_FACTS))
+def test_narrative_topics_cover_their_key_facts(topic):
+    text = render_topic(topic)
+    missing = [fact for fact in KEY_FACTS[topic] if fact not in text]
+    assert not missing, f"{topic} is missing {missing}"
