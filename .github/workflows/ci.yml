@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "keepwatch-*"]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.12", "3.14"]
+    runs-on: ${{ matrix.os }}
+    # Windows is informational until the port is complete (plan 5c removes this line).
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - run: uv run pytest -q -ra
+      - if: runner.os == 'Linux' && matrix.python == '3.12'
+        run: uv run ruff check src tests

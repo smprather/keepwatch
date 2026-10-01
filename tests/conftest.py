@@ -5,6 +5,21 @@ import pytest
 
 from keepwatch.paths import Paths, resolve_paths
 
+IS_WINDOWS = os.name == "nt"
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "posix_only: needs a POSIX system (signals, sh, Expect, systemd)")
+    config.addinivalue_line("markers", "windows_only: Windows-specific behaviour")
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        if "posix_only" in item.keywords and IS_WINDOWS:
+            item.add_marker(pytest.mark.skip(reason="POSIX only"))
+        if "windows_only" in item.keywords and not IS_WINDOWS:
+            item.add_marker(pytest.mark.skip(reason="Windows only"))
+
 
 @pytest.fixture
 def xdg(tmp_path, monkeypatch) -> Paths:
