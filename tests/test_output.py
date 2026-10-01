@@ -72,3 +72,44 @@ def test_failed_statuses_are_defined_once():
     assert runner.FAILED_STATUSES == frozenset({"error", "failed", "timeout"})
     assert not hasattr(output, "_FAILED_STATUSES")
     assert not hasattr(pollengine, "_FAILED")
+
+
+def test_lifecycle_events_are_readable():
+    service = {"ts": "2026-09-29T10:11:12.345-05:00", "level": "INFO"}
+    watch = {**service, "watch": "psg"}
+
+    def fmt(record, verbose=False):
+        return format_record(record, verbose=verbose)
+
+    assert fmt({**service, "event": "service.start", "version": "1", "config": "/c.toml"}) == (
+        "10:11:12 service started (version 1, config /c.toml)"
+    )
+    assert fmt({**service, "event": "service.stop"}) == "10:11:12 service stopped"
+    assert fmt({**service, "event": "config.loaded", "path": "/c.toml"}) == "10:11:12 config reloaded: /c.toml"
+    assert fmt({**watch, "event": "config.error", "error": "a.toml:2: bad\nb.toml:3: worse",
+                "running_previous": True}) == (
+        "10:11:12 psg config error (still running the previous config): a.toml:2: bad\n"
+        "  error:\n    a.toml:2: bad\n    b.toml:3: worse"
+    )
+    assert fmt({**service, "event": "config.error", "error": "x: y"}) == "10:11:12 config error: x: y"
+    assert fmt({**watch, "event": "watch.added", "enabled": False}) == "10:11:12 psg watch added (parked: enabled = false)"
+    assert fmt({**watch, "event": "watch.added", "enabled": True}) == "10:11:12 psg watch added"
+    assert fmt({**watch, "event": "watch.changed"}) == "10:11:12 psg config changed; applies from the next poll"
+    assert fmt({**watch, "event": "watch.removed"}) == "10:11:12 psg watch removed"
+    assert fmt({**watch, "event": "watch.offline", "reason": "5 consecutive failed polls",
+                "last_failure": "on_true failed: boom"}) == (
+        "10:11:12 psg OFFLINE: 5 consecutive failed polls; last failure: on_true failed: boom"
+    )
+    assert fmt({**watch, "event": "watch.online", "reason": "enabled by user"}) == (
+        "10:11:12 psg back online: enabled by user"
+    )
+    assert fmt({**watch, "event": "watch.crash", "error": "KeyError: 'x'", "traceback": "Traceback\n  boom"}) == (
+        "10:11:12 psg keepwatch internal error: KeyError: 'x'\n  traceback:\n    Traceback\n      boom"
+    )
+    assert fmt({**watch, "event": "alert.end", "alert_event": "offline", "status": "ok", "duration": 0.5}) == (
+        "10:11:12 psg alert_command (offline) → ok (0.50s)"
+    )
+    assert fmt({**watch, "event": "alert.end", "alert_event": "online", "status": "failed", "duration": 0.1,
+                "reason": "exit code 3", "stderr": "nope\n"}) == (
+        "10:11:12 psg alert_command (online) → failed (0.10s): exit code 3\n  stderr:\n    nope"
+    )

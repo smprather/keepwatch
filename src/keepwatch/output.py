@@ -116,6 +116,70 @@ def _poll_end(record: dict[str, Any], verbose: bool) -> str:
     return line
 
 
+def _service_start(record: dict[str, Any], verbose: bool) -> str:
+    return f"service started (version {record.get('version')}, config {record.get('config')})"
+
+
+def _service_stop(record: dict[str, Any], verbose: bool) -> str:
+    return "service stopped"
+
+
+def _config_loaded(record: dict[str, Any], verbose: bool) -> str:
+    return f"config reloaded: {record.get('path')}"
+
+
+def _config_error(record: dict[str, Any], verbose: bool) -> str:
+    error = str(record.get("error") or "")
+    lines = error.splitlines() or [""]
+    note = " (still running the previous config)" if record.get("running_previous") else ""
+    line = f"config error{note}: {lines[0]}"
+    if len(lines) > 1:
+        line += _block("error", error)
+    return line
+
+
+def _watch_added(record: dict[str, Any], verbose: bool) -> str:
+    return "watch added" + (" (parked: enabled = false)" if record.get("enabled") is False else "")
+
+
+def _watch_changed(record: dict[str, Any], verbose: bool) -> str:
+    return "config changed; applies from the next poll"
+
+
+def _watch_removed(record: dict[str, Any], verbose: bool) -> str:
+    return "watch removed"
+
+
+def _watch_offline(record: dict[str, Any], verbose: bool) -> str:
+    line = f"OFFLINE: {record.get('reason')}"
+    if record.get("last_failure"):
+        line += f"; last failure: {record['last_failure']}"
+    return line
+
+
+def _watch_online(record: dict[str, Any], verbose: bool) -> str:
+    return f"back online: {record.get('reason')}"
+
+
+def _watch_crash(record: dict[str, Any], verbose: bool) -> str:
+    line = f"keepwatch internal error: {record.get('error')}"
+    if record.get("traceback"):
+        line += _block("traceback", record["traceback"])
+    return line
+
+
+def _alert_end(record: dict[str, Any], verbose: bool) -> str:
+    line = f"alert_command ({record.get('alert_event')}) → {record.get('status')} ({record.get('duration', 0):.2f}s)"
+    if record.get("reason"):
+        line += f": {record['reason']}"
+    if verbose or record.get("status") in FAILED_STATUSES:
+        for name in ("stdout", "stderr"):
+            text = record.get(name) or ""
+            if text.strip():
+                line += _block(name, text)
+    return line
+
+
 _SKIP = {"ts", "level", "event", "pid", "watch", "poll_id"}
 
 
@@ -131,6 +195,17 @@ _FORMATTERS: dict[str, Callable[[dict[str, Any], bool], str]] = {
     "command": _command,
     "plugin.log": _plugin_log,
     "poll.end": _poll_end,
+    "service.start": _service_start,
+    "service.stop": _service_stop,
+    "config.loaded": _config_loaded,
+    "config.error": _config_error,
+    "watch.added": _watch_added,
+    "watch.changed": _watch_changed,
+    "watch.removed": _watch_removed,
+    "watch.offline": _watch_offline,
+    "watch.online": _watch_online,
+    "watch.crash": _watch_crash,
+    "alert.end": _alert_end,
 }
 
 
