@@ -179,3 +179,9 @@ def test_settings_reject_nan(tmp_path):
     (problem,) = problems_of(tmp_path / "w", "[settings]\nx = nan\n")
     assert problem.line == 1
     assert "nan or inf" in problem.message
+
+
+@pytest.mark.parametrize("key", ["check_timeout", "action_timeout", "retry_after"])
+def test_zero_durations_are_rejected(tmp_path, key):
+    (problem,) = problems_of(tmp_path / "w", f'{key} = "0s"\n')
+    assert problem.message == f"'{key}' must be at least 1s, got '0s'"

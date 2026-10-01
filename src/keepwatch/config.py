@@ -93,8 +93,8 @@ WATCH_KEYS = (
         "The condition before the first answer after the service starts.",
         True,
     ),
-    Key("check_timeout", "duration", 60.0, "Deadline for the check.", True),
-    Key("action_timeout", "duration", 60.0, "Deadline for each action.", True),
+    Key("check_timeout", "interval", 60.0, "Deadline for the check.", True),
+    Key("action_timeout", "interval", 60.0, "Deadline for each action.", True),
     Key(
         "max_failures",
         "int",
@@ -102,7 +102,7 @@ WATCH_KEYS = (
         "Consecutive failed polls before the watch goes offline. 0 disables the limit.",
         True,
     ),
-    Key("retry_after", "duration", None, "While offline, make one trial poll this often.", True),
+    Key("retry_after", "interval", None, "While offline, make one trial poll this often.", True),
     Key("python_dependencies", "str_list", (), "PEP 508 requirements for watch.py, installed by uv."),
 )
 
