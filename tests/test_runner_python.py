@@ -221,12 +221,41 @@ def test_messages_are_delivered_while_the_hook_runs(make_watch, call_for):
     assert result.messages == []
 
 
+@pytest.mark.posix_only
 def test_make_shim_is_safe_across_threads_and_repairs_dangling_links(tmp_path):
     import keepwatch
 
     lib = tmp_path / "lib"
     lib.mkdir()
     (lib / "keepwatch").symlink_to(tmp_path / "gone")
+    errors = []
+
+    def build():
+        try:
+            make_shim(lib)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=build) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert (lib / "keepwatch").resolve() == Path(keepwatch.__file__).resolve().parent
+
+
+@pytest.mark.windows_only
+def test_make_shim_repairs_a_wrong_junction_across_threads(tmp_path):
+    import _winapi
+
+    import keepwatch
+
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    _winapi.CreateJunction(str(other), str(lib / "keepwatch"))
     errors = []
 
     def build():

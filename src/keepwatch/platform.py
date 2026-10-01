@@ -318,3 +318,22 @@ def command_argv(argv: Sequence[str], base: Path) -> list[str]:
         if suffix in _SCRIPT_RUNNERS:
             return [*_SCRIPT_RUNNERS[suffix], program, *rest]
     return [program, *rest]
+
+
+def points_to(link: Path, target: Path) -> bool:
+    """Whether `link` is a directory that resolves to `target`."""
+    try:
+        return link.is_dir() and os.path.normcase(os.path.realpath(link)) == os.path.normcase(str(target))
+    except OSError:
+        return False
+
+
+def replace_junction(link: Path, target: Path) -> None:
+    """Windows: make `link` a directory junction to `target`, replacing a wrong link. Needs no special rights."""
+    import _winapi
+
+    if link.is_junction() or link.is_symlink():
+        os.rmdir(link)  # removes only the link
+    elif link.exists():
+        raise FileExistsError(f"{link} exists and is not a link")
+    _winapi.CreateJunction(str(target), str(link))

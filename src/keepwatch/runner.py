@@ -26,6 +26,7 @@ from keepwatch import __version__, platform
 from keepwatch.config import Command, ExitCodes, WatchConfig
 from keepwatch.durations import format_duration
 from keepwatch.hooks import CHECK
+from keepwatch.locks import hold_lock
 from keepwatch.platform import HookProcess
 from keepwatch.protocol import PROTOCOL_VERSION, decode_lines, normalize_payload
 from keepwatch.state import Outcome
@@ -257,6 +258,12 @@ def make_shim(directory: Path) -> Path:
     target = Path(keepwatch.__file__).resolve().parent
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     link = directory / "keepwatch"
+    if platform.IS_WINDOWS:
+        # Symlinks need special rights on Windows; a junction does not, but it cannot be replaced atomically.
+        with hold_lock(directory / ".shim.lock"):
+            if not platform.points_to(link, target):
+                platform.replace_junction(link, target)
+        return directory
     if link.is_symlink() and Path(os.readlink(link)) == target:
         return directory
     temp = directory / f".keepwatch-{os.getpid()}-{threading.get_ident()}"
