@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any
@@ -48,6 +48,7 @@ class HookCall:
     capture_bytes: int = 65_536
     environment: Mapping[str, str] = field(default_factory=dict)
     mode: str = "call"
+    on_message: Callable[[dict[str, Any]], None] | None = field(default=None, compare=False)
 
 
 @dataclass
@@ -124,6 +125,80 @@ class _Reader(threading.Thread):
         if omitted <= 0:
             return (bytes(self.head) + bytes(self.tail)).decode("utf-8", errors="replace"), False
         return f"{head}\n…[{omitted} bytes omitted]…\n{tail}", True
+
+
+class _MessageReader(threading.Thread):
+    """Reads the worker's JSON-line messages as they arrive.
+
+    hello and result are kept. log and command messages are delivered (to
+    on_message, or kept in .messages without one) until `limit` bytes of them
+    have been delivered; later ones are counted in dropped_bytes. A line longer
+    than `limit` is skipped without being buffered whole.
+    """
+
+    def __init__(self, stream: IO[bytes], limit: int, on_message: Callable[[dict[str, Any]], None] | None) -> None:
+        super().__init__(daemon=True)
+        self._stream = stream
+        self._limit = limit
+        self._on_message = on_message
+        self.hello: dict[str, Any] | None = None
+        self.result: dict[str, Any] | None = None
+        self.messages: list[dict[str, Any]] = []
+        self.bad = 0
+        self.delivered_bytes = 0
+        self.dropped_bytes = 0
+
+    def run(self) -> None:
+        fd = self._stream.fileno()
+        buffer = b""
+        skipping = False
+        try:
+            while chunk := os.read(fd, 65536):
+                buffer += chunk
+                *lines, buffer = buffer.split(b"\n")
+                for line in lines:
+                    if skipping:
+                        self.dropped_bytes += len(line)
+                        skipping = False
+                        continue
+                    self._line(line)
+                if len(buffer) > self._limit:
+                    self.dropped_bytes += len(buffer)
+                    buffer = b""
+                    skipping = True
+            if buffer and not skipping:
+                self._line(buffer)
+        finally:
+            self._stream.close()
+
+    def _line(self, raw: bytes) -> None:
+        if not raw.strip():
+            return
+        messages, bad = decode_lines(raw + b"\n")
+        self.bad += len(bad)
+        for message in messages:
+            kind = message.get("type")
+            if kind == "hello":
+                self.hello = message
+            elif kind == "result":
+                self.result = message
+            elif kind in ("log", "command"):
+                if self.delivered_bytes + len(raw) > self._limit:
+                    self.dropped_bytes += len(raw)
+                    continue
+                self.delivered_bytes += len(raw)
+                self.deliver(message)
+            else:
+                self.bad += 1
+
+    def deliver(self, message: dict[str, Any]) -> None:
+        if self._on_message is None:
+            self.messages.append(message)
+            return
+        try:
+            self._on_message(message)
+        except Exception:
+            self.messages.append(message)
 
 
 class _Writer(threading.Thread):
@@ -240,7 +315,7 @@ class Runner:
         )
         return env
 
-    def _supervise(self, proc: subprocess.Popen[bytes], readers: Sequence[_Reader], timeout: float) -> tuple[int, bool]:
+    def _supervise(self, proc: subprocess.Popen[bytes], readers: Sequence[threading.Thread], timeout: float) -> tuple[int, bool]:
         timed_out = False
         try:
             proc.wait(timeout=max(timeout, 0.0))
@@ -328,42 +403,41 @@ class Runner:
         _Writer(req_w, json.dumps(request).encode("utf-8")).start()
         out = _Reader(proc.stdout, call.capture_bytes)
         err = _Reader(proc.stderr, call.capture_bytes)
-        results = _Reader(os.fdopen(res_r, "rb"), RESULT_LIMIT)
+        results = _MessageReader(os.fdopen(res_r, "rb"), RESULT_LIMIT, call.on_message)
         for reader in (out, err, results):
             reader.start()
         returncode, timed_out = self._supervise(proc, (out, err, results), call.timeout)
-        messages, bad = decode_lines(results.raw())
         base = self._captured(out, err, returncode, started)
-        base["messages"] = [message for message in messages if message.get("type") in ("log", "command")]
-        if bad:
-            base["messages"].append(
+        if results.bad:
+            results.deliver(
                 {
                     "type": "log",
                     "level": "WARNING",
                     "logger": "keepwatch.worker",
-                    "message": f"ignored {len(bad)} malformed message(s) from the worker",
+                    "message": f"ignored {results.bad} malformed message(s) from the worker",
                     "fields": {},
                 }
             )
-        if results.total > RESULT_LIMIT:
-            base["messages"].append(
+        if results.dropped_bytes:
+            results.deliver(
                 {
                     "type": "log",
                     "level": "WARNING",
                     "logger": "keepwatch.worker",
                     "message": (
-                        f"the worker sent {results.total} bytes of messages; "
-                        f"only the first and last {RESULT_LIMIT // 2} bytes were kept"
+                        f"dropped {results.dropped_bytes} bytes of worker messages "
+                        f"beyond the {RESULT_LIMIT}-byte limit"
                     ),
                     "fields": {},
                 }
             )
+        base["messages"] = results.messages
         common = {"hook": call.hook, "kind": "python", "target": target, **base}
         failure = self._failure_status(call)
         if timed_out:
             return HookResult(status="timeout", reason=f"timed out after {format_duration(call.timeout)}", **common)
-        hello = next((m for m in messages if m.get("type") == "hello"), None)
-        result = next((m for m in messages if m.get("type") == "result"), None)
+        hello = results.hello
+        result = results.result
         if hello is None:
             return HookResult(
                 status=failure,

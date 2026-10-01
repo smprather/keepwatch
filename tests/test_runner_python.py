@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import time
 from pathlib import Path
@@ -132,7 +133,7 @@ def test_huge_log_volume_is_capped(make_watch, call_for, monkeypatch):
     result = Runner().run(call_for(watch_dir))
     assert result.status == "true"
     notes = [m["message"] for m in result.messages if m.get("logger") == "keepwatch.worker"]
-    assert any("only the first and last 50000 bytes were kept" in note for note in notes)
+    assert any("beyond the 100000-byte limit" in note for note in notes)
     assert sum(1 for m in result.messages if m.get("type") == "log") < 1000
 
 
@@ -147,3 +148,37 @@ def test_unexpected_runner_errors_become_failed_results(make_watch, call_for, mo
     assert result.status == "failed"
     assert result.reason == "keepwatch internal error: RuntimeError: boom"
     assert "RuntimeError" in result.exception["traceback"]
+
+
+def test_one_giant_message_is_dropped_not_buffered(make_watch, call_for, monkeypatch):
+    monkeypatch.setattr(runner_module, "RESULT_LIMIT", 100_000)
+    watch_dir = make_watch("w", files={"watch.py": '''
+        def check(ctx):
+            ctx.log.info("y" * 300_000)
+            ctx.log.info("after")
+            return True
+    '''})
+    result = Runner().run(call_for(watch_dir))
+    assert result.status == "true"
+    logs = [m["message"] for m in result.messages if m.get("type") == "log"]
+    assert "after" in logs
+    assert any("beyond the 100000-byte limit" in message for message in logs)
+
+
+def test_messages_are_delivered_while_the_hook_runs(make_watch, call_for):
+    watch_dir = make_watch("w", files={"watch.py": '''
+        import time
+
+        def check(ctx):
+            ctx.log.info("early")
+            time.sleep(2)
+            return True
+    '''})
+    arrivals = []
+    call = dataclasses.replace(call_for(watch_dir), on_message=lambda m: arrivals.append((time.monotonic(), m)))
+    result = Runner().run(call)
+    finished = time.monotonic()
+    assert result.status == "true"
+    assert [message["message"] for _, message in arrivals] == ["early"]
+    assert finished - arrivals[0][0] >= 1.5
+    assert result.messages == []

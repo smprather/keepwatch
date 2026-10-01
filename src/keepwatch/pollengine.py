@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -168,6 +169,25 @@ class PollEngine:
             dry_run=dry_run,
         )
 
+    def _emit_message(self, tag: dict[str, Any], message: dict[str, Any]) -> None:
+        if message.get("type") == "command":
+            fields = {key: message.get(key) for key in _COMMAND_FIELDS}
+            level = "INFO" if message.get("exit_code") == 0 else "WARNING"
+            self._sink(make_record("command", level=level, **tag, **fields))
+            return
+        level = message.get("level") if message.get("level") in _PLUGIN_LEVELS else "INFO"
+        self._sink(
+            make_record(
+                "plugin.log",
+                level=level,
+                **tag,
+                logger=message.get("logger"),
+                message=message.get("message"),
+                fields=message.get("fields") or {},
+                traceback=message.get("traceback"),
+            )
+        )
+
     def _run(
         self,
         watch: WatchConfig,
@@ -177,6 +197,7 @@ class PollEngine:
         payload: Any,
         timeout: float,
     ) -> HookResult:
+        tag = {"watch": watch.name, "poll_id": poll_id, "hook": hook}
         call = HookCall(
             watch=watch,
             hook=hook,
@@ -188,27 +209,11 @@ class PollEngine:
             timeout=timeout,
             capture_bytes=self._global.log.capture_bytes,
             environment=self._global.environment,
+            on_message=functools.partial(self._emit_message, tag),
         )
         result = self._runner.run(call)
-        tag = {"watch": watch.name, "poll_id": poll_id, "hook": hook}
         for message in result.messages:
-            if message.get("type") == "command":
-                fields = {key: message.get(key) for key in _COMMAND_FIELDS}
-                level = "INFO" if message.get("exit_code") == 0 else "WARNING"
-                self._sink(make_record("command", level=level, **tag, **fields))
-            else:
-                level = message.get("level") if message.get("level") in _PLUGIN_LEVELS else "INFO"
-                self._sink(
-                    make_record(
-                        "plugin.log",
-                        level=level,
-                        **tag,
-                        logger=message.get("logger"),
-                        message=message.get("message"),
-                        fields=message.get("fields") or {},
-                        traceback=message.get("traceback"),
-                    )
-                )
+            self._emit_message(tag, message)
         level = "ERROR" if result.status in FAILED_STATUSES else "INFO"
         self._sink(make_record("hook.end", level=level, watch=watch.name, poll_id=poll_id, **result.to_record()))
         return result
