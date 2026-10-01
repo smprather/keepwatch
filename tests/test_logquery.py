@@ -2,9 +2,11 @@ import json
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
+from keepwatch import logquery
 from keepwatch.logquery import LogFilter, follow_log, log_files, parse_when, read_records, select_records
 
 
@@ -64,6 +66,7 @@ def follow_until(path, count, action):
         target=follow_log,
         args=(path, seen.append),
         kwargs={"stop": lambda: len(seen) >= count, "interval": 0.05},
+        daemon=True,
     )
     thread.start()
     time.sleep(0.3)
@@ -90,4 +93,23 @@ def test_follow_survives_rotation(tmp_path):
         write_lines(path, [{"n": 2}])
 
     seen = follow_until(path, 2, rotate)
+    assert [r["n"] for r in seen] == [1, 2]
+
+
+def test_follow_reads_the_rest_of_a_rotated_file(tmp_path, monkeypatch):
+    path = tmp_path / "keepwatch.jsonl"
+    write_lines(path, [{"n": 0}])
+    real_stat = logquery.os.stat
+    rotated = []
+
+    def stat(target, *args, **kwargs):
+        if not rotated and Path(target) == path:
+            rotated.append(True)
+            write_lines(path, [{"n": 1}])                 # appended after the last read...
+            path.rename(tmp_path / "keepwatch.jsonl.1")   # ...and rotated before the next one
+            write_lines(path, [{"n": 2}])
+        return real_stat(target, *args, **kwargs)
+
+    monkeypatch.setattr(logquery.os, "stat", stat)
+    seen = follow_until(path, 2, lambda: None)
     assert [r["n"] for r in seen] == [1, 2]

@@ -165,7 +165,13 @@ def follow_log(
                 except FileNotFoundError:
                     current = None
                 if current != inode:
+                    # Rotated: finish the old file first, including a last line without a newline.
+                    rest = buffer + handle.read()
                     handle.close()
+                    for line in rest.split(b"\n"):
+                        record = _parse_line(line) if line.strip() else None
+                        if record is not None:
+                            emit(record)
                     handle, inode = open_current()
                     buffer = b""
                     continue
