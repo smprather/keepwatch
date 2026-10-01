@@ -94,3 +94,14 @@ def test_stop_without_a_service(xdg):
     result = CliRunner().invoke(cli, ["stop"])
     assert result.exit_code == 1
     assert "no keepwatch service is running" in result.output
+
+
+def test_fail_without_a_console_writes_to_the_log(xdg, monkeypatch):
+    from keepwatch import cli as cli_module
+
+    monkeypatch.setattr(cli_module, "_LOG_FILE", xdg.log_file)
+    monkeypatch.setattr(sys, "stderr", None)
+    with pytest.raises(SystemExit):
+        cli_module._fail("broken config: line 3")
+    record = json.loads(xdg.log_file.read_text().splitlines()[-1])
+    assert (record["event"], record["level"], record["error"]) == ("cli.error", "CRITICAL", "broken config: line 3")

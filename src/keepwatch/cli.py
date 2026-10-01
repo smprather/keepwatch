@@ -39,7 +39,7 @@ from keepwatch.config import (
 from keepwatch.control import ControlError, disable_watch, enable_watch, rename_watch, require_known
 from keepwatch.locks import LockBusy, hold_lock
 from keepwatch.logquery import LogFilter, follow_log, parse_when, select_records
-from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter
+from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter, make_record
 from keepwatch.output import ConsolePrinter, make_console, plain_output
 from keepwatch.paths import PathError, Paths, ensure_private_dir, remove_stale_process_dirs, resolve_paths
 from keepwatch.pollengine import Fake, PollEngine, PollReport, parse_fakes
@@ -66,6 +66,7 @@ _PLAIN_BOXES = {
     "style_options_panel_box": "SIMPLE_HEAD",
     "style_errors_panel_box": "SIMPLE_HEAD",
 }
+_LOG_FILE: Path | None = None
 
 
 def help_config(plain: bool) -> click.RichHelpConfiguration:
@@ -89,8 +90,16 @@ class App:
 
 
 def _fail(message: str) -> NoReturn:
-    if sys.stderr is not None:  # no console under pythonw
+    if sys.stderr is not None:
         make_console(stderr=True).print(message)
+    elif _LOG_FILE is not None:
+        # pythonw (Windows logon task): there is no console, so leave the reason in the log.
+        try:
+            LogWriter(_LOG_FILE, max_bytes=10_000_000, backups=10).write(
+                make_record("cli.error", level="CRITICAL", error=message, argv=sys.argv[1:])
+            )
+        except OSError:
+            pass
     raise SystemExit(1)
 
 
@@ -139,7 +148,9 @@ def cli(ctx: click.Context, config_path: Path | None) -> None:
 
     Writing or fixing a watch? Read `keepwatch docs agent` first, or `keepwatch docs --all` for the complete reference.
     """
+    global _LOG_FILE
     paths = resolve_paths()
+    _LOG_FILE = paths.log_file
     ctx.obj = App(paths=paths, config_path=config_path or paths.config_file)
 
 

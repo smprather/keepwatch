@@ -2,6 +2,7 @@ import json
 import re
 import threading
 import time as _time
+from pathlib import Path
 
 import pytest
 
@@ -105,3 +106,28 @@ def test_rotation_waits_while_another_process_holds_the_log(tmp_path):
         for n in range(5):
             writer.write({"event": "more", "n": n, "pad": "y" * 150})
     assert len(path.read_text().splitlines()) == 6
+
+
+def test_failed_rotation_leaves_backups_alone(tmp_path, monkeypatch):
+    path = tmp_path / "keepwatch.jsonl"
+    writer = LogWriter(path, max_bytes=200, backups=2)
+    for n in range(12):
+        writer.write({"n": n, "pad": "x" * 80})
+
+    def backups():
+        return {p.name: p.read_text() for p in tmp_path.iterdir() if p.name.startswith("keepwatch.jsonl.")}
+
+    before = backups()
+    assert sorted(before) == ["keepwatch.jsonl.1", "keepwatch.jsonl.2"]
+    real_rename = Path.rename
+
+    def refuse_the_log(self, target):
+        if self == path:
+            raise PermissionError(13, "in use by another process")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", refuse_the_log)
+    for n in range(5):
+        writer.write({"n": 100 + n, "pad": "y" * 80})
+    assert backups() == before
+    assert json.loads(path.read_text().splitlines()[-1])["n"] == 104

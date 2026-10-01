@@ -131,6 +131,10 @@ def _service_error(record: dict[str, Any], verbose: bool) -> str:
     return line
 
 
+def _cli_error(record: dict[str, Any], verbose: bool) -> str:
+    return f"command failed: {record.get('error')}"
+
+
 def _config_loaded(record: dict[str, Any], verbose: bool) -> str:
     return f"config reloaded: {record.get('path')}"
 
@@ -205,6 +209,7 @@ _FORMATTERS: dict[str, Callable[[dict[str, Any], bool], str]] = {
     "service.start": _service_start,
     "service.stop": _service_stop,
     "service.error": _service_error,
+    "cli.error": _cli_error,
     "config.loaded": _config_loaded,
     "config.error": _config_error,
     "watch.added": _watch_added,
