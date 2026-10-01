@@ -1,7 +1,12 @@
+import inspect
+
+import click
 import pytest
 from click.testing import CliRunner
 
+from keepwatch import Ctx, Ledger
 from keepwatch.cli import cli
+from keepwatch.config import GLOBAL_KEYS, GLOBAL_TABLES, LOG_KEYS, WATCH_KEYS, WATCH_TABLES
 from keepwatch.reference import TOPICS, render_all, render_topic, topic_index
 
 
@@ -64,3 +69,38 @@ def test_narrative_topics_cover_their_key_facts(topic):
     text = render_topic(topic)
     missing = [fact for fact in KEY_FACTS[topic] if fact not in text]
     assert not missing, f"{topic} is missing {missing}"
+
+
+def test_every_config_key_is_documented():
+    text = render_topic("config")
+    for key in (*WATCH_KEYS, *GLOBAL_KEYS, *LOG_KEYS):
+        assert key.doc.strip(), key.name
+        assert f"`{key.name}`" in text, key.name
+    for table, doc in (*WATCH_TABLES.items(), *GLOBAL_TABLES.items()):
+        assert doc.strip() and f"`[{table}]`" in text, table
+
+
+def test_every_public_ctx_and_ledger_member_is_documented():
+    text = render_topic("ctx")
+    for owner, prefix in ((Ctx, "ctx."), (Ledger, "ledger.")):
+        for name, member in inspect.getmembers(owner):
+            if name.startswith("_"):
+                continue
+            assert inspect.getdoc(member), f"{owner.__name__}.{name} has no docstring"
+            assert f"{prefix}{name}" in text, name
+
+
+def test_every_command_and_option_is_documented():
+    from keepwatch.cli import cli
+
+    text = render_topic("cli")
+    ctx = click.Context(cli, info_name="keepwatch")
+    for name in cli.list_commands(ctx):
+        command = cli.get_command(ctx, name)
+        assert command.help and command.help.strip(), name
+        assert f"## keepwatch {name}" in text
+        for param in command.params:
+            if isinstance(param, click.Option):
+                assert param.help, f"{name} {param.opts}"
+                assert param.opts[-1] in text
+    assert "UNSET" not in text and "Sentinel" not in text

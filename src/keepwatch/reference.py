@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import difflib
+import inspect
 from collections.abc import Callable
 from importlib import resources
+from typing import Any
 
 TOPICS: tuple[tuple[str, str], ...] = (
     ("agent", "Start here: the whole contract, the development loop, a done checklist, common mistakes"),
@@ -66,3 +68,152 @@ def topic_index() -> str:
 
 def render_all() -> str:
     return "\n\n".join([topic_index(), *(render_topic(name) for name, _ in TOPICS)])
+
+
+_KIND_NAMES = {
+    "str": "string",
+    "bool": "boolean",
+    "int": "integer ≥ 0",
+    "duration": "duration",
+    "interval": "duration ≥ 1s",
+    "str_list": "list of strings",
+    "path_list": "list of paths",
+    "command": "command (string or list)",
+}
+
+
+def _default_text(key: Any) -> str:
+    from keepwatch.durations import format_duration
+
+    value = key.default
+    if value is None:
+        return "none"
+    if key.kind in ("duration", "interval"):
+        return f'`"{format_duration(value)}"`'
+    if isinstance(value, bool):
+        return f"`{str(value).lower()}`"
+    if isinstance(value, tuple):
+        return "`[]`"
+    if value == "":
+        return '`""`'
+    return f"`{value}`"
+
+
+def _key_table(keys: Any, *, defaultable_column: bool) -> list[str]:
+    header = "| Key | Type | Default | Meaning |"
+    rule = "|---|---|---|---|"
+    if defaultable_column:
+        header = "| Key | Type | Default | In `[defaults]` | Meaning |"
+        rule = "|---|---|---|---|---|"
+    rows = [header, rule]
+    for key in keys:
+        cells = [f"`{key.name}`", _KIND_NAMES[key.kind], _default_text(key)]
+        if defaultable_column:
+            cells.append("yes" if key.defaultable else "no")
+        cells.append(key.doc)
+        rows.append("| " + " | ".join(cells) + " |")
+    return rows
+
+
+def config_topic() -> str:
+    from keepwatch.config import GLOBAL_KEYS, GLOBAL_TABLES, LOG_KEYS, WATCH_KEYS, WATCH_TABLES
+
+    lines = [narrative("config"), "", "## Watch config.toml", ""]
+    lines += _key_table(WATCH_KEYS, defaultable_column=True)
+    lines += ["", "Tables:", ""]
+    lines += [f"- `[{name}]`: {doc}" for name, doc in WATCH_TABLES.items()]
+    lines += ["", "## Global config.toml", ""]
+    lines += _key_table(
+        [key for key in GLOBAL_KEYS],
+        defaultable_column=False,
+    )
+    lines += ["", "Tables:", ""]
+    lines += [f"- `[{name}]`: {doc}" for name, doc in GLOBAL_TABLES.items()]
+    lines += ["", "### `[log]`", ""]
+    lines += _key_table(LOG_KEYS, defaultable_column=False)
+    return "\n".join(lines)
+
+
+def _signature(member: Any) -> str:
+    signature = inspect.signature(member)
+    parameters = list(signature.parameters.values())[1:]
+    return str(signature.replace(parameters=parameters)).replace("'", "")
+
+
+def _members(owner: type, prefix: str) -> list[str]:
+    lines = []
+    for name, member in inspect.getmembers(owner):
+        if name.startswith("_"):
+            continue
+        if isinstance(member, property):
+            lines += [f"### `{prefix}{name}`", "", inspect.getdoc(member) or "", ""]
+        elif inspect.isfunction(member):
+            lines += [f"### `{prefix}{name}{_signature(member)}`", "", inspect.getdoc(member) or "", ""]
+    return lines
+
+
+def ctx_topic() -> str:
+    from keepwatch.ctx import Ctx, Ledger
+
+    lines = [narrative("ctx"), "", "## Methods and properties", ""]
+    lines += _members(Ctx, "ctx.")
+    lines += [
+        "## Ledger",
+        "",
+        inspect.getdoc(Ledger) or "",
+        "",
+        "Membership and size: `key in ledger`, `len(ledger)`, and iteration (`for key in ledger`, sorted).",
+        "",
+    ]
+    lines += _members(Ledger, "ledger.")
+    return "\n".join(lines).rstrip()
+
+
+def cli_topic() -> str:
+    import click
+
+    from keepwatch.cli import cli
+
+    root = click.Context(cli, info_name="keepwatch")
+    lines = [narrative("cli"), "", "## keepwatch (global options)", ""]
+    lines += _options(cli)
+    for name in cli.list_commands(root):
+        command = cli.get_command(root, name)
+        sub = click.Context(command, info_name=name, parent=root)
+        usage = " ".join(command.collect_usage_pieces(sub))
+        lines += [
+            f"## keepwatch {name}",
+            "",
+            f"`keepwatch {name} {usage}`",
+            "",
+            inspect.cleandoc(command.help or ""),
+            "",
+        ]
+        lines += _options(command)
+    return "\n".join(lines).rstrip()
+
+
+def _options(command: Any) -> list[str]:
+    import click
+
+    rows = []
+    for param in command.params:
+        if not isinstance(param, click.Option):
+            continue
+        names = ", ".join(f"`{opt}`" for opt in (*param.opts, *param.secondary_opts))
+        if param.is_flag:
+            kind = "flag"
+        else:
+            kind = param.type.name
+            if param.multiple:
+                kind += ", repeatable"
+        unset = getattr(click.core, "UNSET", None)  # click >= 8.2 marks "no default" with a sentinel
+        no_default = param.default in (None, False, ()) or (unset is not None and param.default is unset)
+        default = "" if no_default else f"`{param.default}`"
+        rows.append(f"| {names} | {kind} | {default} | {param.help or ''} |")
+    if not rows:
+        return []
+    return ["| Option | Type | Default | Meaning |", "|---|---|---|---|", *rows, ""]
+
+
+GENERATED.update({"config": config_topic, "ctx": ctx_topic, "cli": cli_topic})
