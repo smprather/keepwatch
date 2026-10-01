@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 APP = "keepwatch"
 
@@ -124,3 +127,16 @@ def remove_stale_process_dirs(paths: Paths, alive: Callable[[int], bool] = pid_a
             shutil.rmtree(entry, ignore_errors=True)
             removed.append(entry)
     return sorted(removed)
+
+
+def write_json_atomic(path: Path, document: Any) -> None:
+    """Write JSON so readers see either the old file or the complete new one."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, temp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(document, handle, indent=2, default=str)
+        os.replace(temp, path)
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
