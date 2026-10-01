@@ -34,6 +34,8 @@ def test_parse_duration_accepts(value, seconds):
         (-1, "must not be negative"),
         (True, "expected a duration"),
         (None, "expected a duration"),
+        (float("nan"), "must be a finite number"),
+        (float("inf"), "must be a finite number"),
     ],
 )
 def test_parse_duration_rejects(value, fragment):

@@ -151,3 +151,9 @@ def test_resolve_hooks_reports_syntax_error_and_conflicts(tmp_path):
 
     hooks, problem = resolve_hooks(tmp_path, {"on_true"})
     assert (hooks, problem) == (frozenset({"check", "on_true"}), None)
+
+
+def test_infinite_timeout_is_rejected(tmp_path):
+    (problem,) = problems_of(tmp_path / "w", "check_timeout = inf\n")
+    assert problem.line == 1
+    assert "must be a finite number" in problem.message

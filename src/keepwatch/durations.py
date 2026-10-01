@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 
 _UNIT_SECONDS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
@@ -22,6 +23,8 @@ def parse_duration(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         raise DurationError(f'expected a duration like "30s", got {value!r}')
     if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise DurationError(f"duration must be a finite number, got {value!r}")
         if value < 0:
             raise DurationError(f"duration must not be negative, got {value!r}")
         return float(value)
