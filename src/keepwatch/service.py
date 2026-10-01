@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import traceback
 from collections.abc import Callable, Collection
 from pathlib import Path
 
@@ -29,10 +30,10 @@ Signature = tuple[int, int] | None
 
 
 def file_signature(path: Path) -> Signature:
-    """(mtime_ns, size), or None if the file does not exist."""
+    """(mtime_ns, size), or None if the file does not exist or cannot be read."""
     try:
         info = path.stat()
-    except FileNotFoundError:
+    except OSError:
         return None
     return (info.st_mtime_ns, info.st_size)
 
@@ -66,6 +67,7 @@ class Service:
         self._watch_errors: dict[str, str] = {}
         self._reported_problems: frozenset[str] = frozenset()
         self._started = clock()
+        self._tick_error: str | None = None
 
     def start(self) -> None:
         """Load the global config (raises ConfigError if broken), log service.start, run the first tick."""
@@ -100,6 +102,18 @@ class Service:
             self.stop()
 
     def tick(self) -> None:
+        """One master tick. Never raises: a failure is logged once, and the next tick tries again."""
+        try:
+            self._tick()
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            if error != self._tick_error:
+                self._sink(make_record("service.error", level="ERROR", error=error, traceback=traceback.format_exc()))
+            self._tick_error = error
+        else:
+            self._tick_error = None
+
+    def _tick(self) -> None:
         now = self._clock()
         self._reload_global()
         discovery = discover_watches(self.global_config)

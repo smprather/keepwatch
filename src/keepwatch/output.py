@@ -124,6 +124,13 @@ def _service_stop(record: dict[str, Any], verbose: bool) -> str:
     return "service stopped"
 
 
+def _service_error(record: dict[str, Any], verbose: bool) -> str:
+    line = f"service error: {record.get('error')}"
+    if verbose and record.get("traceback"):
+        line += _block("traceback", record["traceback"])
+    return line
+
+
 def _config_loaded(record: dict[str, Any], verbose: bool) -> str:
     return f"config reloaded: {record.get('path')}"
 
@@ -197,6 +204,7 @@ _FORMATTERS: dict[str, Callable[[dict[str, Any], bool], str]] = {
     "poll.end": _poll_end,
     "service.start": _service_start,
     "service.stop": _service_stop,
+    "service.error": _service_error,
     "config.loaded": _config_loaded,
     "config.error": _config_error,
     "watch.added": _watch_added,

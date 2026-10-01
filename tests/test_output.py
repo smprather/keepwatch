@@ -113,3 +113,9 @@ def test_lifecycle_events_are_readable():
                 "reason": "exit code 3", "stderr": "nope\n"}) == (
         "10:11:12 psg alert_command (online) → failed (0.10s): exit code 3\n  stderr:\n    nope"
     )
+
+
+def test_service_error_is_readable():
+    record = {"ts": "2026-09-29T10:11:12.345-05:00", "level": "ERROR", "event": "service.error",
+              "error": "OSError: disk full", "traceback": "Traceback"}
+    assert format_record(record) == "10:11:12 service error: OSError: disk full"

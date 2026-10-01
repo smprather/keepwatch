@@ -3,6 +3,7 @@ import textwrap
 
 import pytest
 
+from keepwatch import service as service_module
 from keepwatch.config import ConfigError
 from keepwatch.service import Service
 
@@ -135,3 +136,26 @@ def test_stop(xdg, make_watch):
     assert service.runners["a"]._stop.is_set()
     assert records[-1]["event"] == "service.stop"
     assert json.loads(xdg.status_file.read_text())["service"]["running"] is False
+
+
+def test_tick_survives_errors(xdg, make_watch, monkeypatch):
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    records = []
+    service = make_service(xdg, records)
+    service.start()
+    real_write = service_module.write_json_atomic
+
+    def full_disk(path, document):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(service_module, "write_json_atomic", full_disk)
+    service.tick()
+    service.tick()
+    errors = events(records, "service.error")
+    assert len(errors) == 1
+    assert errors[0]["error"] == "OSError: [Errno 28] No space left on device"
+    monkeypatch.setattr(service_module, "write_json_atomic", real_write)
+    service.tick()
+    monkeypatch.setattr(service_module, "write_json_atomic", full_disk)
+    service.tick()
+    assert len(events(records, "service.error")) == 2
