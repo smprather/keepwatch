@@ -157,3 +157,10 @@ def test_ledger_lookup_does_not_scan_the_whole_ledger(tmp_path, monkeypatch):
     assert "other" not in ledger
     assert ledger.added_at("k") is not None
     assert ledger.added_at("other") is None
+
+
+def test_run_decodes_non_utf8_output(tmp_path):
+    emitted = []
+    ctx = make_ctx(tmp_path, emitted=emitted)
+    assert ctx.run(["printf", "\\377ok"]).stdout == "\ufffdok"
+    assert emitted[0]["stdout"] == "\ufffdok"

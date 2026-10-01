@@ -260,10 +260,15 @@ def make_shim(directory: Path) -> Path:
     """A PYTHONPATH directory exposing only the running keepwatch package (for uv environments)."""
     import keepwatch
 
+    target = Path(keepwatch.__file__).resolve().parent
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     link = directory / "keepwatch"
-    if not link.exists():
-        link.symlink_to(Path(keepwatch.__file__).resolve().parent, target_is_directory=True)
+    if link.is_symlink() and Path(os.readlink(link)) == target:
+        return directory
+    temp = directory / f".keepwatch-{os.getpid()}-{threading.get_ident()}"
+    temp.unlink(missing_ok=True)
+    temp.symlink_to(target, target_is_directory=True)
+    os.replace(temp, link)  # atomic: concurrent callers never see a missing or half-made link
     return directory
 
 
@@ -283,17 +288,35 @@ class Runner:
         self.uv = uv or shutil.which("uv")
         self._active: set[int] = set()
         self._active_lock = threading.Lock()
+        self._closing = False
 
     def terminate_all(self) -> None:
-        """Send SIGTERM to every hook process group that is running now (used at shutdown)."""
+        """Send SIGTERM to every hook process group that is running now."""
         with self._active_lock:
             groups = list(self._active)
         for pgid in groups:
             _signal_group(pgid, signal.SIGTERM)
 
+    def close(self) -> None:
+        """Shutdown, step 1: refuse new hook calls and SIGTERM the running ones."""
+        with self._active_lock:
+            self._closing = True
+        self.terminate_all()
+
+    def kill_all(self) -> None:
+        """Shutdown, step 2: SIGKILL every hook process group still running."""
+        with self._active_lock:
+            groups = list(self._active)
+        for pgid in groups:
+            _signal_group(pgid, signal.SIGKILL)
+
     def _track(self, pid: int) -> None:
         with self._active_lock:
             self._active.add(pid)
+            closing = self._closing
+        if closing:
+            # Started while close() ran: stop it right away.
+            _signal_group(pid, signal.SIGTERM)
 
     def _untrack(self, pid: int) -> None:
         with self._active_lock:
@@ -303,6 +326,9 @@ class Runner:
         """Run one hook call. Never raises: any unexpected failure becomes a failed result."""
         started = time.monotonic()
         is_command = call.mode == "call" and call.hook in call.watch.hooks
+        if self._closing:
+            return self._error(call, "command" if is_command else "python", call.hook, started,
+                               "keepwatch is shutting down")
         try:
             if is_command:
                 return self._run_command(call, call.watch.hooks[call.hook])
@@ -435,6 +461,8 @@ class Runner:
         offline: bool,
         timeout: float,
     ) -> _WorkerRun | str:
+        if self._closing:
+            return "keepwatch is shutting down"
         req_r, req_w = os.pipe()
         res_r, res_w = os.pipe()
         tail = ["-m", "keepwatch.worker", "--request-fd", str(req_r), "--result-fd", str(res_w)]

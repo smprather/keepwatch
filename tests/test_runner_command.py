@@ -154,3 +154,20 @@ def test_terminate_all_stops_running_hooks(make_watch, call_for):
     thread.join(10)
     assert results and results[0].status == "error"
     assert results[0].signal == 15
+
+
+def test_close_refuses_new_hooks_and_kill_all_stops_stubborn_ones(make_watch, call_for):
+    watch_dir = make_watch("cmd", config="[hooks]\ncheck = 'trap \"\" TERM; sleep 30'\n")
+    runner = Runner(kill_grace=30)
+    results = []
+    thread = threading.Thread(target=lambda: results.append(runner.run(call_for(watch_dir))))
+    thread.start()
+    time.sleep(0.5)
+    runner.close()
+    thread.join(1.0)
+    assert thread.is_alive()
+    runner.kill_all()
+    thread.join(10)
+    assert results[0].signal == 9
+    refused = runner.run(call_for(watch_dir))
+    assert (refused.status, refused.reason) == ("error", "keepwatch is shutting down")

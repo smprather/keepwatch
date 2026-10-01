@@ -238,6 +238,7 @@ class Ctx:
                 stdin=subprocess.DEVNULL if input is None else None,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=limit,
                 env={**os.environ, **(env or {})},
                 cwd=cwd if cwd is not None else self.watch_dir,

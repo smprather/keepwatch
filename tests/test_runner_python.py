@@ -1,6 +1,7 @@
 import dataclasses
 import os
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -218,3 +219,26 @@ def test_messages_are_delivered_while_the_hook_runs(make_watch, call_for):
     assert [message["message"] for _, message in arrivals] == ["early"]
     assert finished - arrivals[0][0] >= 1.5
     assert result.messages == []
+
+
+def test_make_shim_is_safe_across_threads_and_repairs_dangling_links(tmp_path):
+    import keepwatch
+
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    (lib / "keepwatch").symlink_to(tmp_path / "gone")
+    errors = []
+
+    def build():
+        try:
+            make_shim(lib)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=build) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert (lib / "keepwatch").resolve() == Path(keepwatch.__file__).resolve().parent

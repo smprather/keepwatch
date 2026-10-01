@@ -26,7 +26,6 @@ from keepwatch.runner import DRAIN_GRACE, KILL_GRACE, Runner
 from keepwatch.scheduler import WatchRunner
 
 Signature = tuple[int, int] | None
-SHUTDOWN_GRACE = KILL_GRACE + DRAIN_GRACE + 3.0
 
 
 def file_signature(path: Path) -> Signature:
@@ -201,12 +200,16 @@ class Service:
         )
 
     def stop(self) -> None:
-        """Stop every runner, terminate running hooks, wait for polls to end, write the final status."""
+        """Stop every runner and its hooks: SIGTERM, wait, SIGKILL, wait; then write the final status."""
         runners = [*self.runners.values(), *self._retired]
         for runner in runners:
             runner.stop()
-        self._runner.terminate_all()
-        deadline = time.monotonic() + SHUTDOWN_GRACE
+        self._runner.close()
+        deadline = time.monotonic() + KILL_GRACE
+        for runner in runners:
+            runner.join(max(deadline - time.monotonic(), 0.0))
+        self._runner.kill_all()
+        deadline = time.monotonic() + DRAIN_GRACE + 3.0
         for runner in runners:
             runner.join(max(deadline - time.monotonic(), 0.0))
         self._sink(make_record("service.stop"))
