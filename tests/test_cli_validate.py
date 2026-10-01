@@ -61,3 +61,26 @@ def test_dates_in_settings_do_not_crash(xdg, make_watch):
     result = run("poll", "dated")
     assert result.exit_code == 0, result.output
     assert "check → true" in result.output
+
+
+def test_hooks_keepwatch_cannot_see_are_reported(xdg, make_watch):
+    make_watch("hidden", files={
+        "helpers.py": "def on_rise(ctx):\n    pass\n",
+        "watch.py": "from helpers import on_rise\n\ndef check(ctx):\n    return True\n\nasync def on_true(ctx):\n    pass\n",
+    })
+    result = run("validate", "--json")
+    assert result.exit_code == 1
+    (watch,) = json.loads(result.output)["watches"]
+    assert "on_rise, on_true" in watch["problems"][0]
+    assert "top-level" in watch["problems"][0]
+
+
+def test_named_duplicate_is_reported(xdg, tmp_path, make_watch):
+    other = tmp_path / "other"
+    make_watch("backup", config='[hooks]\ncheck = ["true"]\n')
+    make_watch("backup", config='[hooks]\ncheck = ["true"]\n', base=other)
+    config = tmp_path / "custom.toml"
+    config.write_text(f'watch_dirs = ["{xdg.default_watches_dir}", "{other}"]\n')
+    result = run("--config", str(config), "validate", "backup")
+    assert result.exit_code == 1
+    assert "duplicate watch name 'backup'" in result.output

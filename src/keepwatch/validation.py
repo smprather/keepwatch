@@ -19,7 +19,7 @@ from keepwatch.config import (
     find_watch,
     load_watch_config,
 )
-from keepwatch.hooks import CHECK, NO_CHECK, WATCH_PY, resolve_hooks
+from keepwatch.hooks import CHECK, NO_CHECK, WATCH_PY, discover_python_hooks, resolve_hooks
 from keepwatch.paths import Paths
 from keepwatch.runner import HookCall, Runner
 
@@ -94,6 +94,14 @@ def check_watch(watch_dir: Path, global_config: GlobalConfig, runner: Runner, pa
         )
         if result.status != "ok":
             report.problems.append(f"{source}: {result.reason}; see: keepwatch docs python")
+        else:
+            hidden = sorted(set(result.hooks or []) - discover_python_hooks(watch_dir))
+            if hidden:
+                report.problems.append(
+                    f"{source}: {', '.join(hidden)} would never run: keepwatch only runs hooks written as "
+                    "top-level 'def <hook>(ctx):' functions in watch.py, not imported, assigned, async or "
+                    "nested ones; see: keepwatch docs python"
+                )
     return report
 
 
@@ -105,7 +113,11 @@ def validate_watches(
     paths: Paths,
     pid: int,
 ) -> tuple[list[str], list[WatchCheck]]:
-    general = [str(problem) for problem in discovery.problems]
+    general = [
+        str(problem)
+        for problem in discovery.problems
+        if not names or problem.path.name in names
+    ]
     results = []
     for name in names or list(discovery.watches):
         try:

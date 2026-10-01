@@ -229,7 +229,7 @@ def validate(app: App, names: tuple[str, ...], as_json: bool) -> None:
     discovery = discover_watches(global_config)
     with _process_dir(app.paths) as pid:
         general, checks = validate_watches(global_config, discovery, list(names), Runner(), app.paths, pid)
-    ok = (not general or bool(names)) and all(check.ok for check in checks)
+    ok = not general and all(check.ok for check in checks)
     if as_json:
         document = {"ok": ok, "problems": general, "watches": [check.to_dict() for check in checks]}
         click.echo(json.dumps(document, indent=2))
