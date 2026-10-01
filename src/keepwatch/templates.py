@@ -118,11 +118,13 @@ example = "value"
 POWERSHELL_CHECK = '''# Check for watch "{name}": exit 0 = TRUE, 1 = FALSE, 3 = unknown (see config.toml).
 # To hand data to the actions, write JSON to the file named by $env:KEEPWATCH_PAYLOAD_OUT.
 # Never change anything here: keepwatch poll --dry-run runs this for real.
+try { $utf8 = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8 } catch { }
 exit 1
 '''
 
 POWERSHELL_ACTION = '''# Runs on every poll while the condition of "{name}" is TRUE. Exit nonzero (or throw) to report a failure.
 # The check's payload (if any) is in the JSON file named by $env:KEEPWATCH_PAYLOAD_FILE.
+try { $utf8 = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8 } catch { }
 $ErrorActionPreference = 'Stop'
 Write-Output "condition is TRUE; example setting: $env:KEEPWATCH_SETTING_EXAMPLE"
 '''

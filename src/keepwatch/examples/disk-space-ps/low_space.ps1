@@ -1,3 +1,4 @@
+try { $utf8 = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8 } catch { }
 # TRUE (exit 0) when the drive has less free space than min_free_gb, FALSE (exit 1) otherwise.
 # Any other failure exits 2, which keepwatch reports as an error.
 try {

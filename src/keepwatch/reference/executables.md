@@ -68,7 +68,7 @@ An empty or missing payload file means no payload. A file that is not valid JSON
 
 ## Output
 
-stdout and stderr are captured into the hook's log record (the first and last 32 KiB of each with the default `capture_bytes`). Non-UTF-8 bytes are replaced, not fatal. A command that leaves a background process holding its stdout open is not waited for: once the command exits, keepwatch waits two seconds and then kills its process group.
+stdout and stderr are captured into the hook's log record (the first and last 32 KiB of each with the default `capture_bytes`) and decoded as UTF-8; anything that is not valid UTF-8 is replaced, not fatal. String hooks in the default Windows PowerShell are switched to UTF-8 output automatically. A `.ps1` script should start with `try { $utf8 = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8 } catch { }` (the templates and examples do), otherwise non-ASCII output arrives garbled. A command that leaves a background process holding its stdout open is not waited for: once the command exits, keepwatch waits two seconds and then stops its process tree.
 
 ## Expect
 
