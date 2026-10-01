@@ -157,3 +157,25 @@ def test_infinite_timeout_is_rejected(tmp_path):
     (problem,) = problems_of(tmp_path / "w", "check_timeout = inf\n")
     assert problem.line == 1
     assert "must be a finite number" in problem.message
+
+
+def test_settings_dates_become_iso_strings(tmp_path):
+    cfg = load_watch_config(write(tmp_path / "w", '''
+        [settings]
+        since = 2024-01-01
+        at = 2024-01-01T10:00:00Z
+        clock = 07:30:00
+        nested = { when = 2024-02-03 }
+    '''))
+    assert cfg.settings == {
+        "since": "2024-01-01",
+        "at": "2024-01-01T10:00:00+00:00",
+        "clock": "07:30:00",
+        "nested": {"when": "2024-02-03"},
+    }
+
+
+def test_settings_reject_nan(tmp_path):
+    (problem,) = problems_of(tmp_path / "w", "[settings]\nx = nan\n")
+    assert problem.line == 1
+    assert "nan or inf" in problem.message

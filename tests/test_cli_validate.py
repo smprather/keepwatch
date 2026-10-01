@@ -49,3 +49,15 @@ def test_missing_watches_directory_is_a_problem(xdg):
     result = run("validate")
     assert result.exit_code == 1
     assert "watches directory does not exist" in result.output
+
+
+def test_dates_in_settings_do_not_crash(xdg, make_watch):
+    make_watch(
+        "dated",
+        config="[settings]\nsince = 2024-01-01\n",
+        files={"watch.py": "def check(ctx):\n    return ctx.settings['since'] == '2024-01-01'\n"},
+    )
+    assert run("validate", "dated").exit_code == 0
+    result = run("poll", "dated")
+    assert result.exit_code == 0, result.output
+    assert "check → true" in result.output

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
 import difflib
+import json
 import os
 import re
 import shlex
@@ -294,6 +296,25 @@ def _exit_codes_table(collector: _Collector, value: Any) -> ExitCodes:
     return ExitCodes(**lists)
 
 
+def _json_default(value: Any) -> Any:
+    # datetime.datetime is a subclass of datetime.date, so this covers all three TOML date/time types.
+    if isinstance(value, (datetime.date, datetime.time)):
+        return value.isoformat()
+    raise TypeError(f"{type(value).__name__} cannot be passed to hooks")
+
+
+def _settings_table(collector: _Collector, value: dict[str, Any]) -> dict[str, Any]:
+    """[settings] as JSON-safe data: TOML dates and times become ISO 8601 strings."""
+    try:
+        return json.loads(json.dumps(value, default=_json_default, allow_nan=False))
+    except (TypeError, ValueError):
+        collector.add(
+            "[settings] must not contain nan or inf (settings are passed to hooks as JSON)",
+            table="settings",
+        )
+        return {}
+
+
 def load_watch_config(watch_dir: Path, defaults: Mapping[str, Any] | None = None) -> WatchConfig:
     """Read and validate <watch_dir>/config.toml. Raises ConfigError listing every problem."""
     path = watch_dir / CONFIG_NAME
@@ -320,7 +341,7 @@ def load_watch_config(watch_dir: Path, defaults: Mapping[str, Any] | None = None
             environment = _string_table(collector, value, "environment")
         elif name == "settings":
             if isinstance(value, dict):
-                settings = value
+                settings = _settings_table(collector, value)
             else:
                 collector.add("'settings' must be a table ([settings])", key="settings")
         else:
