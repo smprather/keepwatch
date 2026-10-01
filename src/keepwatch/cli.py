@@ -30,6 +30,7 @@ from keepwatch.config import (
     WatchNotFound,
     discover_watches,
     find_watch,
+    is_valid_watch_name,
     load_global_config,
     load_watch_config,
 )
@@ -44,12 +45,13 @@ from keepwatch.runner import Runner
 from keepwatch.service import Service
 from keepwatch.state import initial_state
 from keepwatch.statusview import collect_status, format_status
+from keepwatch.templates import TEMPLATES, render
 from keepwatch.validation import validate_watches
 
 COMMAND_GROUPS = {
     "keepwatch": [
         {"name": "Run", "commands": ["run"]},
-        {"name": "Develop", "commands": ["validate", "poll"]},
+        {"name": "Develop", "commands": ["new", "validate", "poll"]},
         {"name": "Inspect", "commands": ["status", "logs"]},
         {"name": "Control", "commands": ["enable", "disable", "rename"]},
     ]
@@ -494,6 +496,41 @@ def rename(app: App, old: str, new: str) -> None:
     except ControlError as exc:
         _fail(str(exc))
     click.echo(f"renamed {old} to {new}: {new_dir}" + (f" (state: {new_state})" if new_state.exists() else ""))
+
+
+@cli.command()
+@click.argument("name")
+@click.option("--template", type=click.Choice(sorted(TEMPLATES)), default="python", show_default=True,
+              help="python: watch.py with check() and on_true(). shell: check.sh and on_true.sh. "
+              "expect: a shell check and an Expect action.")
+@click.option("--dir", "base", type=click.Path(path_type=Path, file_okay=False),
+              help="Watches directory to create it in. Default: the first entry of watch_dirs.")
+@click.pass_obj
+def new(app: App, name: str, template: str, base: Path | None) -> None:
+    """Create watch NAME from a commented template, ready to validate and poll.
+
+    The template's comments point at the reference topics for every part. Next steps are printed.
+
+    Exit status: 0, or 1 if NAME is not a valid watch name or already exists.
+    """
+    if not is_valid_watch_name(name):
+        _fail(f"'{name}' is not a valid watch name: use letters, digits, '_', '.' and '-', starting with a letter or digit")
+    if base is None:
+        try:
+            base = app.load_global().watch_dirs[0]
+        except ConfigError as exc:
+            _fail("\n".join(str(problem) for problem in exc.problems))
+    watch_dir = base / name
+    if watch_dir.exists():
+        _fail(f"{watch_dir} already exists; choose another name or edit it directly")
+    watch_dir.mkdir(parents=True)
+    for relative, content in render(template, name).items():
+        path = watch_dir / relative
+        path.write_text(content, encoding="utf-8")
+        if content.startswith("#!"):
+            path.chmod(0o755)
+    click.echo(f"created {watch_dir} from the {template} template")
+    click.echo(f"next: edit it, then run `keepwatch validate {name}` and `keepwatch poll {name} --dry-run`")
 
 
 def main() -> None:

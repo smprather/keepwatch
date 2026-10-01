@@ -1,0 +1,108 @@
+"""Starting points for `keepwatch new`. "{name}" is replaced with the watch name."""
+
+from __future__ import annotations
+
+PYTHON_CONFIG = '''# keepwatch watch "{name}". Every key: keepwatch docs config
+description = "Describe what {name} watches in one line"
+interval = "60s"
+# check_timeout = "60s"
+# action_timeout = "60s"
+# max_failures = 5
+# retry_after = "1h"
+# python_dependencies = ["requests>=2.32"]
+
+[settings]
+# Free-form parameters for watch.py: ctx.settings["example"]
+example = "value"
+'''
+
+PYTHON_WATCH = '''"""Watch "{name}". Contract: keepwatch docs python. Helpers: keepwatch docs ctx."""
+
+from keepwatch import Ctx
+
+
+def check(ctx: Ctx):
+    """Look at the world; never change it.
+
+    Return True or False (optionally as (answer, payload) with a JSON payload for the actions),
+    None when you cannot tell right now, or raise an exception if the check itself broke.
+    """
+    return False
+
+
+def on_true(ctx: Ctx) -> None:
+    """Runs on every poll while the condition is TRUE. Raise to report a failure.
+
+    Other hooks: on_rise (FALSE -> TRUE), on_fall (TRUE -> FALSE), on_false (every poll while FALSE).
+    """
+    ctx.log.info("condition is TRUE; payload=%s", ctx.payload)
+'''
+
+SHELL_CONFIG = '''# keepwatch watch "{name}". Every key: keepwatch docs config
+description = "Describe what {name} watches in one line"
+interval = "60s"
+
+[hooks]
+# A list runs directly; a string runs through /bin/sh -c. See: keepwatch docs executables
+check = ["./check.sh"]
+on_true = ["./on_true.sh"]
+
+[check_exit_codes]
+# Defaults: true = [0], false = [1]; other codes are errors unless listed here.
+unknown = [3]
+
+[settings]
+# Reaches the scripts as $KEEPWATCH_SETTING_EXAMPLE
+example = "value"
+'''
+
+SHELL_CHECK = '''#!/bin/sh
+# Check for watch "{name}": exit 0 = TRUE, 1 = FALSE, 3 = unknown (see config.toml).
+# To hand data to the actions, write JSON to "$KEEPWATCH_PAYLOAD_OUT".
+# Never change anything here: keepwatch poll --dry-run runs this for real.
+exit 1
+'''
+
+SHELL_ACTION = '''#!/bin/sh
+# Runs on every poll while the condition of "{name}" is TRUE. Exit nonzero to report a failure.
+# The check's payload (if any) is in the JSON file "$KEEPWATCH_PAYLOAD_FILE".
+set -eu
+echo "condition is TRUE; example setting: $KEEPWATCH_SETTING_EXAMPLE"
+'''
+
+EXPECT_CONFIG = '''# keepwatch watch "{name}". Every key: keepwatch docs config
+description = "Describe what {name} watches in one line"
+interval = "60s"
+action_timeout = "2m"
+
+[hooks]
+check = ["./check.sh"]
+on_true = ["expect", "./on_true.exp"]
+
+[settings]
+# Reaches the Expect script as $env(KEEPWATCH_SETTING_HOST)
+host = "example.com"
+'''
+
+EXPECT_ACTION = '''#!/usr/bin/env expect
+# Runs on every poll while the condition of "{name}" is TRUE. exit 1 reports a failure.
+# stdin is /dev/null, so drive interactive programs through spawn/expect only.
+set timeout 30
+set host $env(KEEPWATCH_SETTING_HOST)
+spawn echo "connecting to $host"
+expect {
+    "connecting" { }
+    timeout { exit 1 }
+}
+expect eof
+'''
+
+TEMPLATES: dict[str, dict[str, str]] = {
+    "python": {"config.toml": PYTHON_CONFIG, "watch.py": PYTHON_WATCH},
+    "shell": {"config.toml": SHELL_CONFIG, "check.sh": SHELL_CHECK, "on_true.sh": SHELL_ACTION},
+    "expect": {"config.toml": EXPECT_CONFIG, "check.sh": SHELL_CHECK, "on_true.exp": EXPECT_ACTION},
+}
+
+
+def render(template: str, name: str) -> dict[str, str]:
+    return {path: content.replace("{name}", name) for path, content in TEMPLATES[template].items()}
