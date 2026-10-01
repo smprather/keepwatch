@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import rich_click as click
+from rich.markdown import Markdown
 
 from keepwatch import __version__, systemd
 from keepwatch.config import (
@@ -41,6 +42,7 @@ from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter
 from keepwatch.output import ConsolePrinter, make_console, plain_output
 from keepwatch.paths import PathError, Paths, ensure_private_dir, remove_stale_process_dirs, resolve_paths
 from keepwatch.pollengine import Fake, PollEngine, PollReport, parse_fakes
+from keepwatch.reference import UnknownTopic, render_all, render_topic, topic_index
 from keepwatch.runner import Runner
 from keepwatch.service import Service
 from keepwatch.state import initial_state
@@ -55,6 +57,7 @@ COMMAND_GROUPS = {
         {"name": "Inspect", "commands": ["status", "logs"]},
         {"name": "Control", "commands": ["enable", "disable", "rename"]},
         {"name": "Setup", "commands": ["init", "install", "uninstall"]},
+        {"name": "Reference", "commands": ["docs"]},
     ]
 }
 _PLAIN_BOXES = {
@@ -131,6 +134,8 @@ def cli(ctx: click.Context, config_path: Path | None) -> None:
     """Poll conditions and run actions.
 
     Each watch is a directory holding a config.toml plus the code for its check and actions.
+
+    Writing or fixing a watch? Read `keepwatch docs agent` first, or `keepwatch docs --all` for the complete reference.
     """
     paths = resolve_paths()
     ctx.obj = App(paths=paths, config_path=config_path or paths.config_file)
@@ -627,6 +632,32 @@ def uninstall(app: App) -> None:
         click.echo(f"{unit_path} was not installed")
     _systemctl_or_fail("daemon-reload")
     click.echo("keepwatch will no longer start at login")
+
+
+@cli.command()
+@click.argument("topic", required=False)
+@click.option("--all", "show_all", is_flag=True, help="Print every topic, in reading order.")
+def docs(topic: str | None, show_all: bool) -> None:
+    """Print the reference as Markdown. With no TOPIC, list the topics.
+
+    When stdout is not a terminal (agents, pipes), the raw Markdown is printed unchanged; on a terminal it is
+    rendered. Start with `keepwatch docs agent`.
+
+    Exit status: 0, or 1 for an unknown topic.
+    """
+    if show_all:
+        text = render_all()
+    elif topic is None:
+        text = topic_index()
+    else:
+        try:
+            text = render_topic(topic)
+        except UnknownTopic as exc:
+            _fail(str(exc))
+    if plain_output():
+        click.echo(text)
+    else:
+        make_console().print(Markdown(text))
 
 
 def main() -> None:
