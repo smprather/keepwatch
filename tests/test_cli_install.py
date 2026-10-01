@@ -111,14 +111,23 @@ def on_windows(monkeypatch, exit_codes=()):
     return scripts
 
 
-def test_windows_install_registers_a_logon_task(xdg, monkeypatch):
+def test_windows_install_registers_and_starts_a_logon_task(xdg, monkeypatch):
     scripts = on_windows(monkeypatch)
     result = run("install")
     assert result.exit_code == 0, result.output
-    (script,) = scripts
-    assert "Register-ScheduledTask" in script and "New-ScheduledTaskTrigger -AtLogOn" in script
-    assert "-m keepwatch run" in script
-    assert "registered Task Scheduler task 'keepwatch'" in result.output
+    register, start = scripts
+    assert "Register-ScheduledTask" in register and "New-ScheduledTaskTrigger -AtLogOn" in register
+    assert "-m keepwatch run" in register and "keepwatch.lnk" in register
+    assert "Start-ScheduledTask" not in register and "Start-ScheduledTask" in start
+    assert "registered Task Scheduler task 'keepwatch'" in result.output and "started it" in result.output
+
+
+def test_windows_install_start_failure_is_only_a_warning(xdg, monkeypatch):
+    scripts = on_windows(monkeypatch, exit_codes=(0, 1))
+    result = run("install")
+    assert result.exit_code == 0, result.output
+    assert len(scripts) == 2
+    assert "will start at the next logon" in result.output
 
 
 def test_windows_install_falls_back_to_a_startup_shortcut(xdg, monkeypatch):
@@ -153,3 +162,10 @@ def test_windows_uninstall(xdg, monkeypatch):
     assert result.exit_code == 0, result.output
     (script,) = scripts
     assert "Unregister-ScheduledTask" in script and "keepwatch.lnk" in script
+
+
+def test_windows_uninstall_has_one_windows_branch():
+    import inspect
+
+    source = inspect.getsource(cli_module.uninstall.callback)
+    assert source.count("if _on_windows():") == 1

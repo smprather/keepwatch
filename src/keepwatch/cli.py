@@ -310,6 +310,7 @@ def run_service(app: App, only: tuple[str, ...], verbose: bool, quiet: bool) -> 
             stack.enter_context(hold_lock(paths.service_lock, blocking=False))
         except LockBusy:
             _fail("another keepwatch service is already running; see: keepwatch status")
+        locked_at = time.time()
         try:
             global_config = app.load_global()
         except ConfigError as exc:
@@ -337,7 +338,8 @@ def run_service(app: App, only: tuple[str, ...], verbose: bool, quiet: bool) -> 
 
         signal.signal(signal.SIGTERM, request_stop)
         signal.signal(signal.SIGINT, request_stop)
-        service = Service(paths=paths, config_path=app.config_path, sink=sink, only=set(only))
+        service = Service(paths=paths, config_path=app.config_path, sink=sink, only=set(only),
+                          stale_before=locked_at)
         try:
             service.run(stop)
         except ConfigError as exc:
@@ -619,7 +621,14 @@ def _install_windows(app: App, dry_run: bool) -> None:
         return
     result = winsched.run_powershell(register)
     if result.returncode == 0:
-        click.echo(f"registered Task Scheduler task '{winsched.TASK_NAME}' (at logon, restarted on failure) and started it")
+        started = winsched.run_powershell(winsched.start_script())
+        if started.returncode == 0:
+            click.echo(f"registered Task Scheduler task '{winsched.TASK_NAME}' (at logon, restarted on failure) and started it")
+        else:
+            click.echo(
+                f"registered Task Scheduler task '{winsched.TASK_NAME}', but could not start it now "
+                f"({_last_line(started.stderr)}); it will start at the next logon"
+            )
     else:
         click.echo(f"Task Scheduler refused ({_last_line(result.stderr)}); using a Startup-folder shortcut instead")
         fallback = winsched.run_powershell(shortcut)
@@ -683,15 +692,6 @@ def uninstall(app: App) -> None:
 
     Exit status: 0, or 1 if systemctl daemon-reload fails.
     """
-    if _on_windows():
-        if service_running(app.paths) and not _request_stop(app.paths, 30.0):
-            click.echo("warning: the running service did not stop within 30s")
-        result = winsched.run_powershell(winsched.unregister_script())
-        if result.returncode != 0:
-            _fail(f"could not remove the logon task: {_last_line(result.stderr)}")
-        click.echo("removed the logon task and the Startup-folder shortcut (whichever existed)")
-        click.echo("keepwatch will no longer start at logon")
-        return
     if _on_windows():
         if service_running(app.paths) and not _request_stop(app.paths, 30.0):
             click.echo("warning: the running service did not stop within 30s")

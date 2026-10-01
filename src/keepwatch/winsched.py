@@ -42,9 +42,13 @@ def register_script(executable: str, arguments: str) -> str:
             "$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited",
             f"Register-ScheduledTask -TaskName {_quote(TASK_NAME)} -Action $action -Trigger $trigger "
             "-Settings $settings -Principal $principal -Force | Out-Null",
-            f"Start-ScheduledTask -TaskName {_quote(TASK_NAME)}",
+            f"Remove-Item -LiteralPath {_SHORTCUT} -ErrorAction SilentlyContinue",
         ]
     )
+
+
+def start_script() -> str:
+    return f"Start-ScheduledTask -TaskName {_quote(TASK_NAME)}"
 
 
 def shortcut_script(executable: str, arguments: str) -> str:

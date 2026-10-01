@@ -49,6 +49,7 @@ class Service:
         start_threads: bool = True,
         clock: Callable[[], float] = time.time,
         runner: Runner | None = None,
+        stale_before: float | None = None,
     ) -> None:
         self.paths = paths
         self.config_path = config_path
@@ -68,10 +69,10 @@ class Service:
         self._reported_problems: frozenset[str] = frozenset()
         self._started = clock()
         self._tick_error: str | None = None
+        self._stale_before = stale_before
 
     def start(self) -> None:
         """Load the global config (raises ConfigError if broken), log service.start, run the first tick."""
-        self.paths.stop_request.unlink(missing_ok=True)
         self._global_signature = file_signature(self.config_path)
         self.global_config = load_global_config(self.config_path, self.paths)
         self.engine = PollEngine(
@@ -108,10 +109,14 @@ class Service:
             self.stop()
 
     def _stop_requested(self) -> bool:
-        """True (once) when `keepwatch stop` has written the stop request file."""
+        """True (once) when `keepwatch stop` asked this service to stop. Requests older than the lock are stale."""
+        request = self.paths.stop_request
         try:
-            self.paths.stop_request.unlink()
+            written = request.stat().st_mtime
+            request.unlink()
         except OSError:
+            return False
+        if self._stale_before is not None and written < self._stale_before:
             return False
         self._sink(make_record("service.stop_requested"))
         return True
