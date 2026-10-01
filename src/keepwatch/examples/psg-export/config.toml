@@ -1,0 +1,10 @@
+# Send each finished PSG export tarball to bar.com, once.
+description = "Send new PSG export tarballs to the incoming directory on bar.com"
+interval = "30s"
+action_timeout = "15m"   # big tarballs over a slow link
+retry_after = "1h"       # once offline (say, the laptop is off the network), try again hourly
+
+[settings]
+pattern = "~/incoming/psg-export-*.tar.gz"
+dest = "foo@bar.com:/home/foo/incoming/"
+quiet = "30s"            # a file must be unchanged this long before it counts as finished

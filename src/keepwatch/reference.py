@@ -6,6 +6,7 @@ import difflib
 import inspect
 from collections.abc import Callable
 from importlib import resources
+from pathlib import Path
 from typing import Any
 
 TOPICS: tuple[tuple[str, str], ...] = (
@@ -217,3 +218,27 @@ def _options(command: Any) -> list[str]:
 
 
 GENERATED.update({"config": config_topic, "ctx": ctx_topic, "cli": cli_topic})
+
+
+_LANGUAGES = {".toml": "toml", ".py": "python", ".sh": "sh", ".exp": "tcl"}
+
+
+def example_dirs() -> list[Path]:
+    root = Path(str(resources.files("keepwatch").joinpath("examples")))
+    return sorted(path for path in root.iterdir() if path.is_dir() and not path.name.startswith(("_", ".")))
+
+
+def examples_topic() -> str:
+    lines = [narrative("examples")]
+    for directory in example_dirs():
+        lines += ["", f"## {directory.name}"]
+        for path in sorted(directory.iterdir(), key=lambda p: (p.name != "config.toml", p.name)):
+            if not path.is_file():
+                continue
+            language = _LANGUAGES.get(path.suffix, "")
+            text = path.read_text(encoding="utf-8").rstrip("\n")
+            lines += ["", f"### {directory.name}/{path.name}", "", f"```{language}", text, "```"]
+    return "\n".join(lines)
+
+
+GENERATED["examples"] = examples_topic

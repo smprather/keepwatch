@@ -1,0 +1,17 @@
+# Say when a web site stops answering, and when it is back. TRUE means "down".
+description = "Tell me when https://example.com/ is down and when it recovers"
+interval = "60s"
+check_timeout = "20s"
+
+[hooks]
+check = 'curl --fail --silent --show-error --max-time 15 --output /dev/null "$KEEPWATCH_SETTING_URL"'
+on_rise = ["./notify.sh", "is DOWN"]
+on_fall = ["./notify.sh", "is back up"]
+
+[check_exit_codes]
+true = [22]           # curl --fail: the server answered with an HTTP error status
+false = [0]           # the page loaded
+unknown = [6, 7, 28]  # cannot resolve, cannot connect, timed out: maybe our own network is down
+
+[settings]
+url = "https://example.com/"

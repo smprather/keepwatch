@@ -1,0 +1,11 @@
+# A one-time task done through an interactive program, driven by Expect.
+description = "Answer an interactive prompt once, then remember that it was done"
+interval = "1h"
+action_timeout = "1m"
+
+[hooks]
+check = ["./due.sh"]
+on_true = ["expect", "./greet.exp"]
+
+[settings]
+name = "keepwatch"

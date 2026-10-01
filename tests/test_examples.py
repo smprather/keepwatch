@@ -1,0 +1,48 @@
+import json
+import shutil
+
+import pytest
+from click.testing import CliRunner
+
+from keepwatch.cli import cli
+from keepwatch.reference import example_dirs, render_topic
+
+
+def run(*args):
+    return CliRunner().invoke(cli, list(args))
+
+
+def install(xdg, name):
+    source = next(d for d in example_dirs() if d.name == name)
+    target = xdg.default_watches_dir / name
+    shutil.copytree(source, target)
+    return target
+
+
+def test_examples_are_in_the_docs():
+    text = render_topic("examples")
+    assert [d.name for d in example_dirs()] == ["greet-once", "psg-export", "site-down"]
+    for directory in example_dirs():
+        for path in directory.iterdir():
+            if path.is_file():
+                assert f"{directory.name}/{path.name}" in text
+
+
+def test_examples_validate_and_poll(xdg):
+    install(xdg, "psg-export")
+    install(xdg, "site-down")
+    assert run("validate", "psg-export", "site-down").exit_code == 0
+    data = json.loads(run("poll", "psg-export", "--dry-run", "--json").output)
+    assert data["polls"][0]["outcome"] == "false"
+    data = json.loads(run("poll", "site-down", "--fake", "true,false", "--json").output)
+    assert [p["results"][0]["status"] for p in data["polls"]] == ["ok", "ok"]
+
+
+@pytest.mark.skipif(shutil.which("expect") is None, reason="expect is not installed")
+def test_expect_example_runs_once(xdg):
+    install(xdg, "greet-once")
+    assert run("validate", "greet-once").exit_code == 0
+    first = json.loads(run("poll", "greet-once", "--json").output)["polls"][0]
+    assert first["outcome"] == "true" and first["results"][0]["status"] == "ok"
+    second = json.loads(run("poll", "greet-once", "--json").output)["polls"][0]
+    assert second["outcome"] == "false"

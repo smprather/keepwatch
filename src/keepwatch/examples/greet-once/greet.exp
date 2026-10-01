@@ -1,0 +1,15 @@
+#!/usr/bin/env expect
+# Expect runs the program on its own terminal, so prompts work although the hook's stdin is /dev/null.
+set timeout 20
+set name $env(KEEPWATCH_SETTING_NAME)
+spawn sh -c {printf "name? "; read answer; echo "hello, $answer"}
+expect {
+    "name? " { send "$name\r" }
+    timeout { exit 1 }
+}
+expect {
+    "hello, $name" { }
+    timeout { exit 1 }
+}
+expect eof
+exec touch "$env(KEEPWATCH_DATA_DIR)/greeted"
