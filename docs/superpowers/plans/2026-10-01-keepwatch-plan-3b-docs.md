@@ -815,6 +815,7 @@ def test_every_command_and_option_is_documented():
             if isinstance(param, click.Option):
                 assert param.help, f"{name} {param.opts}"
                 assert param.opts[-1] in text
+    assert "UNSET" not in text and "Sentinel" not in text
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -1014,7 +1015,9 @@ def _options(command: Any) -> list[str]:
             kind = param.type.name
             if param.multiple:
                 kind += ", repeatable"
-        default = "" if param.default in (None, False, ()) else f"`{param.default}`"
+        unset = getattr(click.core, "UNSET", None)  # click >= 8.2 marks "no default" with a sentinel
+        no_default = param.default in (None, False, ()) or (unset is not None and param.default is unset)
+        default = "" if no_default else f"`{param.default}`"
         rows.append(f"| {names} | {kind} | {default} | {param.help or ''} |")
     if not rows:
         return []
