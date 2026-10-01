@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -73,3 +74,32 @@ def test_pipe_arguments_name_the_os_mechanism():
         os.close(write_fd)
     expected = ("--request-handle", "--result-handle") if platform.IS_WINDOWS else ("--request-fd", "--result-fd")
     assert (args[0], args[2]) == expected
+
+
+def test_open_shared_allows_rename(tmp_path):
+    path = tmp_path / "a.txt"
+    path.write_text("x")
+    with platform.open_shared(path) as handle:
+        path.rename(tmp_path / "b.txt")
+        assert handle.read() == b"x"
+    with pytest.raises(FileNotFoundError):
+        platform.open_shared(tmp_path / "missing.txt")
+
+
+def test_replace(tmp_path):
+    source, target = tmp_path / "s", tmp_path / "t"
+    source.write_text("new")
+    target.write_text("old")
+    platform.replace(source, target)
+    assert target.read_text() == "new" and not source.exists()
+
+
+@pytest.mark.windows_only
+def test_replace_retries_while_the_target_is_briefly_open(tmp_path):
+    source, target = tmp_path / "s", tmp_path / "t"
+    source.write_text("new")
+    target.write_text("old")
+    handle = open(target, "rb")
+    threading.Timer(0.3, handle.close).start()
+    platform.replace(source, target)
+    assert target.read_text() == "new"

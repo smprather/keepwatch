@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 IS_WINDOWS = os.name == "nt"
 APP = "keepwatch"
@@ -337,3 +337,43 @@ def replace_junction(link: Path, target: Path) -> None:
     elif link.exists():
         raise FileExistsError(f"{link} exists and is not a link")
     _winapi.CreateJunction(str(target), str(link))
+
+
+if IS_WINDOWS:
+    _kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    _kernel32.CreateFileW.restype = wintypes.HANDLE
+    _GENERIC_READ = 0x80000000
+    _FILE_SHARE_ALL = 0x1 | 0x2 | 0x4  # read, write, delete
+    _OPEN_EXISTING = 3
+    _FILE_ATTRIBUTE_NORMAL = 0x80
+    _INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+
+
+def open_shared(path: Path) -> BinaryIO:
+    """Open a file for reading without stopping others from renaming or deleting it (matters on Windows)."""
+    if not IS_WINDOWS:
+        return open(path, "rb")
+    handle = _kernel32.CreateFileW(
+        str(path), _GENERIC_READ, _FILE_SHARE_ALL, None, _OPEN_EXISTING, _FILE_ATTRIBUTE_NORMAL, None
+    )
+    if handle is None or handle == _INVALID_HANDLE_VALUE:
+        error = ctypes.get_last_error()
+        if error in (2, 3):  # file or path not found
+            raise FileNotFoundError(2, "No such file or directory", str(path))
+        raise ctypes.WinError(error)
+    return os.fdopen(msvcrt.open_osfhandle(handle, os.O_RDONLY), "rb")
+
+
+def replace(source: str | os.PathLike[str], target: str | os.PathLike[str]) -> None:
+    """os.replace; on Windows retried for up to a second while another process briefly holds the target."""
+    attempts = 20 if IS_WINDOWS else 1
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05)

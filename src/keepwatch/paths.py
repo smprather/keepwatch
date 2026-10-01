@@ -130,7 +130,7 @@ def write_json_atomic(path: Path, document: Any) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(document, handle, indent=2, default=str)
-        os.replace(temp, path)
+        platform.replace(temp, path)
     except BaseException:
         Path(temp).unlink(missing_ok=True)
         raise

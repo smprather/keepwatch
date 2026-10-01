@@ -63,15 +63,19 @@ class LogWriter:
         return self.path.with_name(f"{self.path.name}.{index}")
 
     def _rotate(self) -> None:
-        if self.backups <= 0:
-            self.path.unlink(missing_ok=True)
+        try:
+            if self.backups <= 0:
+                self.path.unlink(missing_ok=True)
+                return
+            self._backup(self.backups).unlink(missing_ok=True)
+            for index in range(self.backups - 1, 0, -1):
+                source = self._backup(index)
+                if source.exists():
+                    source.rename(self._backup(index + 1))
+            self.path.rename(self._backup(1))
+        except PermissionError:
+            # Windows: another process has the log open; rotate on a later write instead.
             return
-        self._backup(self.backups).unlink(missing_ok=True)
-        for index in range(self.backups - 1, 0, -1):
-            source = self._backup(index)
-            if source.exists():
-                source.rename(self._backup(index + 1))
-        self.path.rename(self._backup(1))
 
 
 LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}

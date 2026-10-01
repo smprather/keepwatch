@@ -3,6 +3,8 @@ import re
 import threading
 import time as _time
 
+import pytest
+
 from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter, make_record
 
 
@@ -92,3 +94,14 @@ def test_queue_sink_survives_a_failing_sink():
         sink({"n": n})
     sink.close()
     assert seen == [0, 2]
+
+
+@pytest.mark.windows_only
+def test_rotation_waits_while_another_process_holds_the_log(tmp_path):
+    path = tmp_path / "keepwatch.jsonl"
+    writer = LogWriter(path, max_bytes=200, backups=2)
+    writer.write({"event": "first", "pad": "x" * 150})
+    with open(path, "rb"):  # an ordinary reader blocks renames on Windows
+        for n in range(5):
+            writer.write({"event": "more", "n": n, "pad": "y" * 150})
+    assert len(path.read_text().splitlines()) == 6

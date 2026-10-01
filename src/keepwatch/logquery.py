@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from keepwatch import platform
 from keepwatch.durations import DurationError, parse_duration
 from keepwatch.logstore import LEVELS
 from keepwatch.runner import FAILED_STATUSES
@@ -41,7 +42,7 @@ def _parse_line(line: bytes | str) -> dict[str, Any] | None:
 def read_records(path: Path) -> Iterator[dict[str, Any]]:
     for file in log_files(path):
         try:
-            handle = open(file, "rb")
+            handle = platform.open_shared(file)
         except FileNotFoundError:
             continue
         with handle:
@@ -136,7 +137,7 @@ def follow_log(
 
     def open_current() -> tuple[Any, int | None]:
         try:
-            handle = open(path, "rb")
+            handle = platform.open_shared(path)
         except FileNotFoundError:
             return None, None
         return handle, os.fstat(handle.fileno()).st_ino

@@ -147,7 +147,7 @@ class Ledger:
                 json.dump({"version": 1, "entries": self._entries}, handle, indent=1, sort_keys=True)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temp, self.path)
+            platform.replace(temp, self.path)
         except BaseException:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(temp)
