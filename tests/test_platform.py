@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -32,3 +33,43 @@ def test_windows_default_dirs():
     assert config == Path(r"C:\Users\u\AppData\Roaming\keepwatch")
     assert state == Path(r"C:\Users\u\AppData\Local\keepwatch")
     assert runtime == Path(r"C:\Users\u\AppData\Local\keepwatch\run")
+
+
+GRANDCHILD = (
+    "import subprocess, sys, time\n"
+    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+    "open(sys.argv[1], 'w').write(str(child.pid))\n"
+    "time.sleep(60)\n"
+)
+
+
+def test_kill_takes_the_whole_tree(tmp_path):
+    pid_file = tmp_path / "grandchild.pid"
+    process = platform.start_process(
+        [sys.executable, "-c", GRANDCHILD, str(pid_file)],
+        cwd=tmp_path, env=None, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 20
+    while not pid_file.exists() or not pid_file.read_text():
+        assert time.monotonic() < deadline, "the grandchild never started"
+        time.sleep(0.05)
+    grandchild = int(pid_file.read_text())
+    process.kill()
+    process.popen.wait(10)
+    process.close()
+    assert process.terminated is True
+    deadline = time.monotonic() + 10
+    while platform.pid_alive(grandchild):
+        assert time.monotonic() < deadline, "the grandchild survived"
+        time.sleep(0.05)
+
+
+def test_pipe_arguments_name_the_os_mechanism():
+    read_fd, write_fd = os.pipe()
+    try:
+        args = platform.pipe_arguments(read_fd, write_fd)
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+    expected = ("--request-handle", "--result-handle") if platform.IS_WINDOWS else ("--request-fd", "--result-fd")
+    assert (args[0], args[2]) == expected

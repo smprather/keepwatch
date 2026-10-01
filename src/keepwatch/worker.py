@@ -1,8 +1,8 @@
 """Child side of one Python hook call: `python -m keepwatch.worker`. Stdlib only.
 
-Reads one request (JSON) from --request-fd, imports the watch's watch.py, calls
-one function with a Ctx, and writes JSON-line messages to --result-fd: hello,
-then log/command messages, then exactly one result.
+Reads one request (JSON) from the request pipe (`--request-fd`, or `--request-handle` on Windows),
+imports the watch's watch.py, calls one function with a Ctx, and writes JSON-line messages to the
+result pipe.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from keepwatch import __version__
+from keepwatch import __version__, platform
 from keepwatch.ctx import Ctx, Unknown
 from keepwatch.hooks import CHECK, HOOK_NAMES, WATCH_PY
 from keepwatch.protocol import PROTOCOL_VERSION, encode, normalize_payload
@@ -147,12 +147,19 @@ def run_request(request: dict[str, Any], send: Send) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m keepwatch.worker")
-    parser.add_argument("--request-fd", type=int, required=True)
-    parser.add_argument("--result-fd", type=int, required=True)
+    parser.add_argument("--request-fd", type=int)
+    parser.add_argument("--result-fd", type=int)
+    parser.add_argument("--request-handle", type=int)
+    parser.add_argument("--result-handle", type=int)
     args = parser.parse_args(argv)
-    with os.fdopen(args.request_fd, "rb") as handle:
+    by_handle = args.request_handle is not None
+    request_source = args.request_handle if by_handle else args.request_fd
+    result_target = args.result_handle if by_handle else args.result_fd
+    if request_source is None or result_target is None:
+        parser.error("give --request-fd/--result-fd or --request-handle/--result-handle")
+    with platform.open_inherited(request_source, handle=by_handle, mode="rb") as handle:
         request = json.loads(handle.read())
-    out = os.fdopen(args.result_fd, "wb", buffering=0)
+    out = platform.open_inherited(result_target, handle=by_handle, mode="wb")
 
     def send(message: dict[str, Any]) -> None:
         out.write(encode(message))

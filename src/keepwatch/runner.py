@@ -1,7 +1,7 @@
 """Run one hook call in a child process: a Python worker or a command.
 
-Every call gets its own session (process group). At the deadline the group
-gets SIGTERM, then SIGKILL after kill_grace seconds. stdout and stderr are
+Every call gets its own process group (POSIX) or Job Object (Windows). At the deadline the whole tree is
+stopped: SIGTERM, then SIGKILL after kill_grace seconds on POSIX; at once on Windows. stdout and stderr are
 captured (head and tail kept); everything is returned as a HookResult.
 """
 
@@ -22,10 +22,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
-from keepwatch import __version__
+from keepwatch import __version__, platform
 from keepwatch.config import Command, ExitCodes, WatchConfig
 from keepwatch.durations import format_duration
 from keepwatch.hooks import CHECK
+from keepwatch.platform import HookProcess
 from keepwatch.protocol import PROTOCOL_VERSION, decode_lines, normalize_payload
 from keepwatch.state import Outcome
 
@@ -217,13 +218,6 @@ class _Writer(threading.Thread):
             pass
 
 
-def _signal_group(pgid: int, sig: signal.Signals) -> None:
-    try:
-        os.killpg(pgid, sig)
-    except (ProcessLookupError, PermissionError):
-        pass
-
-
 def _signal_name(number: int) -> str:
     try:
         return signal.Signals(number).name
@@ -279,6 +273,7 @@ class _WorkerRun:
     out: _Reader
     err: _Reader
     messages: _MessageReader
+    process: HookProcess
 
 
 class Runner:
@@ -286,16 +281,16 @@ class Runner:
         self.python = python
         self.kill_grace = kill_grace
         self.uv = uv or shutil.which("uv")
-        self._active: set[int] = set()
+        self._active: set[HookProcess] = set()
         self._active_lock = threading.Lock()
         self._closing = False
 
     def terminate_all(self) -> None:
-        """Send SIGTERM to every hook process group that is running now."""
+        """Stop every running hook gracefully (POSIX SIGTERM; immediately on Windows)."""
         with self._active_lock:
-            groups = list(self._active)
-        for pgid in groups:
-            _signal_group(pgid, signal.SIGTERM)
+            processes = list(self._active)
+        for process in processes:
+            process.terminate()
 
     def close(self) -> None:
         """Shutdown, step 1: refuse new hook calls and SIGTERM the running ones."""
@@ -304,23 +299,24 @@ class Runner:
         self.terminate_all()
 
     def kill_all(self) -> None:
-        """Shutdown, step 2: SIGKILL every hook process group still running."""
+        """Shutdown, step 2: forcibly stop every hook still running."""
         with self._active_lock:
-            groups = list(self._active)
-        for pgid in groups:
-            _signal_group(pgid, signal.SIGKILL)
+            processes = list(self._active)
+        for process in processes:
+            process.kill()
 
-    def _track(self, pid: int) -> None:
+    def _track(self, process: HookProcess) -> None:
         with self._active_lock:
-            self._active.add(pid)
+            self._active.add(process)
             closing = self._closing
         if closing:
             # Started while close() ran: stop it right away.
-            _signal_group(pid, signal.SIGTERM)
+            process.terminate()
 
-    def _untrack(self, pid: int) -> None:
+    def _untrack(self, process: HookProcess) -> None:
         with self._active_lock:
-            self._active.discard(pid)
+            self._active.discard(process)
+        process.close()
 
     def run(self, call: HookCall) -> HookResult:
         """Run one hook call. Never raises: any unexpected failure becomes a failed result."""
@@ -381,28 +377,28 @@ class Runner:
         )
         return env
 
-    def _supervise(self, proc: subprocess.Popen[bytes], readers: Sequence[threading.Thread], timeout: float) -> tuple[int, bool]:
+    def _supervise(self, process: HookProcess, readers: Sequence[threading.Thread], timeout: float) -> tuple[int, bool]:
         timed_out = False
         try:
-            proc.wait(timeout=max(timeout, 0.0))
+            process.popen.wait(timeout=max(timeout, 0.0))
         except subprocess.TimeoutExpired:
             timed_out = True
-            _signal_group(proc.pid, signal.SIGTERM)
+            process.terminate()
             try:
-                proc.wait(timeout=self.kill_grace)
+                process.popen.wait(timeout=self.kill_grace)
             except subprocess.TimeoutExpired:
                 pass
-            _signal_group(proc.pid, signal.SIGKILL)
-            proc.wait()
+            process.kill()
+            process.popen.wait()
         drain_until = time.monotonic() + DRAIN_GRACE
         for reader in readers:
             reader.join(max(drain_until - time.monotonic(), 0.0))
         if any(reader.is_alive() for reader in readers):
-            # A leftover child still holds a pipe open: kill the whole group.
-            _signal_group(proc.pid, signal.SIGKILL)
+            # A leftover child still holds a pipe open: stop the whole tree.
+            process.kill()
             for reader in readers:
                 reader.join(DRAIN_GRACE)
-        return proc.returncode, timed_out
+        return process.popen.returncode, timed_out
 
     def _captured(self, out: _Reader, err: _Reader, returncode: int, started: float) -> dict[str, Any]:
         stdout, stdout_cut = out.text()
@@ -416,6 +412,15 @@ class Runner:
             "signal": -returncode if returncode < 0 else None,
             "duration": time.monotonic() - started,
         }
+
+    @staticmethod
+    def _stopped_reason(process: HookProcess, returncode: int) -> str | None:
+        """Why a process ended abnormally because of a signal or keepwatch, or None."""
+        if returncode < 0:
+            return f"killed by signal {_signal_name(-returncode)}"
+        if platform.IS_WINDOWS and process.terminated and returncode == platform.TERMINATED_EXIT:
+            return "terminated by keepwatch"
+        return None
 
     # -- Python hooks ---------------------------------------------------------
 
@@ -465,21 +470,20 @@ class Runner:
             return "keepwatch is shutting down"
         req_r, req_w = os.pipe()
         res_r, res_w = os.pipe()
-        tail = ["-m", "keepwatch.worker", "--request-fd", str(req_r), "--result-fd", str(res_w)]
+        tail = ["-m", "keepwatch.worker", *platform.pipe_arguments(req_r, res_w)]
         if call.watch.python_dependencies:
             argv = [*self._uv_prefix(call.watch.python_dependencies, offline=offline), "python", *tail]
         else:
             argv = [self.python, *tail]
         try:
-            proc = subprocess.Popen(
+            process = platform.start_process(
                 argv,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=call.watch.watch_dir,
                 env=env,
-                pass_fds=(req_r, res_w),
-                start_new_session=True,
+                inherit=(req_r, res_w),
             )
         except OSError as exc:
             for fd in (req_r, req_w, res_r, res_w):
@@ -488,17 +492,17 @@ class Runner:
         os.close(req_r)
         os.close(res_w)
         _Writer(req_w, json.dumps(request).encode("utf-8")).start()
-        out = _Reader(proc.stdout, call.capture_bytes)
-        err = _Reader(proc.stderr, call.capture_bytes)
+        out = _Reader(process.popen.stdout, call.capture_bytes)
+        err = _Reader(process.popen.stderr, call.capture_bytes)
         messages = _MessageReader(os.fdopen(res_r, "rb"), RESULT_LIMIT, call.on_message)
         for reader in (out, err, messages):
             reader.start()
-        self._track(proc.pid)
+        self._track(process)
         try:
-            returncode, timed_out = self._supervise(proc, (out, err, messages), timeout)
+            returncode, timed_out = self._supervise(process, (out, err, messages), timeout)
         finally:
-            self._untrack(proc.pid)
-        return _WorkerRun(returncode, timed_out, out, err, messages)
+            self._untrack(process)
+        return _WorkerRun(returncode, timed_out, out, err, messages, process)
 
     def _run_python(self, call: HookCall) -> HookResult:
         target = f"watch.py:{call.hook}" if call.mode == "call" else "watch.py (describe)"
@@ -570,6 +574,9 @@ class Runner:
         returncode = run.returncode
         if run.timed_out:
             return HookResult(status="timeout", reason=f"timed out after {format_duration(call.timeout)}", **common)
+        stopped = self._stopped_reason(run.process, run.returncode)
+        if stopped is not None and results.result is None:
+            return HookResult(status=failure, reason=stopped, **common)
         hello = results.hello
         result = results.result
         if hello is None:
@@ -643,26 +650,25 @@ class Runner:
                     f"cannot prepare the hook's files in {call.run_dir}: {exc.strerror or exc}",
                 )
             try:
-                proc = subprocess.Popen(
+                process = platform.start_process(
                     command.to_argv(),
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     cwd=call.watch.watch_dir,
                     env=env,
-                    start_new_session=True,
                 )
             except OSError as exc:
                 return self._error(call, "command", target, started, f"cannot start command: {exc.strerror or exc}")
-            out = _Reader(proc.stdout, call.capture_bytes)
-            err = _Reader(proc.stderr, call.capture_bytes)
+            out = _Reader(process.popen.stdout, call.capture_bytes)
+            err = _Reader(process.popen.stderr, call.capture_bytes)
             out.start()
             err.start()
-            self._track(proc.pid)
+            self._track(process)
             try:
-                returncode, timed_out = self._supervise(proc, (out, err), call.timeout)
+                returncode, timed_out = self._supervise(process, (out, err), call.timeout)
             finally:
-                self._untrack(proc.pid)
+                self._untrack(process)
             common = {
                 "hook": call.hook,
                 "kind": "command",
@@ -671,12 +677,9 @@ class Runner:
             }
             if timed_out:
                 return HookResult(status="timeout", reason=f"timed out after {format_duration(call.timeout)}", **common)
-            if returncode < 0:
-                return HookResult(
-                    status=self._failure_status(call),
-                    reason=f"killed by signal {_signal_name(-returncode)}",
-                    **common,
-                )
+            stopped = self._stopped_reason(process, returncode)
+            if stopped is not None:
+                return HookResult(status=self._failure_status(call), reason=stopped, **common)
             if call.hook != CHECK:
                 if returncode == 0:
                     return HookResult(status="ok", **common)
