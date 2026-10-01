@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch import __version__
+from keepwatch import __version__, platform
 from keepwatch.protocol import PROTOCOL_VERSION, decode_lines
 from keepwatch.worker import interpret_check_return
 
@@ -42,12 +42,10 @@ def request_for(watch_dir, hook="check", **extra):
 def run_worker(request):
     req_r, req_w = os.pipe()
     res_r, res_w = os.pipe()
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "keepwatch.worker", "--request-fd", str(req_r), "--result-fd", str(res_w)],
-        pass_fds=(req_r, res_w),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    process = platform.start_process(
+        [sys.executable, "-m", "keepwatch.worker", *platform.pipe_arguments(req_r, res_w)],
+        cwd=None, env=None, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        inherit=(req_r, res_w),
     )
     os.close(req_r)
     os.close(res_w)
@@ -55,7 +53,8 @@ def run_worker(request):
         handle.write(json.dumps(request).encode())
     with os.fdopen(res_r, "rb") as handle:
         data = handle.read()
-    out, err = proc.communicate(timeout=30)
+    out, err = process.popen.communicate(timeout=30)
+    process.close()
     messages, bad = decode_lines(data)
     assert bad == []
     return messages, out.decode(), err.decode()
@@ -67,7 +66,7 @@ def run_worker(request):
         (True, {"status": "answer", "answer": True, "payload": None}),
         (False, {"status": "answer", "answer": False, "payload": None}),
         (None, {"status": "unknown", "reason": None, "payload": None}),
-        ((True, [Path("/a")]), {"status": "answer", "answer": True, "payload": ["/a"]}),
+        ((True, [Path("/a")]), {"status": "answer", "answer": True, "payload": [str(Path("/a"))]}),
         ((None, {"n": 1}), {"status": "unknown", "reason": None, "payload": {"n": 1}}),
     ],
 )
@@ -94,7 +93,7 @@ def test_check_with_payload_and_logs(tmp_path):
     log = messages[1]
     assert (log["type"], log["level"], log["message"], log["fields"]) == ("log", "INFO", "found 2", {"files": ["a", "b"]})
     assert messages[-1] == {"type": "result", "status": "answer", "answer": True, "payload": ["a", "b"]}
-    assert out == "to stdout\n"
+    assert out.splitlines() == ["to stdout"]
 
 
 def test_unknown_with_reason(tmp_path):

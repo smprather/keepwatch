@@ -11,6 +11,7 @@ from keepwatch.pollengine import PollEngine
 from keepwatch.runner import Runner
 from keepwatch.scheduler import WatchRunner
 from keepwatch.state import Outcome, WatchState
+from portable import py
 
 
 class Clock:
@@ -19,6 +20,9 @@ class Clock:
 
     def __call__(self):
         return self.now
+
+
+OK_FILE_CHECK = py('import os, sys; sys.exit(0 if os.path.exists("ok") else 9)')
 
 
 @pytest.fixture
@@ -74,7 +78,7 @@ def test_backoff_then_offline(xdg, make_watch, runner_for):
 
 
 def test_trial_poll_brings_the_watch_back(xdg, make_watch, runner_for):
-    watch_dir = make_watch("w", config='max_failures = 1\nretry_after = "1h"\n[hooks]\ncheck = "test -f ok || exit 9"\n')
+    watch_dir = make_watch("w", config=f'max_failures = 1\nretry_after = "1h"\n[hooks]\ncheck = {OK_FILE_CHECK}\n')
     clock, records, alerts = Clock(), [], []
     runner = runner_for(watch_dir, records, alerts, clock)
     runner.poll_once(clock())
@@ -111,7 +115,7 @@ def test_disable_and_enable_through_marker_files(xdg, make_watch, runner_for):
 
 def test_offline_survives_restart(xdg, make_watch, runner_for):
     watch_dir = make_watch("w", config='[hooks]\ncheck = ["true"]\n')
-    write_offline(xdg, "w", OfflineMarker(reason="5 consecutive failed polls", since=iso_time(1.0)))
+    write_offline(xdg, "w", OfflineMarker(reason="5 consecutive failed polls", since=iso_time(1_000_000.0)))
     clock = Clock()
     runner = runner_for(watch_dir, [], [], clock)
     assert runner.offline is not None
@@ -190,7 +194,7 @@ def disable_during_poll(runner, xdg):
     real_poll = runner._engine.poll
 
     def poll(*args, **kwargs):
-        write_offline(xdg, runner.name, OfflineMarker(reason="disabled by user", since=iso_time(1.0), by_user=True))
+        write_offline(xdg, runner.name, OfflineMarker(reason="disabled by user", since=iso_time(1_000_000.0), by_user=True))
         return real_poll(*args, **kwargs)
 
     runner._engine.poll = poll
@@ -236,7 +240,7 @@ def test_user_disable_during_a_poll_wins(xdg, make_watch, runner_for):
     assert not [r for r in records if r["event"] == "watch.offline" and r["level"] == "CRITICAL"]
 
     # A successful trial poll does not clear a marker the user wrote during it.
-    watch_dir = make_watch("b", config='max_failures = 1\nretry_after = "1m"\n[hooks]\ncheck = "test -f ok || exit 9"\n')
+    watch_dir = make_watch("b", config=f'max_failures = 1\nretry_after = "1m"\n[hooks]\ncheck = {OK_FILE_CHECK}\n')
     clock, records, alerts = Clock(), [], []
     runner = runner_for(watch_dir, records, alerts, clock)
     runner.poll_once(clock())

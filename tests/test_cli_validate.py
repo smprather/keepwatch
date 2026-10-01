@@ -3,6 +3,7 @@ import json
 from click.testing import CliRunner
 
 from keepwatch.cli import cli
+from portable import TRUE, toml_path
 
 
 def run(*args):
@@ -77,10 +78,10 @@ def test_hooks_keepwatch_cannot_see_are_reported(xdg, make_watch):
 
 def test_named_duplicate_is_reported(xdg, tmp_path, make_watch):
     other = tmp_path / "other"
-    make_watch("backup", config='[hooks]\ncheck = ["true"]\n')
-    make_watch("backup", config='[hooks]\ncheck = ["true"]\n', base=other)
+    make_watch("backup", config=f"[hooks]\ncheck = {TRUE}\n")
+    make_watch("backup", config=f"[hooks]\ncheck = {TRUE}\n", base=other)
     config = tmp_path / "custom.toml"
-    config.write_text(f'watch_dirs = ["{xdg.default_watches_dir}", "{other}"]\n')
+    config.write_text(f"watch_dirs = [{toml_path(xdg.default_watches_dir)}, {toml_path(other)}]\n")
     result = run("--config", str(config), "validate", "backup")
     assert result.exit_code == 1
     assert "duplicate watch name 'backup'" in result.output

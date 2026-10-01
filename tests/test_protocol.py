@@ -21,7 +21,7 @@ def test_clip_keeps_head_and_tail():
 def test_normalize_payload_converts_paths_and_tuples():
     value, problem = normalize_payload({"files": (Path("/in/a.tar.gz"), "b")})
     assert problem is None
-    assert value == {"files": ["/in/a.tar.gz", "b"]}
+    assert value == {"files": [str(Path("/in/a.tar.gz")), "b"]}
 
 
 def test_normalize_payload_rejects_unserializable_and_oversized():

@@ -27,6 +27,7 @@ def xdg(tmp_path, monkeypatch) -> Paths:
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))

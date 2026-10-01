@@ -6,8 +6,10 @@ from keepwatch.config import load_global_config, load_watch_config
 from keepwatch.pollengine import Fake, PollEngine, parse_fakes
 from keepwatch.runner import Runner
 from keepwatch.state import Edge, Outcome, WatchState
+from portable import toml_path
 
 PSG_WATCH = '''
+    import sys
     from pathlib import Path
 
     def check(ctx):
@@ -18,7 +20,7 @@ PSG_WATCH = '''
     def on_true(ctx):
         sent = ctx.ledger("sent")
         for f in ctx.payload:
-            ctx.run(["cp", f, ctx.settings["dest"]])
+            ctx.run([sys.executable, "-c", "import shutil, sys; shutil.copy(sys.argv[1], sys.argv[2])", f, ctx.settings["dest"]])
             sent.add(ctx.file_key(f))
 '''
 
@@ -45,8 +47,8 @@ def test_psg_style_watch_sends_once(tmp_path, make_watch, engine_for):
     (incoming / "psg-export-1.tar.gz").write_text("one")
     watch_dir = make_watch("psg", config=f'''
         [settings]
-        pattern = "{incoming}/psg-export-*.tar.gz"
-        dest = "{dest}"
+        pattern = {toml_path(incoming / "psg-export-*.tar.gz")}
+        dest = {toml_path(dest)}
     ''', files={"watch.py": PSG_WATCH})
     watch = load_watch_config(watch_dir)
     records = []

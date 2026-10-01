@@ -2,6 +2,7 @@ import textwrap
 
 import pytest
 
+from keepwatch import platform
 from keepwatch.config import Command, ConfigError, ExitCodes, load_watch_config
 from keepwatch.hooks import discover_python_hooks, resolve_hooks
 
@@ -57,7 +58,7 @@ def test_full_config(tmp_path):
     assert cfg.initial_condition is True and cfg.max_failures == 3
     assert cfg.python_dependencies == ("requests>=2.32",)
     assert cfg.hooks["check"] == Command(shell="./check.sh")
-    assert cfg.hooks["check"].to_argv() == ["/bin/sh", "-c", "./check.sh"]
+    assert cfg.hooks["check"].to_argv() == [*platform.default_shell(), "./check.sh"]
     assert cfg.hooks["on_true"] == Command(argv=("expect", "./send.exp"))
     assert cfg.hooks["on_true"].to_argv() == ["expect", "./send.exp"]
     assert cfg.hooks["on_true"].display() == "expect ./send.exp"

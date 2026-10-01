@@ -2,6 +2,7 @@ import json
 import os
 import stat
 
+import pytest
 from click.testing import CliRunner
 
 from keepwatch.cli import cli
@@ -22,6 +23,7 @@ def test_python_template_validates_and_polls(xdg):
     assert data["polls"][0]["outcome"] == "false"
 
 
+@pytest.mark.posix_only
 def test_shell_template_validates_and_scripts_are_executable(xdg):
     assert run("new", "sh-watch", "--template", "shell").exit_code == 0
     watch_dir = xdg.default_watches_dir / "sh-watch"

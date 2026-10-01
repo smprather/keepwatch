@@ -1,9 +1,9 @@
 import json
-import textwrap
 
 from click.testing import CliRunner
 
 from keepwatch.cli import cli
+from portable import toml_path
 
 WATCH_PY = '''
     def check(ctx):
@@ -85,5 +85,5 @@ def test_config_option_selects_watch_dirs(xdg, tmp_path, make_watch):
     other = tmp_path / "elsewhere"
     make_watch("x", files={"watch.py": WATCH_PY}, base=other)
     config = tmp_path / "custom.toml"
-    config.write_text(textwrap.dedent(f'watch_dirs = ["{other}"]\n'))
+    config.write_text(f"watch_dirs = [{toml_path(other)}]\n")
     assert run("--config", str(config), "poll", "x").exit_code == 0

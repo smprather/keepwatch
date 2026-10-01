@@ -28,12 +28,17 @@ def test_examples_are_in_the_docs():
                 assert f"{directory.name}/{path.name}" in text
 
 
-def test_examples_validate_and_poll(xdg):
+def test_psg_export_example_validates_and_polls(xdg):
     install(xdg, "psg-export")
-    install(xdg, "site-down")
-    assert run("validate", "psg-export", "site-down").exit_code == 0
+    assert run("validate", "psg-export").exit_code == 0
     data = json.loads(run("poll", "psg-export", "--dry-run", "--json").output)
     assert data["polls"][0]["outcome"] == "false"
+
+
+@pytest.mark.posix_only
+def test_site_down_example_validates_and_polls(xdg):
+    install(xdg, "site-down")
+    assert run("validate", "site-down").exit_code == 0
     data = json.loads(run("poll", "site-down", "--fake", "true,false", "--json").output)
     assert [p["results"][0]["status"] for p in data["polls"]] == ["ok", "ok"]
 

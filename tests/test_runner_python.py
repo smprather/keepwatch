@@ -42,7 +42,7 @@ def test_check_answers_with_payload_logs_and_output(make_watch, call_for):
     assert (result.status, result.kind, result.target) == ("true", "python", "watch.py:check")
     assert result.outcome() is Outcome.TRUE
     assert result.payload == ["a", "b"]
-    assert result.stdout == "hello from check\n"
+    assert result.stdout.splitlines() == ["hello from check"]
     assert [m["message"] for m in result.messages if m["type"] == "log"] == ["two files"]
     record = result.to_record()
     assert "messages" not in record and record["status"] == "true"

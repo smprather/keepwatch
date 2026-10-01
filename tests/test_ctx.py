@@ -84,6 +84,7 @@ def test_file_key_changes_with_mtime(tmp_path):
 
 def test_glob_expands_home_and_sorts(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     for name in ("b.tar.gz", "a.tar.gz", "c.txt"):
         (tmp_path / name).write_text("")
     assert make_ctx(tmp_path).glob("~/*.tar.gz") == [tmp_path / "a.tar.gz", tmp_path / "b.tar.gz"]
@@ -114,7 +115,7 @@ def test_run_captures_and_reports(tmp_path):
 def test_run_raises_on_failure_with_stderr_tail(tmp_path):
     ctx = make_ctx(tmp_path)
     with pytest.raises(CommandFailed, match="exited 3.*nope"):
-        ctx.run("echo nope >&2; exit 3")
+        ctx.run([sys.executable, "-c", 'import sys; sys.stderr.write("nope"); sys.exit(3)'])
     assert ctx.run("exit 3", check=False).returncode == 3
 
 
