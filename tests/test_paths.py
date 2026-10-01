@@ -12,6 +12,7 @@ from keepwatch.paths import (
 )
 
 
+@pytest.mark.posix_only  # POSIX-style absolute paths; Windows needs a drive letter
 def test_resolve_paths_uses_xdg_variables():
     paths = resolve_paths(
         {
