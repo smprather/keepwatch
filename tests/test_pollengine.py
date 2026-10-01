@@ -140,3 +140,16 @@ def test_report_to_dict(make_watch, engine_for):
     data = engine_for([]).poll(load_watch_config(watch_dir), WatchState(False)).to_dict()
     assert data["outcome"] == "false" and data["condition_after"] is False
     assert data["planned_actions"] == [] and data["failed"] is False
+
+
+def test_malformed_command_messages_cannot_crash_a_poll(make_watch, engine_for):
+    watch_dir = make_watch("evil", files={"watch.py": '''
+        def check(ctx):
+            ctx._emit({"type": "command", "hook": "x", "level": "y", "watch": "z", "argv": ["a"], "exit_code": 0})
+            return False
+    '''})
+    records = []
+    report = engine_for(records).poll(load_watch_config(watch_dir), WatchState(False))
+    assert report.outcome is Outcome.FALSE
+    command = next(r for r in records if r["event"] == "command")
+    assert (command["watch"], command["hook"], command["argv"], command["level"]) == ("evil", "check", ["a"], "INFO")

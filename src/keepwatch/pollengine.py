@@ -15,6 +15,17 @@ from keepwatch.state import Outcome, WatchState, finish_poll, plan_poll
 
 _PLUGIN_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 _FAILED = ("error", "failed", "timeout")
+_COMMAND_FIELDS = (
+    "argv",
+    "shell",
+    "exit_code",
+    "timed_out",
+    "duration",
+    "stdout",
+    "stderr",
+    "stdout_truncated",
+    "stderr_truncated",
+)
 
 
 def parse_fakes(spec: str) -> list[Outcome]:
@@ -183,7 +194,7 @@ class PollEngine:
         tag = {"watch": watch.name, "poll_id": poll_id, "hook": hook}
         for message in result.messages:
             if message.get("type") == "command":
-                fields = {key: value for key, value in message.items() if key != "type"}
+                fields = {key: message.get(key) for key in _COMMAND_FIELDS}
                 level = "INFO" if message.get("exit_code") == 0 else "WARNING"
                 self._sink(make_record("command", level=level, **tag, **fields))
             else:
