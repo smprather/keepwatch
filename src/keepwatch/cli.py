@@ -47,7 +47,7 @@ from keepwatch.runner import Runner
 from keepwatch.service import Service
 from keepwatch.state import initial_state
 from keepwatch.statusview import collect_status, format_status
-from keepwatch.templates import GLOBAL_CONFIG, TEMPLATES, render
+from keepwatch.templates import AGENTS_MD, CLAUDE_MD, GLOBAL_CONFIG, TEMPLATES, render
 from keepwatch.validation import validate_watches
 
 COMMAND_GROUPS = {
@@ -542,7 +542,7 @@ def new(app: App, name: str, template: str, base: Path | None) -> None:
 @cli.command()
 @click.pass_obj
 def init(app: App) -> None:
-    """Create the global config file (all defaults, commented) and the default watches directory.
+    """Create the global config file, the default watches directory, and AGENTS.md/CLAUDE.md for agents.
 
     Never overwrites anything: each path is reported as created or exists.
 
@@ -561,6 +561,13 @@ def init(app: App) -> None:
     else:
         watches.mkdir(parents=True)
         click.echo(f"created {watches}")
+    for filename, content in (("AGENTS.md", AGENTS_MD), ("CLAUDE.md", CLAUDE_MD)):
+        path = watches / filename
+        if path.exists():
+            click.echo(f"exists  {path}")
+        else:
+            path.write_text(content, encoding="utf-8")
+            click.echo(f"created {path}")
     click.echo("next: keepwatch new <name>, then keepwatch install to start the service at login")
 
 

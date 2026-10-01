@@ -139,3 +139,21 @@ GLOBAL_CONFIG = '''# keepwatch global config. Every key: keepwatch docs config
 # backups = 10
 # capture_bytes = 65536
 '''
+
+
+AGENTS_MD = """# keepwatch watches
+
+Every subdirectory here is a keepwatch watch: a `config.toml` plus the code for its check and actions.
+
+Before you create or change a watch, read the contract:
+
+    keepwatch docs agent
+
+`keepwatch docs --all` prints the complete reference.
+
+Development loop: `keepwatch new <name>` → edit → `keepwatch validate <name>` →
+`keepwatch poll <name> --fake true,false --dry-run` → `keepwatch poll <name> --dry-run` →
+`keepwatch poll <name>` → `keepwatch logs --poll <id> -v`.
+"""
+
+CLAUDE_MD = "@AGENTS.md\n"
