@@ -64,3 +64,11 @@ def test_format_poll_end_and_unknown_event():
     assert format_record(end) == "10:11:12 psg poll FAILED; failures 2"
     other = format_record({**BASE, "event": "custom.thing", "x": 1})
     assert other.startswith("10:11:12 psg custom.thing ")
+
+
+def test_failed_statuses_are_defined_once():
+    from keepwatch import output, pollengine, runner
+
+    assert runner.FAILED_STATUSES == frozenset({"error", "failed", "timeout"})
+    assert not hasattr(output, "_FAILED_STATUSES")
+    assert not hasattr(pollengine, "_FAILED")

@@ -93,14 +93,18 @@ class Ledger:
                 "fix it, or delete it to start with an empty ledger"
             ) from exc
 
+    def _fresh(self, stamp: float, now: float) -> bool:
+        return self.expire is None or stamp >= now - self.expire
+
     def _live(self) -> dict[str, float]:
         if self.expire is None:
             return self._entries
-        cutoff = time.time() - self.expire
-        return {key: stamp for key, stamp in self._entries.items() if stamp >= cutoff}
+        now = time.time()
+        return {key: stamp for key, stamp in self._entries.items() if self._fresh(stamp, now)}
 
     def __contains__(self, key: object) -> bool:
-        return key in self._live()
+        stamp = self._entries.get(key)  # type: ignore[call-overload]
+        return stamp is not None and self._fresh(stamp, time.time())
 
     def __len__(self) -> int:
         return len(self._live())
@@ -110,8 +114,10 @@ class Ledger:
 
     def added_at(self, key: str) -> datetime | None:
         """When key was added (UTC), or None if it is absent or expired."""
-        stamp = self._live().get(key)
-        return None if stamp is None else datetime.fromtimestamp(stamp, tz=timezone.utc)
+        stamp = self._entries.get(key)
+        if stamp is None or not self._fresh(stamp, time.time()):
+            return None
+        return datetime.fromtimestamp(stamp, tz=timezone.utc)
 
     def add(self, key: str) -> None:
         """Add key (or refresh its timestamp) and save immediately."""

@@ -10,11 +10,10 @@ from keepwatch.config import GlobalConfig, WatchConfig
 from keepwatch.hooks import CHECK, NO_CHECK, resolve_hooks
 from keepwatch.logstore import Sink, make_record
 from keepwatch.paths import Paths
-from keepwatch.runner import HookCall, HookResult, Runner
+from keepwatch.runner import FAILED_STATUSES, HookCall, HookResult, Runner
 from keepwatch.state import Outcome, WatchState, finish_poll, plan_poll
 
 _PLUGIN_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-_FAILED = ("error", "failed", "timeout")
 _COMMAND_FIELDS = (
     "argv",
     "shell",
@@ -210,6 +209,6 @@ class PollEngine:
                         traceback=message.get("traceback"),
                     )
                 )
-        level = "ERROR" if result.status in _FAILED else "INFO"
+        level = "ERROR" if result.status in FAILED_STATUSES else "INFO"
         self._sink(make_record("hook.end", level=level, watch=watch.name, poll_id=poll_id, **result.to_record()))
         return result

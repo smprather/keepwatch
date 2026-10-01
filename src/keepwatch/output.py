@@ -12,8 +12,9 @@ from typing import Any, TextIO
 from rich.console import Console
 from rich.text import Text
 
+from keepwatch.runner import FAILED_STATUSES
+
 LEVEL_STYLES = {"DEBUG": "dim", "INFO": "", "WARNING": "yellow", "ERROR": "red", "CRITICAL": "bold red"}
-_FAILED_STATUSES = ("error", "failed", "timeout")
 
 
 def plain_output(stream: TextIO | None = None) -> bool:
@@ -63,7 +64,7 @@ def _hook_end(record: dict[str, Any], verbose: bool) -> str:
         line += f" [exit {record['exit_code']}]"
     if record.get("signal"):
         line += f" [signal {record['signal']}]"
-    if verbose or record.get("status") in _FAILED_STATUSES:
+    if verbose or record.get("status") in FAILED_STATUSES:
         for name in ("stdout", "stderr"):
             text = record.get(name) or ""
             if text.strip():

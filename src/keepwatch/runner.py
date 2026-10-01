@@ -31,6 +31,7 @@ from keepwatch.state import Outcome
 KILL_GRACE = 5.0
 DRAIN_GRACE = 2.0
 RESULT_LIMIT = 16 * 1024 * 1024
+FAILED_STATUSES = frozenset({"error", "failed", "timeout"})
 _EXPECTED_VERSION = __version__
 
 

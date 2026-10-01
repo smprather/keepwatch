@@ -143,3 +143,17 @@ def test_corrupt_ledger_names_the_file(tmp_path, content):
     path.write_text(content)
     with pytest.raises(LedgerCorrupt, match=re.escape(str(path))):
         Ledger(path)
+
+
+def test_ledger_lookup_does_not_scan_the_whole_ledger(tmp_path, monkeypatch):
+    ledger = Ledger(tmp_path / "x.json", expire=3600)
+    ledger.add("k")
+
+    def scanned(self):
+        raise AssertionError("the whole ledger was scanned")
+
+    monkeypatch.setattr(Ledger, "_live", scanned)
+    assert "k" in ledger
+    assert "other" not in ledger
+    assert ledger.added_at("k") is not None
+    assert ledger.added_at("other") is None
