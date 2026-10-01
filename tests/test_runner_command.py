@@ -129,3 +129,13 @@ def test_output_is_clipped(make_watch, call_for):
     assert result.stdout_truncated is True
     assert "bytes omitted" in result.stdout
     assert len(result.stdout) < 1200
+
+
+def test_unwritable_run_dir_is_a_failed_hook(make_watch, call_for):
+    watch_dir = make_watch("cmd", config='[hooks]\non_true = "true"\n')
+    call = call_for(watch_dir, hook="on_true")
+    call.run_dir.parent.parent.mkdir(parents=True, exist_ok=True)
+    call.run_dir.parent.write_text("not a directory")
+    result = Runner().run(call)
+    assert result.status == "failed"
+    assert result.reason.startswith("cannot prepare the hook's files in")

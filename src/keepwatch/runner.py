@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -29,6 +30,7 @@ from keepwatch.state import Outcome
 
 KILL_GRACE = 5.0
 DRAIN_GRACE = 2.0
+RESULT_LIMIT = 16 * 1024 * 1024
 _EXPECTED_VERSION = __version__
 
 
@@ -182,9 +184,23 @@ class Runner:
         self.kill_grace = kill_grace
 
     def run(self, call: HookCall) -> HookResult:
-        if call.mode == "call" and call.hook in call.watch.hooks:
-            return self._run_command(call, call.watch.hooks[call.hook])
-        return self._run_python(call)
+        """Run one hook call. Never raises: any unexpected failure becomes a failed result."""
+        started = time.monotonic()
+        is_command = call.mode == "call" and call.hook in call.watch.hooks
+        try:
+            if is_command:
+                return self._run_command(call, call.watch.hooks[call.hook])
+            return self._run_python(call)
+        except Exception as exc:
+            result = self._error(
+                call,
+                "command" if is_command else "python",
+                call.hook,
+                started,
+                f"keepwatch internal error: {type(exc).__name__}: {exc}",
+            )
+            result.exception = {"type": type(exc).__name__, "message": str(exc), "traceback": traceback.format_exc()}
+            return result
 
     # -- shared -------------------------------------------------------------
 
@@ -311,7 +327,7 @@ class Runner:
         _Writer(req_w, json.dumps(request).encode("utf-8")).start()
         out = _Reader(proc.stdout, call.capture_bytes)
         err = _Reader(proc.stderr, call.capture_bytes)
-        results = _Reader(os.fdopen(res_r, "rb"), None)
+        results = _Reader(os.fdopen(res_r, "rb"), RESULT_LIMIT)
         for reader in (out, err, results):
             reader.start()
         returncode, timed_out = self._supervise(proc, (out, err, results), call.timeout)
@@ -325,6 +341,19 @@ class Runner:
                     "level": "WARNING",
                     "logger": "keepwatch.worker",
                     "message": f"ignored {len(bad)} malformed message(s) from the worker",
+                    "fields": {},
+                }
+            )
+        if results.total > RESULT_LIMIT:
+            base["messages"].append(
+                {
+                    "type": "log",
+                    "level": "WARNING",
+                    "logger": "keepwatch.worker",
+                    "message": (
+                        f"the worker sent {results.total} bytes of messages; "
+                        f"only the first and last {RESULT_LIMIT // 2} bytes were kept"
+                    ),
                     "fields": {},
                 }
             )
@@ -377,24 +406,33 @@ class Runner:
         env = self._environment(call)
         temp_files: list[Path] = []
         try:
-            call.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-            call.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-            stem = f"{call.poll_id}-{call.hook}"
-            settings_file = call.run_dir / f"{stem}-settings.json"
-            settings_file.write_text(json.dumps(dict(call.watch.settings)), encoding="utf-8")
-            temp_files.append(settings_file)
-            env["KEEPWATCH_SETTINGS_FILE"] = str(settings_file)
             payload_out: Path | None = None
-            if call.hook == CHECK:
-                payload_out = call.run_dir / f"{stem}-payload-out.json"
-                payload_out.unlink(missing_ok=True)
-                temp_files.append(payload_out)
-                env["KEEPWATCH_PAYLOAD_OUT"] = str(payload_out)
-            elif call.payload is not None:
-                payload_file = call.run_dir / f"{stem}-payload.json"
-                payload_file.write_text(json.dumps(call.payload), encoding="utf-8")
-                temp_files.append(payload_file)
-                env["KEEPWATCH_PAYLOAD_FILE"] = str(payload_file)
+            try:
+                call.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+                call.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+                stem = f"{call.poll_id}-{call.hook}"
+                settings_file = call.run_dir / f"{stem}-settings.json"
+                settings_file.write_text(json.dumps(dict(call.watch.settings)), encoding="utf-8")
+                temp_files.append(settings_file)
+                env["KEEPWATCH_SETTINGS_FILE"] = str(settings_file)
+                if call.hook == CHECK:
+                    payload_out = call.run_dir / f"{stem}-payload-out.json"
+                    payload_out.unlink(missing_ok=True)
+                    temp_files.append(payload_out)
+                    env["KEEPWATCH_PAYLOAD_OUT"] = str(payload_out)
+                elif call.payload is not None:
+                    payload_file = call.run_dir / f"{stem}-payload.json"
+                    payload_file.write_text(json.dumps(call.payload), encoding="utf-8")
+                    temp_files.append(payload_file)
+                    env["KEEPWATCH_PAYLOAD_FILE"] = str(payload_file)
+            except OSError as exc:
+                return self._error(
+                    call,
+                    "command",
+                    target,
+                    started,
+                    f"cannot prepare the hook's files in {call.run_dir}: {exc.strerror or exc}",
+                )
             try:
                 proc = subprocess.Popen(
                     command.to_argv(),

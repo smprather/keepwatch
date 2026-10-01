@@ -119,3 +119,31 @@ def test_keepwatch_environment_reaches_python_hooks(make_watch, call_for):
     '''})
     result = Runner().run(call_for(watch_dir))
     assert result.payload == {"KEEPWATCH_WATCH": "w", "KEEPWATCH_HOOK": "check", "FROM_WATCH": "1"}
+
+
+def test_huge_log_volume_is_capped(make_watch, call_for, monkeypatch):
+    monkeypatch.setattr(runner_module, "RESULT_LIMIT", 100_000)
+    watch_dir = make_watch("w", files={"watch.py": '''
+        def check(ctx):
+            for _ in range(2000):
+                ctx.log.info("x" * 200)
+            return True
+    '''})
+    result = Runner().run(call_for(watch_dir))
+    assert result.status == "true"
+    notes = [m["message"] for m in result.messages if m.get("logger") == "keepwatch.worker"]
+    assert any("only the first and last 50000 bytes were kept" in note for note in notes)
+    assert sum(1 for m in result.messages if m.get("type") == "log") < 1000
+
+
+def test_unexpected_runner_errors_become_failed_results(make_watch, call_for, monkeypatch):
+    watch_dir = make_watch("w", config='[hooks]\non_true = "true"\n')
+
+    def boom(self, call, command):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(Runner, "_run_command", boom)
+    result = Runner().run(call_for(watch_dir, hook="on_true"))
+    assert result.status == "failed"
+    assert result.reason == "keepwatch internal error: RuntimeError: boom"
+    assert "RuntimeError" in result.exception["traceback"]
