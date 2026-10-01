@@ -71,12 +71,13 @@ def check_watch(watch_dir: Path, global_config: GlobalConfig, runner: Runner, pa
         missing = missing_executable(command, watch, global_config.environment)
         if missing is not None:
             report.problems.append(f"{watch.config_file}: [hooks] {hook}: {missing}; see: keepwatch docs executables")
+    can_describe = source.is_file() and problem is None
     if watch.python_dependencies:
-        report.problems.append(
-            f"{watch.config_file}: python_dependencies is not supported by this version of keepwatch; "
-            "see: keepwatch docs dependencies"
-        )
-    elif source.is_file() and problem is None:
+        prepared = runner.prepare_environment(watch)
+        if prepared is not None:
+            report.problems.append(f"{watch.config_file}: {prepared}; see: keepwatch docs dependencies")
+            can_describe = False
+    if can_describe:
         result = runner.run(
             HookCall(
                 watch=watch,
@@ -86,7 +87,7 @@ def check_watch(watch_dir: Path, global_config: GlobalConfig, runner: Runner, pa
                 payload=None,
                 data_dir=paths.watch_data_dir(watch.name),
                 run_dir=paths.run_dir(pid, watch.name),
-                timeout=watch.check_timeout,
+                timeout=max(watch.check_timeout, 120.0) if watch.python_dependencies else watch.check_timeout,
                 capture_bytes=global_config.log.capture_bytes,
                 environment=global_config.environment,
                 mode="describe",

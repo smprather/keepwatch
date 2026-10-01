@@ -1,11 +1,20 @@
 import dataclasses
 import os
+import shutil
 import time
 from pathlib import Path
 
+import pytest
+
 from keepwatch import runner as runner_module
-from keepwatch.runner import Runner
+from keepwatch.config import load_watch_config
+from keepwatch.runner import Runner, make_shim
 from keepwatch.state import Outcome
+
+network = pytest.mark.skipif(
+    os.environ.get("KEEPWATCH_SKIP_NETWORK") == "1" or shutil.which("uv") is None,
+    reason="needs uv and network access",
+)
 
 
 def gone(pid, within=5.0):
@@ -91,11 +100,38 @@ def test_timeout_kills_the_whole_process_group(xdg, make_watch, call_for):
     assert gone(child_pid)
 
 
-def test_python_dependencies_not_supported_yet(make_watch, call_for):
-    watch_dir = make_watch("w", config='python_dependencies = ["requests"]\n', files={"watch.py": "def check(ctx):\n    return True\n"})
-    result = Runner().run(call_for(watch_dir))
+def test_dependencies_without_uv_are_reported(make_watch, call_for):
+    watch_dir = make_watch("w", config='python_dependencies = ["six"]\n', files={"watch.py": "def check(ctx):\n    return True\n"})
+    runner = Runner()
+    runner.uv = None
+    result = runner.run(call_for(watch_dir))
     assert result.status == "error"
-    assert "python_dependencies is not supported" in result.reason
+    assert result.reason.startswith("python_dependencies needs uv on PATH")
+    assert runner.prepare_environment(load_watch_config(watch_dir)).startswith("python_dependencies needs uv on PATH")
+
+
+def test_make_shim_links_the_running_package(tmp_path):
+    import keepwatch
+
+    shim = make_shim(tmp_path / "lib")
+    assert (shim / "keepwatch").resolve() == Path(keepwatch.__file__).resolve().parent
+    assert make_shim(tmp_path / "lib") == shim
+
+
+@pytest.mark.network
+@network
+def test_dependencies_are_installed_and_importable(make_watch, call_for):
+    watch_dir = make_watch("w", config='python_dependencies = ["six==1.16.0"]\n', files={"watch.py": '''
+        import six
+
+        def check(ctx):
+            return True, six.__version__
+    '''})
+    runner = Runner()
+    assert runner.prepare_environment(load_watch_config(watch_dir)) is None
+    result = runner.run(call_for(watch_dir, timeout=120))
+    assert result.status == "true", (result.reason, result.stderr)
+    assert result.payload == "1.16.0"
 
 
 def test_version_mismatch_is_reported(make_watch, call_for, monkeypatch):

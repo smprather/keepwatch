@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -32,6 +33,7 @@ KILL_GRACE = 5.0
 DRAIN_GRACE = 2.0
 RESULT_LIMIT = 16 * 1024 * 1024
 FAILED_STATUSES = frozenset({"error", "failed", "timeout"})
+_NO_UV = "python_dependencies needs uv on PATH (https://docs.astral.sh/uv/); install it or remove python_dependencies"
 _EXPECTED_VERSION = __version__
 
 
@@ -254,10 +256,31 @@ def setting_variables(settings: Mapping[str, Any]) -> dict[str, str]:
     return variables
 
 
+def make_shim(directory: Path) -> Path:
+    """A PYTHONPATH directory exposing only the running keepwatch package (for uv environments)."""
+    import keepwatch
+
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    link = directory / "keepwatch"
+    if not link.exists():
+        link.symlink_to(Path(keepwatch.__file__).resolve().parent, target_is_directory=True)
+    return directory
+
+
+@dataclass
+class _WorkerRun:
+    returncode: int
+    timed_out: bool
+    out: _Reader
+    err: _Reader
+    messages: _MessageReader
+
+
 class Runner:
-    def __init__(self, *, python: str = sys.executable, kill_grace: float = KILL_GRACE) -> None:
+    def __init__(self, *, python: str = sys.executable, kill_grace: float = KILL_GRACE, uv: str | None = None) -> None:
         self.python = python
         self.kill_grace = kill_grace
+        self.uv = uv or shutil.which("uv")
         self._active: set[int] = set()
         self._active_lock = threading.Lock()
 
@@ -370,36 +393,55 @@ class Runner:
 
     # -- Python hooks ---------------------------------------------------------
 
-    def _run_python(self, call: HookCall) -> HookResult:
-        target = f"watch.py:{call.hook}" if call.mode == "call" else "watch.py (describe)"
-        started = time.monotonic()
-        if call.watch.python_dependencies:
-            return self._error(
-                call,
-                "python",
-                target,
-                started,
-                "python_dependencies is not supported by this version of keepwatch; remove it from config.toml",
+    def _uv_prefix(self, dependencies: Sequence[str], *, offline: bool) -> list[str]:
+        argv = [self.uv or "uv", "run", "--no-project", "--quiet", "--python", self.python]
+        if offline:
+            argv.append("--offline")
+        for dependency in dependencies:
+            argv += ["--with", dependency]
+        return argv
+
+    def prepare_environment(self, watch: WatchConfig, timeout: float = 600.0) -> str | None:
+        """Build (or reuse) the uv environment for python_dependencies. Returns a problem, or None."""
+        if not watch.python_dependencies:
+            return None
+        if not self.uv:
+            return _NO_UV
+        argv = [*self._uv_prefix(watch.python_dependencies, offline=False), "python", "-c", "pass"]
+        try:
+            completed = subprocess.run(
+                argv,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=timeout,
             )
-        request = {
-            "watch": call.watch.name,
-            "hook": call.hook,
-            "watch_dir": str(call.watch.watch_dir),
-            "data_dir": str(call.data_dir),
-            "run_dir": str(call.run_dir),
-            "poll_id": call.poll_id,
-            "condition": call.condition,
-            "payload": call.payload,
-            "settings": dict(call.watch.settings),
-            "deadline": time.time() + call.timeout,
-            "capture_bytes": call.capture_bytes,
-            "mode": call.mode,
-        }
-        env = self._environment(call)
-        env["PYTHONUNBUFFERED"] = "1"
+        except subprocess.TimeoutExpired:
+            return f"building the environment for python_dependencies timed out after {format_duration(timeout)}"
+        except OSError as exc:
+            return f"cannot run uv ({self.uv}): {exc}"
+        if completed.returncode != 0:
+            tail = " | ".join(completed.stderr.strip().splitlines()[-5:])
+            return f"uv could not build the environment for python_dependencies: {tail}"
+        return None
+
+    def _start_worker(
+        self,
+        call: HookCall,
+        request: dict[str, Any],
+        env: dict[str, str],
+        *,
+        offline: bool,
+        timeout: float,
+    ) -> _WorkerRun | str:
         req_r, req_w = os.pipe()
         res_r, res_w = os.pipe()
-        argv = [self.python, "-m", "keepwatch.worker", "--request-fd", str(req_r), "--result-fd", str(res_w)]
+        tail = ["-m", "keepwatch.worker", "--request-fd", str(req_r), "--result-fd", str(res_w)]
+        if call.watch.python_dependencies:
+            argv = [*self._uv_prefix(call.watch.python_dependencies, offline=offline), "python", *tail]
+        else:
+            argv = [self.python, *tail]
         try:
             proc = subprocess.Popen(
                 argv,
@@ -414,21 +456,63 @@ class Runner:
         except OSError as exc:
             for fd in (req_r, req_w, res_r, res_w):
                 os.close(fd)
-            return self._error(call, "python", target, started, f"cannot start the Python worker ({self.python}): {exc}")
+            return f"cannot start the Python worker ({argv[0]}): {exc}"
         os.close(req_r)
         os.close(res_w)
         _Writer(req_w, json.dumps(request).encode("utf-8")).start()
         out = _Reader(proc.stdout, call.capture_bytes)
         err = _Reader(proc.stderr, call.capture_bytes)
-        results = _MessageReader(os.fdopen(res_r, "rb"), RESULT_LIMIT, call.on_message)
-        for reader in (out, err, results):
+        messages = _MessageReader(os.fdopen(res_r, "rb"), RESULT_LIMIT, call.on_message)
+        for reader in (out, err, messages):
             reader.start()
         self._track(proc.pid)
         try:
-            returncode, timed_out = self._supervise(proc, (out, err, results), call.timeout)
+            returncode, timed_out = self._supervise(proc, (out, err, messages), timeout)
         finally:
             self._untrack(proc.pid)
-        base = self._captured(out, err, returncode, started)
+        return _WorkerRun(returncode, timed_out, out, err, messages)
+
+    def _run_python(self, call: HookCall) -> HookResult:
+        target = f"watch.py:{call.hook}" if call.mode == "call" else "watch.py (describe)"
+        started = time.monotonic()
+        dependencies = call.watch.python_dependencies
+        if dependencies and not self.uv:
+            return self._error(call, "python", target, started, _NO_UV)
+        deadline = time.time() + call.timeout
+        request = {
+            "watch": call.watch.name,
+            "hook": call.hook,
+            "watch_dir": str(call.watch.watch_dir),
+            "data_dir": str(call.data_dir),
+            "run_dir": str(call.run_dir),
+            "poll_id": call.poll_id,
+            "condition": call.condition,
+            "payload": call.payload,
+            "settings": dict(call.watch.settings),
+            "deadline": deadline,
+            "capture_bytes": call.capture_bytes,
+            "mode": call.mode,
+        }
+        env = self._environment(call)
+        env["PYTHONUNBUFFERED"] = "1"
+        if dependencies:
+            shim = make_shim(call.run_dir.parent / "lib")
+            env["PYTHONPATH"] = os.pathsep.join(part for part in (str(shim), env.get("PYTHONPATH", "")) if part)
+        run: _WorkerRun | None = None
+        for offline in (True, False) if dependencies else (False,):
+            attempt = self._start_worker(call, request, env, offline=offline, timeout=max(deadline - time.time(), 0.0))
+            if isinstance(attempt, str):
+                return self._error(call, "python", target, started, attempt)
+            run = attempt
+            # Offline first: when the environment is not cached yet, uv fails before the worker says hello.
+            if not (offline and run.messages.hello is None and not run.timed_out):
+                break
+        assert run is not None
+        return self._worker_result(call, target, started, run)
+
+    def _worker_result(self, call: HookCall, target: str, started: float, run: _WorkerRun) -> HookResult:
+        results = run.messages
+        base = self._captured(run.out, run.err, run.returncode, started)
         if results.bad:
             results.deliver(
                 {
@@ -455,7 +539,8 @@ class Runner:
         base["messages"] = results.messages
         common = {"hook": call.hook, "kind": "python", "target": target, **base}
         failure = self._failure_status(call)
-        if timed_out:
+        returncode = run.returncode
+        if run.timed_out:
             return HookResult(status="timeout", reason=f"timed out after {format_duration(call.timeout)}", **common)
         hello = results.hello
         result = results.result

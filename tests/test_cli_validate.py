@@ -84,3 +84,11 @@ def test_named_duplicate_is_reported(xdg, tmp_path, make_watch):
     result = run("--config", str(config), "validate", "backup")
     assert result.exit_code == 1
     assert "duplicate watch name 'backup'" in result.output
+
+
+def test_validate_reports_missing_uv(xdg, make_watch, monkeypatch):
+    make_watch("dep", config='python_dependencies = ["six"]\n', files={"watch.py": "def check(ctx):\n    return True\n"})
+    monkeypatch.setenv("PATH", "/nonexistent")
+    result = run("validate", "dep")
+    assert result.exit_code == 1
+    assert "python_dependencies needs uv on PATH" in result.output

@@ -25,6 +25,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["network: needs network access (skipped when KEEPWATCH_SKIP_NETWORK=1 or uv is missing)"]
 
 [tool.ruff]
 line-length = 120
