@@ -1356,6 +1356,7 @@ def test_broken_global_config(xdg, make_watch):
     with pytest.raises(ConfigError):
         make_service(xdg, []).start()
     write_global(xdg, "reload_interval = \"5s\"\n")
+    xdg.default_watches_dir.mkdir(parents=True, exist_ok=True)
     records = []
     service = make_service(xdg, records)
     service.start()
