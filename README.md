@@ -12,10 +12,11 @@ keepwatch init                 # config, watches directory, AGENTS.md
 keepwatch new hello            # a commented Python watch
 keepwatch validate hello
 keepwatch poll hello --dry-run
-keepwatch install              # start the service at login (systemd user service)
+keepwatch install              # start the service at login (systemd user service / Windows logon task)
 ```
 
-Linux with systemd is supported today.
+Supported: Linux with systemd, and Windows 10/11 (Task Scheduler; hooks in PowerShell, Python or any program).
+On Windows, `keepwatch new <name> --template powershell` starts a PowerShell watch, and `keepwatch stop` stops the service.
 
 ## Learn more
 
