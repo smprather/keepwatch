@@ -18,14 +18,18 @@ def unit_dir(paths: Paths) -> Path:
 
 
 def find_executable() -> str:
-    """Absolute path of the keepwatch command that is running now."""
+    """Absolute path of the keepwatch command that is running now (else the one on PATH)."""
+    argv0 = Path(sys.argv[0])
+    if argv0.name == "keepwatch" and argv0.is_file():
+        return os.path.abspath(argv0)
     found = shutil.which("keepwatch")
     if found:
-        return str(Path(found).resolve())
-    return str(Path(sys.argv[0]).resolve())
+        return os.path.abspath(found)
+    return os.path.abspath(sys.argv[0])
 
 
-def unit_text(executable: str, path_env: str) -> str:
+def unit_text(executable: str, path_env: str, config_path: Path | None = None) -> str:
+    config = f' --config "{config_path}"' if config_path is not None else ""
     return (
         "[Unit]\n"
         "Description=keepwatch: poll conditions and run actions\n"
@@ -33,7 +37,7 @@ def unit_text(executable: str, path_env: str) -> str:
         "\n"
         "[Service]\n"
         "Type=simple\n"
-        f'ExecStart="{executable}" run\n'
+        f'ExecStart="{executable}"{config} run\n'
         "Restart=on-failure\n"
         "RestartSec=10\n"
         f'Environment="PATH={path_env}"\n'

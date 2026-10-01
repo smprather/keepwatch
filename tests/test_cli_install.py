@@ -1,5 +1,8 @@
+import sys
+
 from click.testing import CliRunner
 
+from keepwatch import systemd
 from keepwatch.cli import cli
 
 
@@ -64,3 +67,21 @@ def test_uninstall(xdg, tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert not unit_file(xdg).exists()
     assert calls.read_text().splitlines()[-2:] == ["--user disable --now keepwatch.service", "--user daemon-reload"]
+
+
+def test_install_keeps_a_custom_config(xdg, tmp_path, monkeypatch):
+    fake_systemctl(tmp_path, monkeypatch)
+    custom = tmp_path / "custom.toml"
+    custom.write_text("")
+    assert run("--config", str(custom), "install").exit_code == 0
+    assert f'--config "{custom.resolve()}" run' in unit_file(xdg).read_text()
+    assert run("install").exit_code == 0
+    assert "--config" not in unit_file(xdg).read_text()
+
+
+def test_find_executable_prefers_the_running_script(tmp_path, monkeypatch):
+    script = tmp_path / "bin" / "keepwatch"
+    script.parent.mkdir()
+    script.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(sys, "argv", [str(script), "install"])
+    assert systemd.find_executable() == str(script)
