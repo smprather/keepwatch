@@ -221,7 +221,7 @@ def _options(command: Any) -> list[str]:
 GENERATED.update({"config": config_topic, "ctx": ctx_topic, "cli": cli_topic})
 
 
-_LANGUAGES = {".toml": "toml", ".py": "python", ".sh": "sh", ".exp": "tcl"}
+_LANGUAGES = {".toml": "toml", ".py": "python", ".sh": "sh", ".exp": "tcl", ".ps1": "powershell"}
 
 
 def example_dirs() -> list[Path]:

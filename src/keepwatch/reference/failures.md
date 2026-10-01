@@ -42,4 +42,4 @@ Set `alert_command` in the global config to be told when a watch goes offline or
 alert_command = 'notify-send "keepwatch: $KEEPWATCH_WATCH $KEEPWATCH_ALERT_EVENT" "$KEEPWATCH_ALERT_REASON"'
 ```
 
-It receives `KEEPWATCH_ALERT_EVENT` (`offline` or `online`), `KEEPWATCH_WATCH` and `KEEPWATCH_ALERT_REASON`, plus the global `[environment]`. A string runs through `/bin/sh -c`; a list runs directly. Its timeout is `action_timeout` from `[defaults]` (default 60s). Each run is logged as an `alert.end` record; its failures never count against any watch.
+It receives `KEEPWATCH_ALERT_EVENT` (`offline` or `online`), `KEEPWATCH_WATCH` and `KEEPWATCH_ALERT_REASON`, plus the global `[environment]`. A string runs through the platform shell (`/bin/sh -c`, or Windows PowerShell); a list runs directly. Its timeout is `action_timeout` from `[defaults]` (default 60s). Each run is logged as an `alert.end` record; its failures never count against any watch.

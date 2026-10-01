@@ -9,7 +9,15 @@ on_true = ["expect", "./send.exp"]          # a list runs directly (argv)
 on_fall = ["./notify.sh", "VPN went down"]
 ```
 
-A hook defined both in `[hooks]` and in watch.py is an error. A program named with a `/` (`./notify.sh`) is relative to the watch directory and must be executable; a bare name (`expect`) is looked up on PATH. `keepwatch validate` checks list-form programs; strings are only checked when they run.
+A hook defined both in `[hooks]` and in watch.py is an error.
+
+## Which program runs
+
+- **A string** runs through the platform shell: `/bin/sh -c` on Linux and macOS, **Windows PowerShell** (`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command`) on Windows. The watch key `shell` (or `[defaults]` in the global config) replaces it, e.g. `shell = ["pwsh", "-NoProfile", "-Command"]` or `shell = ["cmd.exe", "/d", "/c"]`. `exit N` sets the exit code in both default shells.
+- **A list** runs directly. A program named with a path separator (`./notify.sh`, `.\notify.ps1`) is relative to the watch directory; a bare name (`expect`) is looked up on PATH. On Linux and macOS the file must be executable.
+- **On Windows**, list hooks are started by file type: `.ps1` with Windows PowerShell (`-File`), `.py` with keepwatch's own Python, `.cmd`/`.bat` with `cmd.exe /d /c`; `.exe` files and other programs run directly.
+
+`keepwatch validate` checks list-form programs; strings are only checked when they run. A program named with a `/` (`./notify.sh`) is relative to the watch directory and must be executable; a bare name (`expect`) is looked up on PATH. `keepwatch validate` checks list-form programs; strings are only checked when they run.
 
 ## What the exit code means
 
@@ -28,7 +36,7 @@ An **action** succeeds with exit status 0 and fails otherwise.
 
 ## What the command receives
 
-- Working directory: the watch directory. stdin: `/dev/null`.
+- Working directory: the watch directory. Standard input: none (`/dev/null`, or `NUL` on Windows).
 - Environment: the service's environment, then the global `[environment]`, then the watch's `[environment]`, then these variables. Inherited `KEEPWATCH_*` variables are removed first (except `KEEPWATCH_CONFIG`).
 
 | Variable | Meaning |

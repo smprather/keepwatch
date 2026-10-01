@@ -25,3 +25,11 @@ A hook's environment is built in this order, later entries winning:
 - **ssh-agent.** The service does not see the agent of your terminal session (`SSH_AUTH_SOCK` is not set there). For `ssh`/`scp` in hooks, either use a dedicated key without a passphrase (`ssh -i ~/.ssh/keepwatch_ed25519 -o BatchMode=yes …`, or an `IdentityFile` entry in `~/.ssh/config`), or run an agent with a fixed socket path (for example a systemd user `ssh-agent` service) and set `SSH_AUTH_SOCK = "/run/user/1000/ssh-agent.socket"` in the global `[environment]`.
 - **Desktop notifications** (`notify-send`) usually work, because the systemd user manager has the session bus address.
 - The service's own output goes to the journal (`journalctl --user -u keepwatch`); the keepwatch log has everything.
+
+## On Windows
+
+- Every hook runs in its own **Job Object**, started suspended and assigned to the job before it runs, so nothing it starts can escape. A timeout, `keepwatch stop`, or the service ending terminates the whole job **at once**: Windows has no graceful stop signal for windowless processes, so hooks must not rely on cleanup when they are terminated. Hooks also die if the service process itself is killed.
+- String hooks run in Windows PowerShell (see `keepwatch docs executables`).
+- `keepwatch install` registers a Task Scheduler task "keepwatch" that runs `pythonw.exe -m keepwatch run` at logon (no console window, restarted on failure); if policy forbids user tasks, it creates a Startup-folder shortcut instead. The service runs with your normal user environment, so there is no PATH capture.
+- Stop the service with **`keepwatch stop`** (it also works on Linux). Without a console, the service writes only to its log file.
+- ssh and scp: the Windows OpenSSH `ssh-agent` service is shared by all your sessions, so keys added with `ssh-add` work for hooks too. For a password, see the askpass support planned with the transfer tools.

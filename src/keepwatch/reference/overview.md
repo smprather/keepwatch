@@ -29,7 +29,7 @@ keepwatch is a command-line tool that starts at login and runs in the background
 
 | Group | Commands |
 |---|---|
-| Run | `run` |
+| Run | `run`, `stop` |
 | Develop | `new`, `validate`, `poll` |
 | Inspect | `status`, `logs` |
 | Control | `enable`, `disable`, `rename` |

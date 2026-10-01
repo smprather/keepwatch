@@ -513,7 +513,7 @@ def rename(app: App, old: str, new: str) -> None:
 @click.argument("name")
 @click.option("--template", type=click.Choice(sorted(TEMPLATES)), default="python", show_default=True,
               help="python: watch.py with check() and on_true(). shell: check.sh and on_true.sh. "
-              "expect: a shell check and an Expect action.")
+              "expect: a shell check and an Expect action. powershell: check.ps1 and on_true.ps1 (Windows).")
 @click.option("--dir", "base", type=click.Path(path_type=Path, file_okay=False),
               help="Watches directory to create it in. Default: the first entry of watch_dirs.")
 @click.pass_obj

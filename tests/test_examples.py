@@ -21,7 +21,7 @@ def install(xdg, name):
 
 def test_examples_are_in_the_docs():
     text = render_topic("examples")
-    assert [d.name for d in example_dirs()] == ["greet-once", "psg-export", "site-down"]
+    assert [d.name for d in example_dirs()] == ["disk-space-ps", "greet-once", "psg-export", "site-down"]
     for directory in example_dirs():
         for path in directory.iterdir():
             if path.is_file():
@@ -51,3 +51,13 @@ def test_expect_example_runs_once(xdg):
     assert first["outcome"] == "true" and first["results"][0]["status"] == "ok"
     second = json.loads(run("poll", "greet-once", "--json").output)["polls"][0]
     assert second["outcome"] == "false"
+
+
+@pytest.mark.windows_only
+def test_disk_space_example_runs_on_windows(xdg):
+    install(xdg, "disk-space-ps")
+    assert run("validate", "disk-space-ps").exit_code == 0
+    data = json.loads(run("poll", "disk-space-ps", "--fake", "true,false", "--json").output)
+    assert [p["results"][0]["status"] for p in data["polls"]] == ["ok", "ok"]
+    real = json.loads(run("poll", "disk-space-ps", "--json").output)["polls"][0]
+    assert real["outcome"] in ("true", "false")

@@ -97,10 +97,41 @@ expect {
 expect eof
 '''
 
+POWERSHELL_CONFIG = '''# keepwatch watch "{name}" (PowerShell). Every key: keepwatch docs config
+description = "Describe what {name} watches in one line"
+interval = "60s"
+
+[hooks]
+# .ps1 files run with Windows PowerShell; see: keepwatch docs executables
+check = ["./check.ps1"]
+on_true = ["./on_true.ps1"]
+
+[check_exit_codes]
+# Defaults: true = [0], false = [1]; other codes are errors unless listed here.
+unknown = [3]
+
+[settings]
+# Reaches the scripts as $env:KEEPWATCH_SETTING_EXAMPLE
+example = "value"
+'''
+
+POWERSHELL_CHECK = '''# Check for watch "{name}": exit 0 = TRUE, 1 = FALSE, 3 = unknown (see config.toml).
+# To hand data to the actions, write JSON to the file named by $env:KEEPWATCH_PAYLOAD_OUT.
+# Never change anything here: keepwatch poll --dry-run runs this for real.
+exit 1
+'''
+
+POWERSHELL_ACTION = '''# Runs on every poll while the condition of "{name}" is TRUE. Exit nonzero (or throw) to report a failure.
+# The check's payload (if any) is in the JSON file named by $env:KEEPWATCH_PAYLOAD_FILE.
+$ErrorActionPreference = 'Stop'
+Write-Output "condition is TRUE; example setting: $env:KEEPWATCH_SETTING_EXAMPLE"
+'''
+
 TEMPLATES: dict[str, dict[str, str]] = {
     "python": {"config.toml": PYTHON_CONFIG, "watch.py": PYTHON_WATCH},
     "shell": {"config.toml": SHELL_CONFIG, "check.sh": SHELL_CHECK, "on_true.sh": SHELL_ACTION},
     "expect": {"config.toml": EXPECT_CONFIG, "check.sh": SHELL_CHECK, "on_true.exp": EXPECT_ACTION},
+    "powershell": {"config.toml": POWERSHELL_CONFIG, "check.ps1": POWERSHELL_CHECK, "on_true.ps1": POWERSHELL_ACTION},
 }
 
 

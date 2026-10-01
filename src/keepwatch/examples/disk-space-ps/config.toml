@@ -1,0 +1,16 @@
+# Warn when a drive runs low on space. TRUE means "low".
+description = "Tell me when drive C: has less than 10 GB free"
+interval = "5m"
+
+[hooks]
+check = ["./low_space.ps1"]
+on_rise = ["./notify.ps1", "is low on space"]
+on_fall = ["./notify.ps1", "has enough space again"]
+
+[check_exit_codes]
+true = [0]
+false = [1]
+
+[settings]
+drive = "C"
+min_free_gb = 10

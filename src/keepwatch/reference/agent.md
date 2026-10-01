@@ -14,8 +14,9 @@ keepwatch runs *watches*. A watch is a directory holding a `config.toml` and som
    - `on_rise` runs once when the condition becomes TRUE, `on_fall` once when it becomes FALSE. A failed `on_rise`/`on_fall` is retried on later polls until it succeeds or the condition flips back.
    - Every watch starts FALSE (`initial_condition = false`), so a condition that is already TRUE when keepwatch starts fires `on_rise`. Write checks so that TRUE is the thing to act on.
    - Actions can run more than once. Make them safe to repeat, and record finished work in a ledger (`ctx.ledger`).
-7. **Every hook runs in a fresh process** with stdin `/dev/null`, the watch directory as working directory, and a deadline (`check_timeout`, `action_timeout`, default 60s). Nothing may prompt for input. See `keepwatch docs environment`.
+7. **Every hook runs in a fresh process** with no standard input, the watch directory as working directory, and a deadline (`check_timeout`, `action_timeout`, default 60s). Nothing may prompt for input. See `keepwatch docs environment`.
 8. **State** belongs in `ctx.data_dir` and ledgers (persistent) or `ctx.run_dir` (until keepwatch exits), never in the watch directory. See `keepwatch docs storage`.
+9. **On Windows,** string hooks run in Windows PowerShell; list hooks ending in `.ps1`, `.py`, `.cmd` or `.bat` run with their interpreter; `sh` scripts and Expect need extra tools. Start from `keepwatch new <name> --template powershell` or the default Python template.
 
 ## Development loop
 
@@ -49,6 +50,7 @@ keepwatch logs --poll <id> -v                         # everything a poll did, w
 - Setting a ledger `expire` for things that stay visible. When an entry expires, the thing it stood for is processed again.
 - Renaming a watch directory with `mv`. Its state stays behind under the old name, and the watch starts with empty ledgers. Use `keepwatch rename`.
 - Storing data in the watch directory. Use `ctx.data_dir`.
+- Writing Windows paths in double-quoted TOML strings: `\` starts an escape there. Use single-quoted strings (`'C:\data\in'`) or forward slashes (`"C:/data/in"`).
 
 ## Reference topics
 

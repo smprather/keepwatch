@@ -14,6 +14,8 @@
 | `$XDG_RUNTIME_DIR/keepwatch/<pid>/<name>/` | Run-only scratch space for one keepwatch process (`ctx.run_dir`). |
 | `$XDG_RUNTIME_DIR/keepwatch/locks/<name>.lock` | Held while the watch is being polled. |
 
+On Windows the defaults are `%APPDATA%\keepwatch` for configuration and watches, `%LOCALAPPDATA%\keepwatch` for state and logs, and `%LOCALAPPDATA%\keepwatch\run` for run-only data. Setting the XDG variables overrides them on Windows too.
+
 `XDG_CONFIG_HOME` defaults to `~/.config` and `XDG_STATE_HOME` to `~/.local/state`. `XDG_RUNTIME_DIR` is normally `/run/user/<uid>`: private, in memory, and deleted at logout. Without it keepwatch uses `$TMPDIR/keepwatch-<uid>` (or `/tmp/keepwatch-<uid>`), created with mode 0700, and refuses to use it if anyone else could read it.
 
 ## Persistent and run-only data

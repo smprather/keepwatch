@@ -55,3 +55,17 @@ def test_new_refuses_existing_and_invalid_names(xdg):
     assert (xdg.default_watches_dir / "dup" / "watch.py").read_text() == "# mine\n"
     result = run("new", "bad name")
     assert result.exit_code == 1 and "not a valid watch name" in result.output
+
+
+def test_powershell_template_files(xdg):
+    assert run("new", "ps", "--template", "powershell").exit_code == 0
+    watch_dir = xdg.default_watches_dir / "ps"
+    assert sorted(p.name for p in watch_dir.iterdir()) == ["check.ps1", "config.toml", "on_true.ps1"]
+
+
+@pytest.mark.windows_only
+def test_powershell_template_validates_and_polls(xdg):
+    assert run("new", "ps", "--template", "powershell").exit_code == 0
+    assert run("validate", "ps").exit_code == 0
+    data = json.loads(run("poll", "ps", "--fake", "true", "--json").output)
+    assert data["polls"][0]["results"] == [{"hook": "on_true", "status": "ok", "reason": None}]
