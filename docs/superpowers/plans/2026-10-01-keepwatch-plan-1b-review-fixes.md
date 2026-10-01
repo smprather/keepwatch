@@ -218,6 +218,7 @@ Append to `tests/test_runner_command.py`:
 def test_unwritable_run_dir_is_a_failed_hook(make_watch, call_for):
     watch_dir = make_watch("cmd", config='[hooks]\non_true = "true"\n')
     call = call_for(watch_dir, hook="on_true")
+    call.run_dir.parent.parent.mkdir(parents=True, exist_ok=True)
     call.run_dir.parent.write_text("not a directory")
     result = Runner().run(call)
     assert result.status == "failed"
@@ -227,7 +228,7 @@ def test_unwritable_run_dir_is_a_failed_hook(make_watch, call_for):
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `uv run pytest tests/test_runner_python.py tests/test_runner_command.py -q`
-Expected: 3 FAIL (`AttributeError: ... has no attribute 'RESULT_LIMIT'`; `RuntimeError: boom` escapes; `NotADirectoryError` escapes)
+Expected: 3 FAIL (`AttributeError: ... has no attribute 'RESULT_LIMIT'`; `RuntimeError: boom` escapes; `NotADirectoryError` escapes from `call.run_dir.mkdir`)
 
 - [ ] **Step 3: Implement** in `src/keepwatch/runner.py`.
 
