@@ -170,3 +170,14 @@ def test_thread_loop_polls_and_stops(make_watch, runner_for):
     runner.stop()
     assert runner.join(10) is True
     assert len((watch_dir / "polls").read_text().splitlines()) >= 2
+
+
+def test_missing_watch_dir_is_not_polled(xdg, make_watch, runner_for):
+    watch_dir = make_watch("w", config='[hooks]\ncheck = ["true"]\n')
+    clock, records = Clock(), []
+    runner = runner_for(watch_dir, records, [], clock)
+    watch_dir.rename(watch_dir.parent / "renamed")
+    assert runner.poll_once(clock()) is None
+    assert runner.state.failures == 0
+    assert not xdg.watch_state_dir("w").exists()
+    assert records == []

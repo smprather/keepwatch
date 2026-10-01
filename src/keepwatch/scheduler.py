@@ -132,6 +132,9 @@ class WatchRunner:
         wait = self.seconds_until_due(now)
         if wait is None or wait > 0:
             return None
+        if not self._config.watch_dir.is_dir():
+            # Renamed or deleted since the last master tick; the next tick removes this runner.
+            return None
         config = self._config
         trial = self.offline is not None
         if trial:
