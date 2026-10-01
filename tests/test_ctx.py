@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -162,5 +163,10 @@ def test_ledger_lookup_does_not_scan_the_whole_ledger(tmp_path, monkeypatch):
 def test_run_decodes_non_utf8_output(tmp_path):
     emitted = []
     ctx = make_ctx(tmp_path, emitted=emitted)
-    assert ctx.run(["printf", "\\377ok"]).stdout == "\ufffdok"
+    code = "import sys; sys.stdout.buffer.write(bytes([255]) + b'ok')"
+    assert ctx.run([sys.executable, "-c", code]).stdout == "\ufffdok"
     assert emitted[0]["stdout"] == "\ufffdok"
+
+
+def test_run_string_uses_the_platform_shell(tmp_path):
+    assert make_ctx(tmp_path).run("exit 3", check=False).returncode == 3

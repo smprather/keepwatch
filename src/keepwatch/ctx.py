@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from keepwatch import platform
 from keepwatch.durations import parse_duration
 from keepwatch.protocol import clip
 
@@ -220,8 +221,8 @@ class Ctx:
     ) -> subprocess.CompletedProcess[str]:
         """Run a command and log it (command, exit code, duration, output).
 
-        argv: a list runs directly; a string runs via /bin/sh -c. stdin is
-        /dev/null unless `input` is given. `timeout` defaults to (and is capped
+        argv: a list runs directly; a string runs through the platform shell (/bin/sh -c, or Windows
+        PowerShell). stdin is /dev/null unless `input` is given. `timeout` defaults to (and is capped
         at) the hook's remaining time; on expiry subprocess.TimeoutExpired is
         raised. With check=True a nonzero exit raises CommandFailed.
         """
@@ -232,12 +233,11 @@ class Ctx:
         started = time.monotonic()
         try:
             completed = subprocess.run(
-                args,
-                shell=shell,
+                [*platform.default_shell(), args] if shell else args,
                 input=input,
                 stdin=subprocess.DEVNULL if input is None else None,
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
                 errors="replace",
                 timeout=limit,
                 env={**os.environ, **(env or {})},

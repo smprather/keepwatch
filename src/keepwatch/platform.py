@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -284,3 +285,36 @@ def open_inherited(value: int, *, handle: bool, mode: str) -> Any:
         flags = os.O_RDONLY if "r" in mode else os.O_WRONLY
         value = msvcrt.open_osfhandle(value, flags)
     return os.fdopen(value, mode, buffering=0) if "w" in mode else os.fdopen(value, mode)
+
+
+_POWERSHELL = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"]
+_SCRIPT_RUNNERS = {
+    ".ps1": [*_POWERSHELL, "-File"],
+    ".cmd": ["cmd.exe", "/d", "/c"],
+    ".bat": ["cmd.exe", "/d", "/c"],
+}
+
+
+def default_shell() -> list[str]:
+    """The program and leading arguments that run a string hook or a ctx.run string."""
+    if IS_WINDOWS:
+        return [*_POWERSHELL, "-Command"]
+    return ["/bin/sh", "-c"]
+
+
+def has_path_separator(program: str) -> bool:
+    return "/" in program or (IS_WINDOWS and "\\" in program)
+
+
+def command_argv(argv: Sequence[str], base: Path) -> list[str]:
+    """Resolve a list hook's relative program against `base`; on Windows, choose the script's interpreter."""
+    program, *rest = argv
+    if has_path_separator(program) and not os.path.isabs(program):
+        program = str(base / program)
+    if IS_WINDOWS:
+        suffix = Path(program).suffix.lower()
+        if suffix == ".py":
+            return [sys.executable, program, *rest]
+        if suffix in _SCRIPT_RUNNERS:
+            return [*_SCRIPT_RUNNERS[suffix], program, *rest]
+    return [program, *rest]

@@ -9,12 +9,13 @@ import os
 import re
 import shlex
 import tomllib
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from keepwatch import platform
 from keepwatch.durations import DurationError, parse_duration
 from keepwatch.hooks import HOOK_NAMES
 from keepwatch.paths import Paths
@@ -44,14 +45,14 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class Command:
-    """A command hook: argv runs directly, shell runs via /bin/sh -c."""
+    """A command hook: argv runs directly; shell runs through the platform shell (or the watch's `shell`)."""
 
     argv: tuple[str, ...] | None = None
     shell: str | None = None
 
-    def to_argv(self) -> list[str]:
+    def to_argv(self, shell: Sequence[str] | None = None) -> list[str]:
         if self.shell is not None:
-            return ["/bin/sh", "-c", self.shell]
+            return [*(shell or platform.default_shell()), self.shell]
         return list(self.argv or ())
 
     def display(self) -> str:
@@ -104,6 +105,14 @@ WATCH_KEYS = (
     ),
     Key("retry_after", "interval", None, "While offline, make one trial poll this often.", True),
     Key("python_dependencies", "str_list", (), "PEP 508 requirements for watch.py, installed by uv."),
+    Key(
+        "shell",
+        "argv",
+        None,
+        "Program and leading arguments that run string hooks, e.g. [\"pwsh\", \"-NoProfile\", \"-Command\"]. "
+        "Default: /bin/sh -c on POSIX, Windows PowerShell on Windows.",
+        True,
+    ),
 )
 
 WATCH_TABLES = {
@@ -127,6 +136,7 @@ class WatchConfig:
     max_failures: int = 5
     retry_after: float | None = None
     python_dependencies: tuple[str, ...] = ()
+    shell: tuple[str, ...] | None = None
     hooks: Mapping[str, Command] = field(default_factory=dict)
     exit_codes: ExitCodes = ExitCodes()
     environment: Mapping[str, str] = field(default_factory=dict)
@@ -212,6 +222,10 @@ def _convert(collector: _Collector, key: Key, value: Any, table: str | None = No
             if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
                 raise _Bad("a list of strings")
             return tuple(value)
+        if key.kind == "argv":
+            if not isinstance(value, list) or not value or not all(isinstance(item, str) and item for item in value):
+                raise _Bad("a non-empty list of strings")
+            return tuple(value)
     except DurationError as exc:
         collector.add(f"'{key.name}': {exc}", key=key.name, table=table)
         return _INVALID
@@ -234,7 +248,7 @@ def _command(collector: _Collector, value: Any, *, key: str, table: str | None, 
     if isinstance(value, list) and value and all(isinstance(item, str) and item for item in value):
         return Command(argv=tuple(value))
     collector.add(
-        f"'{key}' must be a command: a non-empty string (run via /bin/sh -c) "
+        f"'{key}' must be a command: a non-empty string (run by the shell: /bin/sh -c, or PowerShell on Windows) "
         f"or a non-empty list of strings (run directly), got {value!r}",
         key=key,
         table=table,

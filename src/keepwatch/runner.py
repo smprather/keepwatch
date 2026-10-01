@@ -649,9 +649,12 @@ class Runner:
                     started,
                     f"cannot prepare the hook's files in {call.run_dir}: {exc.strerror or exc}",
                 )
+            argv = command.to_argv(call.watch.shell)
+            if command.argv is not None:
+                argv = platform.command_argv(argv, call.watch.watch_dir)
             try:
                 process = platform.start_process(
-                    command.to_argv(),
+                    argv,
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,

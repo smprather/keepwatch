@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from keepwatch import platform
 from keepwatch.config import (
     Command,
     ConfigError,
@@ -43,11 +44,11 @@ def missing_executable(command: Command, watch: WatchConfig, environment: Mappin
     if command.argv is None:
         return None
     program = command.argv[0]
-    if "/" in program:
+    if platform.has_path_separator(program):
         path = Path(program) if os.path.isabs(program) else watch.watch_dir / program
         if not path.is_file():
             return f"{program} does not exist"
-        if not os.access(path, os.X_OK):
+        if not platform.IS_WINDOWS and not os.access(path, os.X_OK):
             return f"{program} is not executable (run: chmod +x {path})"
         return None
     search = {**os.environ, **environment, **watch.environment}.get("PATH", "")

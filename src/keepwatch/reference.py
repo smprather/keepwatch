@@ -78,6 +78,7 @@ _KIND_NAMES = {
     "duration": "duration",
     "interval": "duration ≥ 1s",
     "str_list": "list of strings",
+    "argv": "list of strings (program and arguments)",
     "path_list": "list of paths",
     "command": "command (string or list)",
 }
