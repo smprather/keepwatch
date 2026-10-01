@@ -65,7 +65,7 @@ def test_every_topic_renders():
 
 def test_render_all_contains_every_topic_in_order():
     text = render_all()
-    positions = [text.index(render_topic(name).splitlines()[0]) for name, _ in TOPICS]
+    positions = [text.index("\n" + render_topic(name).splitlines()[0]) for name, _ in TOPICS]
     assert positions == sorted(positions)
 
 
