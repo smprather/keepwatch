@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
+import threading
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
@@ -29,16 +31,24 @@ from keepwatch.config import (
     load_global_config,
     load_watch_config,
 )
-from keepwatch.locks import hold_lock
-from keepwatch.logstore import LogWriter, fan_out
+from keepwatch.locks import LockBusy, hold_lock
+from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter
 from keepwatch.output import ConsolePrinter, make_console, plain_output
 from keepwatch.paths import PathError, Paths, ensure_private_dir, remove_stale_process_dirs, resolve_paths
 from keepwatch.pollengine import Fake, PollEngine, PollReport, parse_fakes
 from keepwatch.runner import Runner
+from keepwatch.service import Service
 from keepwatch.state import initial_state
 from keepwatch.validation import validate_watches
 
-COMMAND_GROUPS = {"keepwatch": [{"name": "Develop", "commands": ["validate", "poll"]}]}
+COMMAND_GROUPS = {
+    "keepwatch": [
+        {"name": "Run", "commands": ["run"]},
+        {"name": "Develop", "commands": ["validate", "poll"]},
+        {"name": "Inspect", "commands": ["status", "logs"]},
+        {"name": "Control", "commands": ["enable", "disable", "rename"]},
+    ]
+}
 _PLAIN_BOXES = {
     "style_commands_panel_box": "SIMPLE_HEAD",
     "style_options_panel_box": "SIMPLE_HEAD",
@@ -244,6 +254,66 @@ def validate(app: App, names: tuple[str, ...], as_json: bool) -> None:
         if not checks and not general:
             console.print("no watches found")
     raise SystemExit(0 if ok else 1)
+
+
+@cli.command(name="run")
+@click.option("--watch", "only", multiple=True, metavar="NAME", help="Run only this watch (repeatable). For development.")
+@click.option("-v", "--verbose", is_flag=True, help="Print every record, including captured output.")
+@click.option("-q", "--quiet", is_flag=True, help="Print only warnings and errors.")
+@click.pass_obj
+def run_service(app: App, only: tuple[str, ...], verbose: bool, quiet: bool) -> None:
+    """Run the service in the foreground: every watch, polled forever, with config changes picked up live.
+
+    This is what the login service runs. Stop it with Ctrl-C or SIGTERM: running hooks are terminated and the
+    service exits once their polls end. Only one service runs at a time.
+
+    Terminal output: on a terminal, one line per event (only warnings and errors with -q; captured output too
+    with -v). When stdout is not a terminal (for example under systemd), only warnings and errors are printed
+    unless -v is given. The log file always gets every record; read it with `keepwatch logs`.
+
+    Exit status: 0 after a clean stop, 1 if another service is running or the global config is broken.
+    """
+    paths = app.paths
+    try:
+        ensure_private_dir(paths.runtime)
+        remove_stale_process_dirs(paths)
+    except PathError as exc:
+        _fail(str(exc))
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(hold_lock(paths.service_lock, blocking=False))
+        except LockBusy:
+            _fail("another keepwatch service is already running; see: keepwatch status")
+        try:
+            global_config = app.load_global()
+        except ConfigError as exc:
+            _fail("\n".join(str(problem) for problem in exc.problems))
+        if quiet:
+            minimum = "WARNING"
+        elif verbose:
+            minimum = "DEBUG"
+        elif plain_output():
+            minimum = "WARNING"
+        else:
+            minimum = "INFO"
+        writer = LogWriter(paths.log_file, max_bytes=global_config.log.max_bytes, backups=global_config.log.backups)
+        printer = level_filter(ConsolePrinter(make_console(), verbose=verbose), minimum)
+        sink = QueueSink(fan_out(writer.write, printer))
+        stack.callback(sink.close)
+        stack.callback(shutil.rmtree, paths.process_dir(os.getpid()), True)
+        stop = threading.Event()
+
+        def request_stop(signum: int, frame: object) -> None:
+            stop.set()
+
+        signal.signal(signal.SIGTERM, request_stop)
+        signal.signal(signal.SIGINT, request_stop)
+        service = Service(paths=paths, config_path=app.config_path, sink=sink, only=set(only))
+        try:
+            service.run(stop)
+        except ConfigError as exc:
+            _fail("\n".join(str(problem) for problem in exc.problems))
+    raise SystemExit(0)
 
 
 def main() -> None:

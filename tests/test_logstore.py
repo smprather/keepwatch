@@ -1,8 +1,9 @@
 import json
 import re
 import threading
+import time as _time
 
-from keepwatch.logstore import LogWriter, fan_out, make_record
+from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter, make_record
 
 
 def test_make_record():
@@ -50,3 +51,44 @@ def test_writer_is_thread_safe(tmp_path):
     lines = path.read_text().splitlines()
     assert len(lines) == 200
     assert all(json.loads(line)["event"] == "t" for line in lines)
+
+
+def test_level_filter():
+    seen = []
+    emit = level_filter(seen.append, "WARNING")
+    for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "BOGUS"):
+        emit({"level": level})
+    assert [r["level"] for r in seen] == ["WARNING", "ERROR", "CRITICAL"]
+
+
+def test_queue_sink_delivers_in_order_on_one_thread():
+    seen = []
+
+    def slow(record):
+        _time.sleep(0.001)
+        seen.append((record["n"], threading.current_thread().name))
+
+    sink = QueueSink(slow)
+    threads = [threading.Thread(target=lambda base=b: [sink({"n": base + i}) for i in range(20)]) for b in (0, 100)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    sink.close()
+    assert sorted(n for n, _ in seen) == sorted([*range(20), *range(100, 120)])
+    assert {name for _, name in seen} == {"keepwatch-log"}
+
+
+def test_queue_sink_survives_a_failing_sink():
+    seen = []
+
+    def flaky(record):
+        if record["n"] == 1:
+            raise RuntimeError("boom")
+        seen.append(record["n"])
+
+    sink = QueueSink(flaky)
+    for n in range(3):
+        sink({"n": n})
+    sink.close()
+    assert seen == [0, 2]

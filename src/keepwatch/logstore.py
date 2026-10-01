@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import threading
+import traceback
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -70,3 +72,46 @@ class LogWriter:
             if source.exists():
                 source.rename(self._backup(index + 1))
         self.path.rename(self._backup(1))
+
+
+LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
+_STOP = object()
+
+
+def level_filter(sink: Sink, minimum: str) -> Sink:
+    """Pass on records whose level is at least `minimum` (unknown levels count as INFO)."""
+    threshold = LEVELS[minimum]
+
+    def emit(record: dict[str, Any]) -> None:
+        if LEVELS.get(str(record.get("level")), LEVELS["INFO"]) >= threshold:
+            sink(record)
+
+    return emit
+
+
+class QueueSink:
+    """A sink any thread can call; records are delivered in order on one writer thread."""
+
+    def __init__(self, sink: Sink) -> None:
+        self._sink = sink
+        self._queue: queue.Queue[Any] = queue.Queue()
+        self._thread = threading.Thread(target=self._drain, name="keepwatch-log", daemon=True)
+        self._thread.start()
+
+    def __call__(self, record: dict[str, Any]) -> None:
+        self._queue.put(record)
+
+    def _drain(self) -> None:
+        while True:
+            record = self._queue.get()
+            if record is _STOP:
+                return
+            try:
+                self._sink(record)
+            except Exception:
+                traceback.print_exc()
+
+    def close(self, timeout: float = 10.0) -> None:
+        """Deliver everything queued so far, then stop the writer thread."""
+        self._queue.put(_STOP)
+        self._thread.join(timeout)
