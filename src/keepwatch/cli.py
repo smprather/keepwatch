@@ -33,6 +33,7 @@ from keepwatch.config import (
     load_watch_config,
 )
 from keepwatch.locks import LockBusy, hold_lock
+from keepwatch.logquery import LogFilter, follow_log, parse_when, select_records
 from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter
 from keepwatch.output import ConsolePrinter, make_console, plain_output
 from keepwatch.paths import PathError, Paths, ensure_private_dir, remove_stale_process_dirs, resolve_paths
@@ -351,6 +352,73 @@ def status(app: App, name: str | None, as_json: bool) -> None:
     console = make_console()
     for line in format_status(document, time.time()):
         console.print(line)
+
+
+@cli.command()
+@click.argument("name", required=False)
+@click.option("--since", metavar="WHEN", help='Records at or after WHEN: a duration ago ("1h", "2d") or a time ("2026-09-30", "2026-09-30T14:00").')
+@click.option("--until", metavar="WHEN", help="Records at or before WHEN (same forms as --since).")
+@click.option("--level", type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),
+              help="Minimum level.")
+@click.option("--event", "events", multiple=True, metavar="EVENT",
+              help="Only this event or event family (repeatable): hook.end, or hook for every hook.* event.")
+@click.option("--failed", is_flag=True, help="Only failures: ERROR or worse, failed hooks, failed polls and failed alerts.")
+@click.option("--poll", "poll_id", metavar="ID", help="Only records of this poll (a prefix of the poll ID is enough).")
+@click.option("-n", "--limit", type=int, default=200, show_default=True, help="Show at most the last N matching records; 0 shows all.")
+@click.option("-f", "--follow", is_flag=True, help="Then keep printing new matching records until interrupted.")
+@click.option("-v", "--verbose", is_flag=True, help="Show captured output and payloads for every record.")
+@click.option("--json", "as_json", is_flag=True, help="Print each record as one JSON line (the log file's own format).")
+@click.pass_obj
+def logs(
+    app: App,
+    name: str | None,
+    since: str | None,
+    until: str | None,
+    level: str | None,
+    events: tuple[str, ...],
+    failed: bool,
+    poll_id: str | None,
+    limit: int,
+    follow: bool,
+    verbose: bool,
+    as_json: bool,
+) -> None:
+    """Search the log (including rotated files), optionally restricted to watch NAME.
+
+    Every poll's records share a poll ID: `keepwatch logs --poll <id> -v` shows one poll from start to finish,
+    with every command's output. Records are printed oldest first.
+
+    Exit status: 0, or 2 for bad usage.
+    """
+    try:
+        since_time = parse_when(since) if since else None
+        until_time = parse_when(until) if until else None
+    except ValueError as exc:
+        raise click.BadParameter(str(exc)) from None
+    log_filter = LogFilter(
+        watch=name,
+        since=since_time,
+        until=until_time,
+        min_level=level.upper() if level else None,
+        events=events,
+        failed=failed,
+        poll_id=poll_id,
+    )
+    printer = ConsolePrinter(make_console(), verbose=verbose)
+
+    def show(record: dict) -> None:
+        if as_json:
+            click.echo(json.dumps(record, ensure_ascii=False, default=str))
+        else:
+            printer(record)
+
+    for record in select_records(app.paths.log_file, log_filter, limit):
+        show(record)
+    if follow:
+        try:
+            follow_log(app.paths.log_file, lambda r: show(r) if log_filter.matches(r) else None, stop=lambda: False)
+        except KeyboardInterrupt:
+            pass
 
 
 def main() -> None:
