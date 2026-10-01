@@ -333,11 +333,9 @@ git commit -m "Add keepwatch docs with the agent and overview topics"
 - Replace: `src/keepwatch/reference/{python,executables,states,failures,storage,logging,environment,dependencies,reload}.md`
 - Test: `tests/test_docs.py`
 
-- [ ] **Step 1: Write the failing test.** Append to `tests/test_docs.py`:
+- [ ] **Step 1: Write the failing test.** Add `import pytest` to the imports at the top of `tests/test_docs.py` (imports must stay at the top; ruff rejects them anywhere else), then append:
 
 ```python
-import pytest
-
 KEY_FACTS = {
     "python": ["keepwatch.Unknown", "(True, payload)", "1 MiB", "keepwatch_watch", "top-level"],
     "executables": ["KEEPWATCH_PAYLOAD_OUT", "KEEPWATCH_PAYLOAD_FILE", "KEEPWATCH_SETTINGS_FILE", "[check_exit_codes]", "/bin/sh -c"],
@@ -782,17 +780,9 @@ git commit -m "Write the narrative reference topics"
 **Interfaces:**
 - Produces: `config_topic()`, `ctx_topic()`, `cli_topic()` registered in `GENERATED`; each returns `narrative(name)` followed by generated sections.
 
-- [ ] **Step 1: Write the failing tests.** Append to `tests/test_docs.py`:
+- [ ] **Step 1: Write the failing tests.** Add these imports at the top of `tests/test_docs.py`: `import inspect`, `import click`, `from keepwatch import Ctx, Ledger` and `from keepwatch.config import GLOBAL_KEYS, GLOBAL_TABLES, LOG_KEYS, WATCH_KEYS, WATCH_TABLES` (then `uv run ruff check --fix tests/test_docs.py` sorts them). Append:
 
 ```python
-import inspect
-
-import click
-
-from keepwatch import Ctx, Ledger
-from keepwatch.config import GLOBAL_KEYS, GLOBAL_TABLES, LOG_KEYS, WATCH_KEYS, WATCH_TABLES
-
-
 def test_every_config_key_is_documented():
     text = render_topic("config")
     for key in (*WATCH_KEYS, *GLOBAL_KEYS, *LOG_KEYS):
