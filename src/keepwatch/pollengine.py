@@ -61,6 +61,7 @@ class PollReport:
     failed: bool = False
     faked: bool = False
     dry_run: bool = False
+    trial: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +79,7 @@ class PollReport:
             "failed": self.failed,
             "faked": self.faked,
             "dry_run": self.dry_run,
+            "trial": self.trial,
         }
 
 
@@ -93,6 +95,10 @@ class PollEngine:
         self._sink = sink
         self._pid = pid
 
+    def set_global_config(self, global_config: GlobalConfig) -> None:
+        """Use a reloaded global config from the next hook call on."""
+        self._global = global_config
+
     def poll(
         self,
         watch: WatchConfig,
@@ -100,11 +106,12 @@ class PollEngine:
         *,
         fake: Fake | None = None,
         dry_run: bool = False,
+        trial: bool = False,
     ) -> PollReport:
         poll_id = uuid.uuid4().hex[:12]
         tag = {"watch": watch.name, "poll_id": poll_id}
         faked = fake is not None
-        self._sink(make_record("poll.start", **tag, condition=state.condition, faked=faked, dry_run=dry_run))
+        self._sink(make_record("poll.start", **tag, condition=state.condition, faked=faked, dry_run=dry_run, trial=trial))
         hooks, problem = resolve_hooks(watch.watch_dir, watch.hooks)
         if problem is None and fake is None and CHECK not in hooks:
             problem = NO_CHECK
@@ -167,6 +174,7 @@ class PollEngine:
             failed=failed,
             faked=faked,
             dry_run=dry_run,
+            trial=trial,
         )
 
     def _emit_message(self, tag: dict[str, Any], message: dict[str, Any]) -> None:
