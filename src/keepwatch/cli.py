@@ -12,6 +12,7 @@ import os
 import shutil
 import signal
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ from keepwatch.pollengine import Fake, PollEngine, PollReport, parse_fakes
 from keepwatch.runner import Runner
 from keepwatch.service import Service
 from keepwatch.state import initial_state
+from keepwatch.statusview import collect_status, format_status
 from keepwatch.validation import validate_watches
 
 COMMAND_GROUPS = {
@@ -314,6 +316,41 @@ def run_service(app: App, only: tuple[str, ...], verbose: bool, quiet: bool) -> 
         except ConfigError as exc:
             _fail("\n".join(str(problem) for problem in exc.problems))
     raise SystemExit(0)
+
+
+@cli.command()
+@click.argument("name", required=False)
+@click.option("--json", "as_json", is_flag=True, help="Print the status as one JSON document.")
+@click.pass_obj
+def status(app: App, name: str | None, as_json: bool) -> None:
+    """Show whether the service runs and each watch's state.
+
+    Per watch: online, offline (with the reason and last failure), parked (enabled = false) or idle (the
+    service is not running), the TRUE/FALSE condition, consecutive failures, the last poll and the next one.
+    Also lists config problems and orphaned state directories (state of a watch that no longer exists).
+    The service refreshes this every reload_interval.
+
+    Exit status: 0, or 1 if NAME is not a known watch.
+    """
+    try:
+        discovery = discover_watches(app.load_global())
+    except ConfigError as exc:
+        _fail("\n".join(str(problem) for problem in exc.problems))
+    names = []
+    if name is not None:
+        if name not in discovery.watches and not app.paths.watch_state_dir(name).is_dir():
+            try:
+                find_watch(discovery, name)
+            except WatchNotFound as exc:
+                _fail(str(exc))
+        names = [name]
+    document = collect_status(app.paths, discovery, names)
+    if as_json:
+        click.echo(json.dumps(document, indent=2, default=str))
+        return
+    console = make_console()
+    for line in format_status(document, time.time()):
+        console.print(line)
 
 
 def main() -> None:
