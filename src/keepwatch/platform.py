@@ -6,6 +6,7 @@ The rest of keepwatch calls these functions instead of OS-specific APIs.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -68,3 +69,46 @@ def pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+if IS_WINDOWS:
+    import msvcrt
+else:
+    import fcntl
+
+
+def try_lock(fd: int) -> bool:
+    """Take an exclusive lock on the open file without waiting. False if another holder has it."""
+    if IS_WINDOWS:
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def lock(fd: int) -> None:
+    """Take an exclusive lock on the open file, waiting as long as needed."""
+    if IS_WINDOWS:
+        while not try_lock(fd):
+            time.sleep(0.1)
+        return
+    fcntl.flock(fd, fcntl.LOCK_EX)
+
+
+def unlock(fd: int) -> None:
+    """Release a lock taken with try_lock or lock (Windows releases late on close otherwise)."""
+    if IS_WINDOWS:
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        return
+    fcntl.flock(fd, fcntl.LOCK_UN)
