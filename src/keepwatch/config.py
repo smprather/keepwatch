@@ -507,6 +507,11 @@ def load_global_config(path: Path, paths: Paths) -> GlobalConfig:
 _WATCH_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
+def is_valid_watch_name(name: str) -> bool:
+    """Letters, digits, '_', '.' and '-', starting with a letter or digit."""
+    return bool(_WATCH_NAME.fullmatch(name))
+
+
 @dataclass(frozen=True)
 class Discovery:
     watches: Mapping[str, Path]

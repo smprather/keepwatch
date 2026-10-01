@@ -24,6 +24,7 @@ import rich_click as click
 from keepwatch import __version__
 from keepwatch.config import (
     ConfigError,
+    Discovery,
     GlobalConfig,
     WatchConfig,
     WatchNotFound,
@@ -32,6 +33,7 @@ from keepwatch.config import (
     load_global_config,
     load_watch_config,
 )
+from keepwatch.control import ControlError, disable_watch, enable_watch, rename_watch, require_known
 from keepwatch.locks import LockBusy, hold_lock
 from keepwatch.logquery import LogFilter, follow_log, parse_when, select_records
 from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter
@@ -419,6 +421,79 @@ def logs(
             follow_log(app.paths.log_file, lambda r: show(r) if log_filter.matches(r) else None, stop=lambda: False)
         except KeyboardInterrupt:
             pass
+
+
+def _control_setup(app: App) -> Discovery:
+    try:
+        ensure_private_dir(app.paths.runtime)
+        return discover_watches(app.load_global())
+    except ConfigError as exc:
+        _fail("\n".join(str(problem) for problem in exc.problems))
+    except PathError as exc:
+        _fail(str(exc))
+
+
+@cli.command()
+@click.argument("name")
+@click.pass_obj
+def enable(app: App, name: str) -> None:
+    """Bring an offline watch back online (deletes its offline.json).
+
+    A running service notices within a second, resets the failure count and polls the watch at once.
+
+    Exit status: 0, or 1 if NAME is unknown.
+    """
+    discovery = _control_setup(app)
+    try:
+        require_known(app.paths, discovery, name)
+    except ControlError as exc:
+        _fail(str(exc))
+    if enable_watch(app.paths, name):
+        click.echo(f"{name} enabled; a running service polls it within a second")
+    else:
+        click.echo(f"{name} was not offline; nothing to do")
+
+
+@cli.command()
+@click.argument("name")
+@click.pass_obj
+def disable(app: App, name: str) -> None:
+    """Take a watch offline until `keepwatch enable` (writes offline.json, survives restarts).
+
+    A running service stops polling it within a second; a poll already running finishes first.
+
+    Exit status: 0, or 1 if NAME is unknown.
+    """
+    discovery = _control_setup(app)
+    try:
+        require_known(app.paths, discovery, name)
+    except ControlError as exc:
+        _fail(str(exc))
+    if disable_watch(app.paths, name, time.time()):
+        click.echo(f"{name} disabled; run `keepwatch enable {name}` to bring it back")
+    else:
+        click.echo(f"{name} is already disabled")
+
+
+@cli.command()
+@click.argument("old")
+@click.argument("new")
+@click.pass_obj
+def rename(app: App, old: str, new: str) -> None:
+    """Rename watch OLD to NEW, moving its persistent state (ledgers, offline marker) with it.
+
+    Renaming the directory by hand would leave the state behind, and the watch would start with empty data
+    (a watch that sends files would send them all again). A running service sees OLD disappear and NEW appear
+    at its next tick; NEW starts from its initial_condition.
+
+    Exit status: 0 on success, 1 if refused (unknown OLD, NEW taken or invalid, or OLD being polled).
+    """
+    discovery = _control_setup(app)
+    try:
+        new_dir, new_state = rename_watch(app.paths, discovery, old, new)
+    except ControlError as exc:
+        _fail(str(exc))
+    click.echo(f"renamed {old} to {new}: {new_dir}" + (f" (state: {new_state})" if new_state.exists() else ""))
 
 
 def main() -> None:
