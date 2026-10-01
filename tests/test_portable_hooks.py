@@ -57,3 +57,12 @@ def test_string_hook_output_is_utf8_on_windows(make_watch, call_for):
     result = Runner().run(call_for(watch_dir))
     assert result.status == "true"
     assert result.stdout.strip() == "café"
+
+
+def test_python_hook_ctx_run_uses_the_watch_shell(make_watch, call_for):
+    exe = Path(sys.executable).as_posix()
+    watch_dir = make_watch("s", config=f"shell = ['{exe}', '-c']\n", files={"watch.py": '''
+        def check(ctx):
+            return ctx.run("import sys; sys.exit(6)", check=False).returncode == 6
+    '''})
+    assert Runner().run(call_for(watch_dir)).status == "true"

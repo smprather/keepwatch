@@ -179,6 +179,7 @@ class Ctx:
         deadline: float,
         capture_bytes: int = 65_536,
         emit: Emit | None = None,
+        shell: Sequence[str] | None = None,
     ) -> None:
         self.watch = watch
         self.hook = hook
@@ -193,6 +194,7 @@ class Ctx:
         self._deadline = deadline
         self._capture_bytes = capture_bytes
         self._emit = emit or (lambda message: None)
+        self._shell = list(shell) if shell else None
 
     @property
     def data_dir(self) -> Path:
@@ -221,8 +223,9 @@ class Ctx:
     ) -> subprocess.CompletedProcess[str]:
         """Run a command and log it (command, exit code, duration, output).
 
-        argv: a list runs directly; a string runs through the platform shell (/bin/sh -c, or Windows
-        PowerShell). stdin is /dev/null unless `input` is given. `timeout` defaults to (and is capped
+        argv: a list runs directly (a relative program is resolved against the watch directory, and on
+        Windows scripts get their interpreter, as for list hooks); a string runs through the watch's
+        `shell`, or the platform shell. stdin is /dev/null unless `input` is given. `timeout` defaults to (and is capped
         at) the hook's remaining time; on expiry subprocess.TimeoutExpired is
         raised. With check=True a nonzero exit raises CommandFailed.
         """
@@ -233,7 +236,9 @@ class Ctx:
         started = time.monotonic()
         try:
             completed = subprocess.run(
-                [*platform.default_shell(), args] if shell else args,
+                platform.shell_argv(args, self._shell)
+                if shell
+                else platform.command_argv(args, Path(cwd) if cwd is not None else self.watch_dir),
                 input=input,
                 stdin=subprocess.DEVNULL if input is None else None,
                 capture_output=True,
@@ -242,6 +247,7 @@ class Ctx:
                 timeout=limit,
                 env={**os.environ, **(env or {})},
                 cwd=cwd if cwd is not None else self.watch_dir,
+                creationflags=platform.NO_WINDOW,
             )
         except subprocess.TimeoutExpired as exc:
             self._report(args, shell, None, True, time.monotonic() - started, _as_text(exc.stdout), _as_text(exc.stderr))

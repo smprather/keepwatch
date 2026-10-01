@@ -10,7 +10,7 @@ import pytest
 from keepwatch import CommandFailed, Ctx, Ledger, LedgerCorrupt, LedgerReadOnly
 
 
-def make_ctx(tmp_path, hook="on_true", emitted=None, deadline_in=30.0):
+def make_ctx(tmp_path, hook="on_true", emitted=None, deadline_in=30.0, shell=None):
     watch_dir = tmp_path / "w"
     watch_dir.mkdir(exist_ok=True)
     return Ctx(
@@ -26,6 +26,7 @@ def make_ctx(tmp_path, hook="on_true", emitted=None, deadline_in=30.0):
         deadline=time.time() + deadline_in,
         capture_bytes=1000,
         emit=(emitted.append if emitted is not None else None),
+        shell=shell,
     )
 
 
@@ -171,3 +172,16 @@ def test_run_decodes_non_utf8_output(tmp_path):
 
 def test_run_string_uses_the_platform_shell(tmp_path):
     assert make_ctx(tmp_path).run("exit 3", check=False).returncode == 3
+
+
+def test_run_uses_the_watch_shell(tmp_path):
+    ctx = make_ctx(tmp_path, shell=[sys.executable, "-c"])
+    assert ctx.run("import sys; sys.exit(5)", check=False).returncode == 5
+
+
+def test_run_resolves_relative_programs_like_hooks(tmp_path):
+    ctx = make_ctx(tmp_path)
+    helper = ctx.watch_dir / "helper.py"
+    helper.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(int(sys.argv[1]))\n")
+    helper.chmod(0o755)
+    assert ctx.run(["./helper.py", "4"], check=False).returncode == 4

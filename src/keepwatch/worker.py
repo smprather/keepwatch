@@ -127,6 +127,7 @@ def run_request(request: dict[str, Any], send: Send) -> dict[str, Any]:
         deadline=request["deadline"],
         capture_bytes=request.get("capture_bytes", 65_536),
         emit=send,
+        shell=request.get("shell"),
     )
     try:
         value = function(ctx)

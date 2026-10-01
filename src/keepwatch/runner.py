@@ -528,6 +528,7 @@ class Runner:
             "condition": call.condition,
             "payload": call.payload,
             "settings": dict(call.watch.settings),
+            "shell": list(call.watch.shell) if call.watch.shell else None,
             "deadline": deadline,
             "capture_bytes": call.capture_bytes,
             "mode": call.mode,
