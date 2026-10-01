@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from keepwatch import platform
+from keepwatch.platform import pid_alive  # noqa: F401  (re-exported)
+
 APP = "keepwatch"
 
 
@@ -76,18 +79,17 @@ def _absolute(value: str | None) -> Path | None:
 
 
 def resolve_paths(env: Mapping[str, str] | None = None, uid: int | None = None) -> Paths:
-    """Compute keepwatch's directories from the XDG environment variables."""
+    """keepwatch's directories: XDG variables when set, else the platform defaults."""
     env = os.environ if env is None else env
-    uid = os.getuid() if uid is None else uid
-    home = Path(env.get("HOME") or Path.home())
-    config_base = _absolute(env.get("XDG_CONFIG_HOME")) or home / ".config"
-    state_base = _absolute(env.get("XDG_STATE_HOME")) or home / ".local" / "state"
+    config_default, state_default, runtime_default = platform.default_app_dirs(env, uid)
+    config_base = _absolute(env.get("XDG_CONFIG_HOME"))
+    state_base = _absolute(env.get("XDG_STATE_HOME"))
     runtime_base = _absolute(env.get("XDG_RUNTIME_DIR"))
-    if runtime_base is not None:
-        runtime = runtime_base / APP
-    else:
-        runtime = (_absolute(env.get("TMPDIR")) or Path("/tmp")) / f"{APP}-{uid}"
-    return Paths(config_base / APP, state_base / APP, runtime)
+    return Paths(
+        config_base / APP if config_base else config_default,
+        state_base / APP if state_base else state_default,
+        runtime_base / APP if runtime_base else runtime_default,
+    )
 
 
 def ensure_private_dir(path: Path) -> Path:
@@ -99,22 +101,14 @@ def ensure_private_dir(path: Path) -> Path:
         raise PathError(f"cannot create {path}: {exc.strerror or exc}") from exc
     if not stat.S_ISDIR(info.st_mode):
         raise PathError(f"{path} exists and is not a directory")
+    if platform.IS_WINDOWS:
+        return path  # the user profile's ACL already keeps these directories private
     if info.st_uid != os.getuid():
         raise PathError(f"{path} is owned by uid {info.st_uid}, not you; refusing to use it")
     mode = stat.S_IMODE(info.st_mode)
     if mode & 0o077:
         raise PathError(f"{path} is accessible by other users (mode {mode:o}); run: chmod 700 {path}")
     return path
-
-
-def pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 def remove_stale_process_dirs(paths: Paths, alive: Callable[[int], bool] = pid_alive) -> list[Path]:

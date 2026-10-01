@@ -25,6 +25,7 @@ def test_resolve_paths_uses_xdg_variables():
     assert paths == Paths(Path("/cfg/keepwatch"), Path("/st/keepwatch"), Path("/run/user/1000/keepwatch"))
 
 
+@pytest.mark.posix_only
 def test_resolve_paths_defaults_and_ignores_relative_values():
     paths = resolve_paths({"HOME": "/home/u", "XDG_CONFIG_HOME": "relative", "TMPDIR": "/var/tmp"}, uid=1234)
     assert paths.config_home == Path("/home/u/.config/keepwatch")
@@ -32,6 +33,7 @@ def test_resolve_paths_defaults_and_ignores_relative_values():
     assert paths.runtime == Path("/var/tmp/keepwatch-1234")
 
 
+@pytest.mark.posix_only
 def test_runtime_fallback_without_tmpdir():
     assert resolve_paths({"HOME": "/h"}, uid=7).runtime == Path("/tmp/keepwatch-7")
 
@@ -49,12 +51,14 @@ def test_derived_paths():
     assert paths.run_dir(42, "w") == Path("/r/42/w")
 
 
+@pytest.mark.posix_only
 def test_ensure_private_dir_creates_mode_700(tmp_path):
     target = tmp_path / "a" / "b"
     ensure_private_dir(target)
     assert stat.S_IMODE(target.stat().st_mode) == 0o700
 
 
+@pytest.mark.posix_only
 def test_ensure_private_dir_rejects_shared_directory(tmp_path):
     target = tmp_path / "shared"
     target.mkdir()
@@ -63,6 +67,7 @@ def test_ensure_private_dir_rejects_shared_directory(tmp_path):
         ensure_private_dir(target)
 
 
+@pytest.mark.posix_only
 def test_ensure_private_dir_rejects_symlink(tmp_path):
     real = tmp_path / "real"
     real.mkdir(mode=0o700)
@@ -79,3 +84,10 @@ def test_remove_stale_process_dirs(tmp_path):
     removed = remove_stale_process_dirs(paths, alive=lambda pid: pid == 111)
     assert removed == [paths.runtime / "222"]
     assert sorted(p.name for p in paths.runtime.iterdir()) == ["111", "notes"]
+
+
+@pytest.mark.windows_only
+def test_xdg_variables_override_windows_defaults(tmp_path):
+    paths = resolve_paths({"XDG_CONFIG_HOME": str(tmp_path / "c"), "XDG_STATE_HOME": str(tmp_path / "s"),
+                           "XDG_RUNTIME_DIR": str(tmp_path / "r"), "APPDATA": r"C:\x", "LOCALAPPDATA": r"C:\y"})
+    assert paths == Paths(tmp_path / "c" / "keepwatch", tmp_path / "s" / "keepwatch", tmp_path / "r" / "keepwatch")
