@@ -1,5 +1,7 @@
 import json
 import textwrap
+import threading
+import time
 
 import pytest
 
@@ -159,3 +161,21 @@ def test_tick_survives_errors(xdg, make_watch, monkeypatch):
     monkeypatch.setattr(service_module, "write_json_atomic", full_disk)
     service.tick()
     assert len(events(records, "service.error")) == 2
+
+
+def test_stop_request_file_stops_the_service(xdg, make_watch):
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    records = []
+    service = make_service(xdg, records)
+    thread = threading.Thread(target=service.run, args=(threading.Event(),), daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not xdg.status_file.exists():
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    xdg.stop_request.parent.mkdir(parents=True, exist_ok=True)
+    xdg.stop_request.write_text("now")
+    thread.join(15)
+    assert not thread.is_alive()
+    assert not xdg.stop_request.exists()
+    assert [r["event"] for r in records][-2:] == ["service.stop_requested", "service.stop"]

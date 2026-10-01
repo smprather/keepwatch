@@ -71,6 +71,7 @@ class Service:
 
     def start(self) -> None:
         """Load the global config (raises ConfigError if broken), log service.start, run the first tick."""
+        self.paths.stop_request.unlink(missing_ok=True)
         self._global_signature = file_signature(self.config_path)
         self.global_config = load_global_config(self.config_path, self.paths)
         self.engine = PollEngine(
@@ -93,13 +94,27 @@ class Service:
         self.tick()
 
     def run(self, stop: threading.Event) -> None:
-        """start(), then tick every reload_interval until `stop` is set, then stop()."""
+        """start(); then tick every reload_interval until `stop` is set or a stop request arrives; then stop()."""
         self.start()
         try:
-            while not stop.wait(self.global_config.reload_interval):
-                self.tick()
+            next_tick = time.monotonic() + self.global_config.reload_interval
+            while not stop.wait(1.0):
+                if self._stop_requested():
+                    break
+                if time.monotonic() >= next_tick:
+                    self.tick()
+                    next_tick = time.monotonic() + self.global_config.reload_interval
         finally:
             self.stop()
+
+    def _stop_requested(self) -> bool:
+        """True (once) when `keepwatch stop` has written the stop request file."""
+        try:
+            self.paths.stop_request.unlink()
+        except OSError:
+            return False
+        self._sink(make_record("service.stop_requested"))
+        return True
 
     def tick(self) -> None:
         """One master tick. Never raises: a failure is logged once, and the next tick tries again."""

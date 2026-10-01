@@ -52,6 +52,10 @@ class Paths:
     def service_lock(self) -> Path:
         return self.runtime / "service.lock"
 
+    @property
+    def stop_request(self) -> Path:
+        return self.runtime / "stop.request"
+
     def watch_state_dir(self, watch: str) -> Path:
         return self.state_home / "watches" / watch
 

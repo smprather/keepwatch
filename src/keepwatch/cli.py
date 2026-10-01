@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import signal
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -46,13 +47,13 @@ from keepwatch.reference import UnknownTopic, render_all, render_topic, topic_in
 from keepwatch.runner import Runner
 from keepwatch.service import Service
 from keepwatch.state import initial_state
-from keepwatch.statusview import collect_status, format_status
+from keepwatch.statusview import collect_status, format_status, service_running
 from keepwatch.templates import AGENTS_MD, CLAUDE_MD, GLOBAL_CONFIG, TEMPLATES, render
 from keepwatch.validation import validate_watches
 
 COMMAND_GROUPS = {
     "keepwatch": [
-        {"name": "Run", "commands": ["run"]},
+        {"name": "Run", "commands": ["run", "stop"]},
         {"name": "Develop", "commands": ["new", "validate", "poll"]},
         {"name": "Inspect", "commands": ["status", "logs"]},
         {"name": "Control", "commands": ["enable", "disable", "rename"]},
@@ -88,7 +89,8 @@ class App:
 
 
 def _fail(message: str) -> NoReturn:
-    make_console(stderr=True).print(message)
+    if sys.stderr is not None:  # no console under pythonw
+        make_console(stderr=True).print(message)
     raise SystemExit(1)
 
 
@@ -310,8 +312,11 @@ def run_service(app: App, only: tuple[str, ...], verbose: bool, quiet: bool) -> 
         else:
             minimum = "INFO"
         writer = LogWriter(paths.log_file, max_bytes=global_config.log.max_bytes, backups=global_config.log.backups)
-        printer = level_filter(ConsolePrinter(make_console(), verbose=verbose), minimum)
-        sink = QueueSink(fan_out(writer.write, printer))
+        if sys.stdout is None:  # pythonw: no console, the log file has everything
+            sink = QueueSink(writer.write)
+        else:
+            printer = level_filter(ConsolePrinter(make_console(), verbose=verbose), minimum)
+            sink = QueueSink(fan_out(writer.write, printer))
         stack.callback(sink.close)
         stack.callback(shutil.rmtree, paths.process_dir(os.getpid()), True)
         stop = threading.Event()
@@ -668,6 +673,36 @@ def docs(topic: str | None, show_all: bool) -> None:
         click.echo(text)
     else:
         make_console().print(Markdown(text))
+
+
+def _request_stop(paths: Paths, timeout: float) -> bool:
+    """Ask a running service to stop; True once it has (its lock is free)."""
+    paths.stop_request.parent.mkdir(parents=True, exist_ok=True)
+    paths.stop_request.write_text(str(time.time()), encoding="utf-8")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not service_running(paths):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+@cli.command()
+@click.option("--timeout", type=float, default=30.0, show_default=True, help="Seconds to wait for the service to stop.")
+@click.pass_obj
+def stop(app: App, timeout: float) -> None:
+    """Ask the running service to stop, and wait until it has. Works on every OS (the way to stop it on Windows).
+
+    Running hooks are terminated and the service exits once their polls end.
+
+    Exit status: 0 when the service has stopped, 1 if none is running or it did not stop in time.
+    """
+    if not service_running(app.paths):
+        _fail("no keepwatch service is running")
+    if _request_stop(app.paths, timeout):
+        click.echo("keepwatch service stopped")
+    else:
+        _fail(f"the service did not stop within {timeout:g}s; see: keepwatch logs --since 5m")
 
 
 def main() -> None:

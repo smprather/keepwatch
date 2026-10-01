@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import sys
 import threading
 import traceback
 from collections.abc import Callable
@@ -113,7 +114,8 @@ class QueueSink:
             try:
                 self._sink(record)
             except Exception:
-                traceback.print_exc()
+                if sys.stderr is not None:  # no console under pythonw
+                    traceback.print_exc()
 
     def close(self, timeout: float = 10.0) -> None:
         """Deliver everything queued so far, then stop the writer thread."""
