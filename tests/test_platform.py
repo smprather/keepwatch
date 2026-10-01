@@ -103,3 +103,14 @@ def test_replace_retries_while_the_target_is_briefly_open(tmp_path):
     threading.Timer(0.3, handle.close).start()
     platform.replace(source, target)
     assert target.read_text() == "new"
+
+
+def test_shell_argv(tmp_path):
+    assert platform.shell_argv("exit 3", ["pwsh", "-Command"]) == ["pwsh", "-Command", "exit 3"]
+    argv = platform.shell_argv("exit 3")
+    if platform.IS_WINDOWS:
+        assert argv[0] == "powershell.exe" and argv[-1].endswith("exit 3") and "UTF8Encoding" in argv[-1]
+    else:
+        assert argv == ["/bin/sh", "-c", "exit 3"]
+    assert platform.absolute_path("relative") is None
+    assert platform.absolute_path(str(tmp_path)) == tmp_path

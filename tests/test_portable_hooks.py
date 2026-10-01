@@ -49,3 +49,11 @@ def test_powershell_and_cmd_scripts(make_watch, call_for):
     )
     assert Runner().run(call_for(watch_dir)).status == "unknown"
     assert Runner().run(call_for(watch_dir, hook="on_true")).status == "ok"
+
+
+@pytest.mark.windows_only
+def test_string_hook_output_is_utf8_on_windows(make_watch, call_for):
+    watch_dir = make_watch("s", config="[hooks]\ncheck = \"Write-Output 'café'\"\n")
+    result = Runner().run(call_for(watch_dir))
+    assert result.status == "true"
+    assert result.stdout.strip() == "café"

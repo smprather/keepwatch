@@ -52,7 +52,7 @@ class Command:
 
     def to_argv(self, shell: Sequence[str] | None = None) -> list[str]:
         if self.shell is not None:
-            return [*(shell or platform.default_shell()), self.shell]
+            return platform.shell_argv(self.shell, shell)
         return list(self.argv or ())
 
     def display(self) -> str:

@@ -43,11 +43,11 @@ def make_watch(xdg):
     def make(name, config="", files=None, base=None):
         watch_dir = (base or xdg.default_watches_dir) / name
         watch_dir.mkdir(parents=True)
-        (watch_dir / "config.toml").write_text(textwrap.dedent(config))
+        (watch_dir / "config.toml").write_text(textwrap.dedent(config), encoding="utf-8")
         for relative, content in (files or {}).items():
             path = watch_dir / relative
             text = textwrap.dedent(content).lstrip("\n")
-            path.write_text(text)
+            path.write_text(text, encoding="utf-8")
             if text.startswith("#!"):
                 path.chmod(0o755)
         return watch_dir

@@ -13,9 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from keepwatch import platform
-from keepwatch.platform import pid_alive  # noqa: F401  (re-exported)
-
-APP = "keepwatch"
+from keepwatch.platform import APP, absolute_path, pid_alive  # noqa: F401  (pid_alive re-exported)
 
 
 class PathError(Exception):
@@ -75,20 +73,13 @@ class Paths:
         return self.process_dir(pid) / watch
 
 
-def _absolute(value: str | None) -> Path | None:
-    # The XDG spec says relative paths in these variables are invalid and must be ignored.
-    if value and os.path.isabs(value):
-        return Path(value)
-    return None
-
-
 def resolve_paths(env: Mapping[str, str] | None = None, uid: int | None = None) -> Paths:
     """keepwatch's directories: XDG variables when set, else the platform defaults."""
     env = os.environ if env is None else env
     config_default, state_default, runtime_default = platform.default_app_dirs(env, uid)
-    config_base = _absolute(env.get("XDG_CONFIG_HOME"))
-    state_base = _absolute(env.get("XDG_STATE_HOME"))
-    runtime_base = _absolute(env.get("XDG_RUNTIME_DIR"))
+    config_base = absolute_path(env.get("XDG_CONFIG_HOME"))
+    state_base = absolute_path(env.get("XDG_STATE_HOME"))
+    runtime_base = absolute_path(env.get("XDG_RUNTIME_DIR"))
     return Paths(
         config_base / APP if config_base else config_default,
         state_base / APP if state_base else state_default,

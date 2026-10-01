@@ -34,7 +34,7 @@ if IS_WINDOWS:
     _ERROR_ACCESS_DENIED = 5
 
 
-def _absolute(value: str | None) -> Path | None:
+def absolute_path(value: str | None) -> Path | None:
     if value and os.path.isabs(value):
         return Path(value)
     return None
@@ -44,12 +44,12 @@ def default_app_dirs(env: Mapping[str, str], uid: int | None = None) -> tuple[Pa
     """keepwatch's config, state and runtime directories when no XDG variable overrides them."""
     if IS_WINDOWS:
         home = Path(env.get("USERPROFILE") or Path.home())
-        roaming = _absolute(env.get("APPDATA")) or home / "AppData" / "Roaming"
-        local = _absolute(env.get("LOCALAPPDATA")) or home / "AppData" / "Local"
+        roaming = absolute_path(env.get("APPDATA")) or home / "AppData" / "Roaming"
+        local = absolute_path(env.get("LOCALAPPDATA")) or home / "AppData" / "Local"
         return roaming / APP, local / APP, local / APP / "run"
     uid = os.getuid() if uid is None else uid
     home = Path(env.get("HOME") or Path.home())
-    runtime = (_absolute(env.get("TMPDIR")) or Path("/tmp")) / f"{APP}-{uid}"
+    runtime = (absolute_path(env.get("TMPDIR")) or Path("/tmp")) / f"{APP}-{uid}"
     return home / ".config" / APP, home / ".local" / "state" / APP, runtime
 
 
@@ -120,6 +120,7 @@ def unlock(fd: int) -> None:
 
 
 TERMINATED_EXIT = 0xC000013A  # STATUS_CONTROL_C_EXIT: what keepwatch-terminated processes exit with on Windows
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0  # no console window for children
 
 if IS_WINDOWS:
     _ntdll = ctypes.WinDLL("ntdll")
@@ -265,7 +266,11 @@ def start_process(
         popen.kill()
         _kernel32.CloseHandle(job)
         raise ctypes.WinError(error)
-    _ntdll.NtResumeProcess(int(popen._handle))
+    status = _ntdll.NtResumeProcess(int(popen._handle))
+    if status != 0:
+        popen.kill()
+        _kernel32.CloseHandle(job)
+        raise OSError(f"cannot resume the new process (NTSTATUS 0x{status & 0xFFFFFFFF:08x})")
     return HookProcess(popen, job)
 
 
@@ -300,6 +305,22 @@ def default_shell() -> list[str]:
     if IS_WINDOWS:
         return [*_POWERSHELL, "-Command"]
     return ["/bin/sh", "-c"]
+
+
+# Windows PowerShell writes redirected output in the console code page; keepwatch reads UTF-8.
+_UTF8_PRELUDE = (
+    "try { $utf8 = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $utf8; "
+    "$OutputEncoding = $utf8 } catch { }; "
+)
+
+
+def shell_argv(text: str, shell: Sequence[str] | None = None) -> list[str]:
+    """How to run a string command: `shell` if given, else the platform shell (UTF-8 output on Windows)."""
+    if shell:
+        return [*shell, text]
+    if IS_WINDOWS:
+        return [*_POWERSHELL, "-Command", _UTF8_PRELUDE + text]
+    return ["/bin/sh", "-c", text]
 
 
 def has_path_separator(program: str) -> bool:

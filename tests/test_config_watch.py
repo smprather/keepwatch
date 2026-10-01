@@ -58,7 +58,7 @@ def test_full_config(tmp_path):
     assert cfg.initial_condition is True and cfg.max_failures == 3
     assert cfg.python_dependencies == ("requests>=2.32",)
     assert cfg.hooks["check"] == Command(shell="./check.sh")
-    assert cfg.hooks["check"].to_argv() == [*platform.default_shell(), "./check.sh"]
+    assert cfg.hooks["check"].to_argv() == platform.shell_argv("./check.sh")
     assert cfg.hooks["on_true"] == Command(argv=("expect", "./send.exp"))
     assert cfg.hooks["on_true"].to_argv() == ["expect", "./send.exp"]
     assert cfg.hooks["on_true"].display() == "expect ./send.exp"
