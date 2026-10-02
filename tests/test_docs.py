@@ -65,6 +65,7 @@ KEY_FACTS = {
     "observers": ["[observe.", "./feed.py", "uv\", \"run\", \"--script", "ctx.events", "KEEPWATCH_EVENTS_FILE", "at-least-once", "heartbeat_timeout", "keepwatch observe", "--events", "wake", "settle", "flush", "ledger", "FileNotFoundError", "64 MiB", "1 second after", "do not restart", "remote_files", "remote_python", "BatchMode", "known_hosts", "observer.connected", "Python 3.6", "ssh-agent", "not valid UTF-8", "IdentitiesOnly"],
     "transfers": ["ctx.transfer", "keepwatch kit", "password_env", "SSH_ASKPASS", "setx", "known_hosts", "-O", "scp -3", "protocol = \"sftp\"", ".part", ".sha256", "sha256sum -c", "tcp_open", "TransferFailed", "CommandFailed", "NumberOfPasswordPrompts", "must print nothing"],
     "recipes": ["recipe = \"pull\"", "recipe = \"push\"", "pulled", "pushed", "skip_ledger", "unknown", "reachable_host", "staging", "at-least-once"],
+    "relay": ["relay-pull", "relay-push", "staging", "uv tool install keepwatch", "ssh-keygen", "authorized_keys", "known_hosts", "setx RELAY_PASSWORD", "sha256sum -c", "$?prompt", "keepwatch observe relay-pull", "scp -3", "unknown"],
 }
 
 
