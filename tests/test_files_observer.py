@@ -260,3 +260,25 @@ def test_a_marker_that_arrives_late_is_noticed_within_seconds(tmp_path, make_wat
         assert wait_for(lambda: events, timeout=10.0)
     finally:
         stop(observer)
+
+
+def test_a_file_without_a_marker_costs_no_rescans(tmp_path, make_watch, xdg, monkeypatch):
+    monkeypatch.setattr(observers, "FILES_RESCAN", 600.0)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "a.tar.gz").write_bytes(b"payload")
+    age(inbox / "a.tar.gz")
+    scans = []
+    scan = observers.FilesObserver._scan
+    monkeypatch.setattr(observers.FilesObserver, "_scan", lambda self: scans.append(1) or scan(self))
+    observer, events, records = files_observer(make_watch, xdg, inbox, "marker = 'sha256'\n")
+    observer.start()
+    try:
+        time.sleep(2.5)  # settled (settle is 1s) with no marker
+        before = len(scans)
+        time.sleep(3.0)
+        assert len(scans) == before  # held until the file or its marker changes, not re-checked every second
+        write_marker(inbox, "a.tar.gz")  # its marker is still noticed
+        assert wait_for(lambda: events, timeout=8.0)
+    finally:
+        stop(observer)

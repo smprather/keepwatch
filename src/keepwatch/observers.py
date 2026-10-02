@@ -59,7 +59,6 @@ FILES_RESCAN = 30.0  # rescan this often even without notifications (network sha
 FILES_POLL = 2.0  # rescan this often when native notifications are unavailable
 FILES_SETTLE_STEP = 1.0  # rescan this often while a file is settling
 FILES_MIN_RESCAN = 0.5  # at most two scans a second, however many notifications arrive
-FILES_MARKER_WAIT = 60.0  # re-check a file waiting for its marker every second for this long, then on events/rescans
 
 
 def parse_event(text: str) -> dict[str, Any] | None:
@@ -452,14 +451,18 @@ class CommandObserver(Observer):
 
 
 class _Poke(FileSystemEventHandler):
-    """Any filesystem notification just asks for a rescan."""
+    """Any filesystem change just asks for a rescan (reads do not: hashing a file must not trigger another scan)."""
 
     def __init__(self, changed: threading.Event) -> None:
         super().__init__()
         self._changed = changed
 
     def on_any_event(self, event: FileSystemEvent) -> None:
-        self._changed.set()
+        if event.event_type not in ("opened", "closed_no_write"):
+            self._changed.set()
+
+
+Version = tuple[int, int, tuple[int, int] | None]  # a file's (size, mtime_ns) and its marker's, if any
 
 
 class FilesObserver(Observer):
@@ -470,8 +473,7 @@ class FilesObserver(Observer):
     def __init__(self, watch: WatchConfig, config: ObserverConfig, *, deliver: Deliver, sink: Sink) -> None:
         super().__init__(watch, config, deliver=deliver, sink=sink)
         self._reported: set[tuple[str, int, int]] = set()
-        self._mismatched: set[tuple[str, int, int, int, int]] = set()
-        self._waiting: dict[str, float] = {}
+        self._held: set[tuple[str, Version]] = set()  # settled without a matching marker
 
     def _ignored(self, name: str) -> bool:
         return any(fnmatch.fnmatch(name, pattern) for pattern in self.config.ignore)
@@ -481,36 +483,38 @@ class FilesObserver(Observer):
             return False
         return fnmatch.fnmatch(name, self.config.pattern) and not self._ignored(name)
 
-    def _verified(self, path: str, info: os.stat_result) -> dict[str, Any] | None:
-        """{} without markers; with marker = sha256 the event fields, or None while the marker is missing or wrong."""
+    def _marker_version(self, path: str) -> tuple[int, int] | None:
+        """The marker's (size, mtime_ns); None without marker = sha256 or while it is missing."""
+        if self.config.marker != "sha256":
+            return None
+        try:
+            info = os.stat(path + ".sha256")
+        except OSError:
+            return None
+        return (info.st_size, info.st_mtime_ns)
+
+    def _verified(self, path: str, marker: tuple[int, int] | None) -> dict[str, Any] | None:
+        """{} without markers; with marker = sha256 the event fields, or None when the marker is missing or wrong.
+
+        Raises OSError when the file or its marker cannot be read (it is checked again after another settle period).
+        """
         if self.config.marker != "sha256":
             return {}
-        marker = Path(path + ".sha256")
-        try:
-            marker_info = marker.stat()
-        except OSError:
+        if marker is None:
             return None
-        if time.time() - marker_info.st_mtime < self.config.settle:
-            return None
-        version = (path, info.st_size, info.st_mtime_ns, marker_info.st_size, marker_info.st_mtime_ns)
-        if version in self._mismatched:
-            return None
-        try:
-            fields = marker.read_text(encoding="utf-8", errors="replace").split()
-            expected = fields[0].lower() if fields else ""
-            actual = sha256_file(path)
-        except OSError:
-            return None
+        marker_path = Path(path + ".sha256")
+        fields = marker_path.read_text(encoding="utf-8", errors="replace").split()
+        expected = fields[0].lower() if fields else ""
+        actual = sha256_file(path)
         if re.fullmatch(r"[0-9a-f]{64}", expected) and actual == expected:
-            return {"sha256": actual, "marker": str(marker)}
-        self._mismatched.add(version)
+            return {"sha256": actual, "marker": str(marker_path)}
         self._sink(
             make_record(
                 "observer.output",
                 level="WARNING",
                 **self._tag(),
                 stream="marker",
-                text=f"{Path(path).name}: {marker.name} does not match (sha256 {actual}); waiting for a new upload",
+                text=f"{Path(path).name}: {marker_path.name} does not match (sha256 {actual}); waiting for a new upload",
             )
         )
         return None
@@ -580,7 +584,7 @@ class FilesObserver(Observer):
     def _watch(self, changed: threading.Event, idle: float) -> str:
         """Scan, report settled files, wait for a notification or a timeout; repeat until stopped."""
         settle = self.config.settle
-        candidates: dict[str, tuple[tuple[int, int], float]] = {}
+        candidates: dict[str, tuple[Version, float]] = {}
         last_scan = 0.0
         while not self._stop.is_set():
             self._stop.wait(max(last_scan + FILES_MIN_RESCAN - time.monotonic(), 0.0))
@@ -593,42 +597,46 @@ class FilesObserver(Observer):
             except OSError as exc:
                 return f"cannot scan {self.config.path}: {exc.strerror or exc}"
             now, wall = time.monotonic(), time.time()
-            current = set()
+            current, versions = set(), set()
             for path, info in sorted(found.items()):
                 key = (info.st_size, info.st_mtime_ns)
                 current.add((path, *key))
                 if (path, *key) in self._reported:
                     continue
+                marker = self._marker_version(path)
+                version = (*key, marker)  # a marker arriving or changing starts a new settle period
+                versions.add((path, version))
+                if (path, version) in self._held:
+                    continue  # no matching marker: checked again when the file or its marker changes
                 seen = candidates.get(path)
-                if seen is None or seen[0] != key:
-                    seen = candidates[path] = (key, now)
-                if now - seen[1] >= settle and wall - info.st_mtime >= settle:
-                    extra = self._verified(path, info)
-                    if extra is None:
-                        mismatched = any(version[:3] == (path, *key) for version in self._mismatched)
-                        waited = now - self._waiting.setdefault(path, now)
-                        if mismatched or waited >= FILES_MARKER_WAIT:
-                            del candidates[path]  # wait for a filesystem event or the rescan instead
-                        continue  # no marker yet: stay a candidate, re-checked every FILES_SETTLE_STEP
-                    self._waiting.pop(path, None)
-                    del candidates[path]
-                    self._reported.add((path, *key))
-                    self.emit(
-                        {
-                            "event": "file",
-                            "path": path,
-                            "name": Path(path).name,
-                            "size": info.st_size,
-                            "mtime": info.st_mtime,
-                            **extra,
-                        }
-                    )
+                if seen is None or seen[0] != version:
+                    seen = candidates[path] = (version, now)
+                newest = max(info.st_mtime_ns, marker[1] if marker else 0) / 1e9
+                if now - seen[1] < settle or wall - newest < settle:
+                    continue
+                del candidates[path]
+                try:
+                    extra = self._verified(path, marker)
+                except OSError:
+                    continue  # unreadable for now: a candidate again at the next scan
+                if extra is None:
+                    self._held.add((path, version))
+                    continue
+                self._reported.add((path, *key))
+                self.emit(
+                    {
+                        "event": "file",
+                        "path": path,
+                        "name": Path(path).name,
+                        "size": info.st_size,
+                        "mtime": info.st_mtime,
+                        **extra,
+                    }
+                )
             for path in set(candidates) - set(found):
                 del candidates[path]
-            for path in set(self._waiting) - set(found):
-                del self._waiting[path]
             self._reported &= current
-            self._mismatched = {version for version in self._mismatched if version[:3] in current}
+            self._held &= versions
             deadline = time.monotonic() + (FILES_SETTLE_STEP if candidates else idle)
             while not self._stop.is_set() and not changed.is_set() and time.monotonic() < deadline:
                 changed.wait(min(0.2, max(deadline - time.monotonic(), 0.0)))

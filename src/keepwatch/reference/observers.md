@@ -50,7 +50,7 @@ Each settled file is reported once per (path, size, modification time) while the
 
 A missing directory is retried with the same backoff as a command, so an observer may be configured before its directory exists.
 
-With `marker = "sha256"` a file is reported only once `NAME.sha256` (sha256sum format) beside it has settled and matches; the event gains `sha256` and `marker`, and the markers themselves are never reported. A mismatch is logged once (an `observer.output` WARNING) and the file is reported after a corrected upload. The receiving end of a relay uses this (`keepwatch docs relay`).
+With `marker = "sha256"` a file is reported only once `NAME.sha256` (sha256sum format) beside it has settled and matches; the event gains `sha256` and `marker`, and the markers themselves are never reported. A mismatch is logged once (an `observer.output` WARNING) and the file is reported after a corrected upload. The marker is part of the file's version: when it appears or changes, the pair settles again (`settle`) and is checked then. A file without a matching marker costs nothing while it waits; it is checked again when the file or its marker changes (a filesystem notification, or the rescan every 30 seconds where notifications are missed, as on some network shares). The receiving end of a relay uses this (`keepwatch docs relay`).
 
 ### kind = "remote_files"
 
