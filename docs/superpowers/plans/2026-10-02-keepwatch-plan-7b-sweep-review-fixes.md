@@ -314,8 +314,6 @@ def test_files_pulled_before_delete_remote_are_deleted_too(linux1, make_watch, t
 
 
 def test_a_refused_delete_is_kept_and_not_retried(linux1, make_watch, tmp_path, xdg):
-    from keepwatch.recipes import pull
-
     if os.name == "nt":
         pytest.skip("symlinks")
     target = tmp_path / "elsewhere.tar.gz"
