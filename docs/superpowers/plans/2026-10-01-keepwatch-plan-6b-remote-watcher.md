@@ -1037,7 +1037,21 @@ from keepwatch.output import format_record
 from portable import PY, literal, toml_path
 
 FAKE_SSH = Path(__file__).resolve().with_name("fake_ssh.py")
-DEFAULT_SSH = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]
+DEFAULT_SSH = [
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=15",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=3",
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
+]
 
 
 @pytest.fixture(autouse=True)
@@ -1280,6 +1294,11 @@ SSH_DEFAULTS = (
     "ServerAliveInterval=15",
     "-o",
     "ServerAliveCountMax=3",
+    # No connection sharing: a ControlPersist master would outlive the ssh keepwatch stops and hold its pipes.
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
 )
 ```
 
@@ -1433,7 +1452,7 @@ settle = "30s"
 - **What it reports:** the same file events as `files`, plus `"sha256"` (computed remotely; `checksum = false` turns it off) and `"remote"`. Every settled file is reported once per connection, **including everything already there when it connects**, so after a reconnect it catches up; handled files must be recorded in a ledger.
 - **How it decides:** the same settle rules as `files`. It rescans every `interval` (2s), and at once when the host has inotify (used directly, without inotify-tools).
 - **Liveness:** the watcher prints a heartbeat after `heartbeat` (30s) without output; a connection that delivers nothing for `heartbeat_timeout` (default 3 × `heartbeat`) is closed and reopened. ssh also runs with `ServerAliveInterval=15` and `ConnectTimeout=15`, and every disconnect is retried with the observer backoff (5s up to 5 minutes).
-- **The ssh command:** `ssh [ssh_options] -T -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 [-p port] [-i identity] -- <remote> <python> -u -`. `observer.started` shows it in full.
+- **The ssh command:** `ssh [ssh_options] -T -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ControlMaster=no -o ControlPath=none [-p port] [-i identity] -- <remote> <python> -u -`. Connection sharing is off on purpose (a `ControlPersist` master in `~/.ssh/config` would outlive the connection keepwatch stops). `observer.started` shows the command in full.
 - **Which Python:** `remote_python = "auto"` runs `/usr/bin/python3` when it exists (the system interpreter, which on EL8 is 3.6), else `python3` from the remote PATH. Name another one when needed: `remote_python = "/opt/python3.11/bin/python3"`. Python 2 does not work.
 - **Login scripts:** any shell works (sh, bash, csh, tcsh): the watcher's options travel inside the program text, not through shell quoting. Lines a login script prints on stdout are logged as `observer.output`, never delivered.
 
@@ -1464,7 +1483,7 @@ with
 and writes the watcher's source to ssh's stdin, with its options prepended as one Python assignment
 (`KEEPWATCH_REMOTE_ARGS = "<json>"`) instead of a command-line argument, so nothing passes through the
 remote login shell's quoting (EDA hosts often use csh/tcsh). keepwatch also passes `-T`,
-`-o ConnectTimeout=15` and `--` before the host; the watcher's `hello` becomes an `observer.connected`
+`-o ConnectTimeout=15`, `-o ControlMaster=no -o ControlPath=none` (no connection sharing) and `--` before the host; the watcher's `hello` becomes an `observer.connected`
 record, and stdout lines other than file events (login-script banners) are logged, not delivered.
 ```
 
