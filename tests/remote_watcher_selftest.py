@@ -353,6 +353,32 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(results[os.path.abspath(path)]["event"], "failed")
         self.assertIn("ermission", results[os.path.abspath(path)]["reason"])
 
+    def test_delete_keeps_a_same_size_same_mtime_rewrite(self):
+        path = self.write("a.gz", b"one")
+        before = os.stat(path)
+        pulled = self.item(path)
+        pulled["sha256"] = hashlib.sha256(b"one").hexdigest()
+        with open(path, "wb") as handle:
+            handle.write(b"two")  # same size
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))  # and the exact same mtime, as cp -p leaves it
+        self.assertEqual(os.stat(path).st_mtime, pulled["mtime"])
+        self.assertEqual(self.delete([pulled])[pulled["path"]]["event"], "changed")
+        self.assertTrue(os.path.exists(path))
+
+    def test_delete_with_a_matching_sha256(self):
+        path = self.write("a.gz", b"one")
+        item = self.item(path)
+        item["sha256"] = hashlib.sha256(b"one").hexdigest()
+        self.assertEqual(self.delete([item])[item["path"]]["event"], "deleted")
+
+    def test_delete_results_carry_their_index(self):
+        first = self.write("a.gz")
+        second = os.path.join(self.dir, "never.gz")
+        options = {"mode": "delete", "dir": self.dir, "files": [self.item(first), {"path": second, "size": 1, "mtime": 1.5}]}
+        code, out, err = self.run_once(options)
+        lines = [json.loads(line) for line in out.decode("ascii").splitlines()]
+        self.assertEqual([(line["index"], line["event"]) for line in lines[:-1]], [(0, "deleted"), (1, "gone")])
+
 
 if __name__ == "__main__":
     unittest.main()

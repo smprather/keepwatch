@@ -15,8 +15,9 @@ Output, one JSON object per line, flushed at once:
   {"event": "heartbeat"}                                         after `heartbeat` seconds without output
 
 Delete mode ({"mode": "delete", "dir", "files": [{"path", "size", "mtime"}]}): deletes each file only if it is
-a regular file directly in `dir` (resolved, never through a symlink) whose size and mtime still match; prints
-{"event": "deleted" | "gone" | "changed" | "refused" | "failed", "path", "reason"?} per file, then
+a regular file directly in `dir` (resolved, never through a symlink) whose size and mtime still match (and
+sha256, when the item carries one); prints
+{"event": "deleted" | "gone" | "changed" | "refused" | "failed", "path", "reason"?, "index"} per file, then
 {"event": "done"}.
 Exit status: 0 when stdout is closed (keepwatch went away), 2 for bad options, a missing directory or an
 error while scanning (the message goes to stderr).
@@ -258,8 +259,19 @@ class Watcher(object):
                 pass
 
 
+def file_sha256(raw):
+    digest = hashlib.sha256()
+    with open(raw, "rb") as handle:
+        while True:
+            chunk = handle.read(CHUNK)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def delete_one(item, directory):
-    """Delete one pulled file if it is still exactly what was pulled. Returns the result line (without path)."""
+    """Delete one pulled file if it is still exactly what was pulled (size, mtime and, when given, sha256)."""
     raw = str(item.get("path", "")).encode("utf-8", "surrogateescape")
     if os.path.realpath(os.path.dirname(raw)) != directory:
         return {"event": "refused", "reason": "not directly in " + decode(directory)}
@@ -273,6 +285,13 @@ def delete_one(item, directory):
         return {"event": "refused", "reason": "not a regular file"}
     if info.st_size != item.get("size") or info.st_mtime != float(item.get("mtime", -1)):
         return {"event": "changed"}
+    expected = item.get("sha256")
+    if expected:
+        try:
+            if file_sha256(raw) != expected:
+                return {"event": "changed", "reason": "its content differs from the pulled copy"}
+        except OSError as exc:
+            return {"event": "failed", "reason": exc.strerror or str(exc)}
     try:
         os.unlink(raw)
     except FileNotFoundError:
@@ -284,12 +303,13 @@ def delete_one(item, directory):
 
 def delete_files(options, output):
     directory = os.path.realpath(os.path.expanduser(options["dir"]).encode("utf-8", "surrogateescape"))
-    for item in options["files"]:
+    for index, item in enumerate(options["files"]):
         try:
             result = delete_one(item, directory)
         except Exception as exc:  # keep going: one odd entry must not stop the others
             result = {"event": "failed", "reason": str(exc)}
         result["path"] = item.get("path")
+        result["index"] = index
         output.send(result)
     output.send({"event": "done"})
     return 0
