@@ -38,3 +38,8 @@ def test_remote_is_stdlib_only():
     modules = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
     modules |= {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
     assert modules <= {"__future__", "collections", "importlib", "json", "os", "shlex", "typing", "keepwatch"}
+
+
+def test_with_known_hosts():
+    assert remote.with_known_hosts(["-o", "X=1"], None) == ["-o", "X=1"]
+    assert remote.with_known_hosts([], "C:/k h/kh") == ["-o", 'UserKnownHostsFile="C:/k h/kh"']

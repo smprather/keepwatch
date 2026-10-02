@@ -20,7 +20,8 @@ from keepwatch.ctx import LEDGER_NAME
 from keepwatch.durations import DurationError, format_duration, parse_duration
 from keepwatch.hooks import HOOK_NAMES, WATCH_PY
 from keepwatch.paths import Paths
-from keepwatch.transfer import CONFLICTS, MARKERS, PROTOCOLS, known_hosts_option, parse_endpoint
+from keepwatch.remote import with_known_hosts
+from keepwatch.transfer import CONFLICTS, MARKERS, PROTOCOLS, parse_endpoint
 
 CONFIG_NAME = "config.toml"
 
@@ -450,9 +451,7 @@ def _recipe_observers(recipe: str, settings: Mapping[str, Any]) -> dict[str, Obs
                 settle=settings["settle"],
             )
         }
-    ssh_options = list(settings["ssh_options"])
-    if settings["known_hosts"]:
-        ssh_options += known_hosts_option(settings["known_hosts"])
+    ssh_options = with_known_hosts(settings["ssh_options"], settings["known_hosts"])
     return {
         "remote": ObserverConfig(
             name="remote",

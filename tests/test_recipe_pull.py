@@ -74,13 +74,15 @@ def test_pull_recipe_pulls_new_files_once(make_watch, server, tmp_path, xdg):
     assert second.outcome is Outcome.FALSE
 
 
-def test_pull_recipe_does_not_record_a_failed_pull(make_watch, server, tmp_path, xdg):
+def test_pull_recipe_does_not_record_a_mismatched_pull(make_watch, server, tmp_path, xdg):
     (server.root / "a.tar.gz").write_bytes(b"data")
     watch = load_watch_config(pull_watch(make_watch, server, tmp_path))
-    report = engine(xdg, []).poll(watch, WatchState(False), events=[file_event("a.tar.gz", b"data", sha="0" * 64)])
-    assert report.failed
+    records = []
+    report = engine(xdg, records).poll(watch, WatchState(False), events=[file_event("a.tar.gz", b"data", sha="0" * 64)])
+    assert not report.failed
     assert not list((tmp_path / "stage").iterdir())
     assert len(Ledger(xdg.watch_data_dir("relay-pull") / "ledgers" / "pulled.json")) == 0
+    assert any("after it was reported" in r["message"] for r in records if r["event"] == "plugin.log")
 
 
 def test_pull_recipe_ignores_other_events(make_watch, server, tmp_path, xdg):

@@ -80,7 +80,8 @@ def test_a_verified_pull_deletes_the_source(linux1, make_watch, tmp_path, xdg):
     assert report.outcome is Outcome.TRUE and not report.failed
     assert (tmp_path / "stage" / "a.tar.gz").read_bytes() == b"data"
     assert not source.exists()
-    assert len(ledger(xdg, "to_delete")) == 0 and len(ledger(xdg, "pulled")) == 1
+    assert len(ledger(xdg, "to_delete")) == 0 and len(ledger(xdg, "pulled")) == 0  # done: out of the skip list
+    assert len(ledger(xdg, "skipped")) == 1
     messages = [r["message"] for r in records if r["event"] == "plugin.log"]
     assert any(m.startswith("deleted a.tar.gz from u@127.0.0.1") for m in messages)
 
@@ -103,21 +104,61 @@ def test_a_failed_delete_is_retried_after_delete_retry(linux1, make_watch, tmp_p
     assert not source.exists() and len(ledger(xdg, "to_delete")) == 0
 
 
-def test_a_changed_source_is_kept(linux1, make_watch, tmp_path, xdg):
+def test_a_file_changed_before_its_pull_does_not_fail_the_poll(linux1, make_watch, tmp_path, xdg):
     source = linux1.root / "a.tar.gz"
     source.write_bytes(b"data")
     event = file_event(source)
-    watch = sweep_watch(make_watch, linux1, tmp_path, "delete_retry = '0s'\n")  # the queued key is due at once
-    source.write_bytes(b"changed after the observer reported it")  # different size: the pull fails its check
+    source.write_bytes(b"changed after the observer reported it")
     records = []
-    report = poll(xdg, watch, [event], records=records)
-    assert report.failed  # the pull's size check failed, so nothing was pulled or queued
-    assert source.exists() and len(ledger(xdg, "to_delete")) == 0
+    report = poll(xdg, sweep_watch(make_watch, linux1, tmp_path), [event], records=records)
+    assert not report.failed
+    assert source.exists() and len(ledger(xdg, "pulled")) == 0 and len(ledger(xdg, "to_delete")) == 0
+    assert any("changed on u@127.0.0.1 after it was reported" in r["message"] for r in records if r["event"] == "plugin.log")
+
+
+def test_a_changed_source_is_kept(linux1, make_watch, tmp_path, xdg):
     from keepwatch.recipes import pull
 
-    ledger(xdg, "to_delete").add(pull.event_key(event))  # queue the old version's key directly
-    records.clear()
-    second = poll(xdg, watch, [], records=records)
-    assert not second.failed and source.exists()
-    assert len(ledger(xdg, "to_delete")) == 0
-    assert any("changed on u@127.0.0.1" in r["message"] for r in records if r["event"] == "plugin.log")
+    source = linux1.root / "a.tar.gz"
+    source.write_bytes(b"data")
+    before = source.stat()
+    event = file_event(source)
+    key = pull.event_key(event)
+    source.write_bytes(b"datb")  # same size
+    os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))  # the exact same mtime: only the content differs
+    assert source.stat().st_mtime == event["mtime"]
+    ledger(xdg, "pulled").add(key)
+    ledger(xdg, "to_delete").add(pull.queue_key(key, event["sha256"]))
+    records = []
+    report = poll(xdg, sweep_watch(make_watch, linux1, tmp_path, "delete_retry = '0s'\n"), [], records=records)
+    assert not report.failed and source.read_bytes() == b"datb"
+    assert len(ledger(xdg, "to_delete")) == 0 and len(ledger(xdg, "pulled")) == 0
+    assert any("changed on u@127.0.0.1 since it was pulled" in r["message"] for r in records if r["event"] == "plugin.log")
+
+
+def test_files_pulled_before_delete_remote_are_deleted_too(linux1, make_watch, tmp_path, xdg):
+    from keepwatch.recipes import pull
+
+    source = linux1.root / "old.tar.gz"
+    source.write_bytes(b"old")
+    ledger(xdg, "pulled").add(pull.event_key(file_event(source)))  # pulled while delete_remote was off
+    report = poll(xdg, sweep_watch(make_watch, linux1, tmp_path), [])
+    assert report.outcome is Outcome.TRUE and not report.failed
+    assert not source.exists()
+
+
+def test_a_refused_delete_is_kept_and_not_retried(linux1, make_watch, tmp_path, xdg):
+    if os.name == "nt":
+        pytest.skip("symlinks")
+    target = tmp_path / "elsewhere.tar.gz"
+    target.write_bytes(b"x")
+    link = linux1.root / "link.tar.gz"
+    link.symlink_to(target)
+    info = os.lstat(link)
+    key = f"{link}|{info.st_size}|{info.st_mtime!r}"
+    ledger(xdg, "pulled").add(key)
+    watch = sweep_watch(make_watch, linux1, tmp_path, "delete_retry = '0s'\n")
+    first = poll(xdg, watch, [])
+    assert not first.failed and link.is_symlink() and target.exists()
+    assert key in ledger(xdg, "kept") and key in ledger(xdg, "pulled")
+    assert poll(xdg, watch, [], state=first.after).outcome is Outcome.FALSE  # nothing left to do
