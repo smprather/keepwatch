@@ -133,21 +133,24 @@ def test_a_changed_source_is_kept(linux1, make_watch, tmp_path, xdg):
     report = poll(xdg, sweep_watch(make_watch, linux1, tmp_path, "delete_retry = '0s'\n"), [], records=records)
     assert not report.failed and source.read_bytes() == b"datb"
     assert len(ledger(xdg, "to_delete")) == 0 and len(ledger(xdg, "pulled")) == 0
+    assert key not in ledger(xdg, "skipped")  # the new content is pulled at its next report
     assert any("changed on u@127.0.0.1 since it was pulled" in r["message"] for r in records if r["event"] == "plugin.log")
 
 
-def test_files_pulled_before_delete_remote_are_deleted_too(linux1, make_watch, tmp_path, xdg):
+def test_files_pulled_before_delete_remote_are_left_alone(linux1, make_watch, tmp_path, xdg):
     from keepwatch.recipes import pull
 
     source = linux1.root / "old.tar.gz"
     source.write_bytes(b"old")
     ledger(xdg, "pulled").add(pull.event_key(file_event(source)))  # pulled while delete_remote was off
     report = poll(xdg, sweep_watch(make_watch, linux1, tmp_path), [])
-    assert report.outcome is Outcome.TRUE and not report.failed
-    assert not source.exists()
+    assert report.outcome is Outcome.FALSE and not report.failed
+    assert source.exists()  # no sha256 was recorded for it, so it is not deleted
 
 
 def test_a_refused_delete_is_kept_and_not_retried(linux1, make_watch, tmp_path, xdg):
+    from keepwatch.recipes import pull
+
     if os.name == "nt":
         pytest.skip("symlinks")
     target = tmp_path / "elsewhere.tar.gz"
@@ -157,6 +160,7 @@ def test_a_refused_delete_is_kept_and_not_retried(linux1, make_watch, tmp_path, 
     info = os.lstat(link)
     key = f"{link}|{info.st_size}|{info.st_mtime!r}"
     ledger(xdg, "pulled").add(key)
+    ledger(xdg, "to_delete").add(pull.queue_key(key, None))
     watch = sweep_watch(make_watch, linux1, tmp_path, "delete_retry = '0s'\n")
     first = poll(xdg, watch, [])
     assert not first.failed and link.is_symlink() and target.exists()

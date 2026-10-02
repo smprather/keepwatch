@@ -6,8 +6,7 @@ the observer which files to skip when it reconnects.
 
 With delete_remote, each verified file is queued in "to_delete" (with the sha256 it was verified with) and
 deleted from the source host by keepwatch's remote helper, which first checks that it is still exactly that
-file. Done keys leave "pulled" for "skipped" (forgotten after 7 days; stale events for them are ignored);
-refused ones go to "kept". See keepwatch docs recipes.
+file. Deleted or gone keys leave "pulled" for "skipped" (forgotten after 7 days; stale events for them are ignored); changed ones just leave "pulled" (the new version is pulled when reported); refused ones go to "kept". Files pulled while delete_remote was off have no recorded sha256 and are never deleted. See keepwatch docs recipes.
 """
 
 from __future__ import annotations
@@ -55,17 +54,13 @@ def split_queue_key(entry: str) -> tuple[str, dict[str, Any]]:
 
 
 def due_deletions(ctx: Ctx) -> list[str]:
-    """Queued deletions due for an attempt, plus pulled files never queued (pulled before delete_remote, or a crash)."""
+    """Queued deletions due for an attempt (only files pulled and verified while delete_remote was on are queued)."""
     settings = ctx.settings
     if not settings["delete_remote"]:
         return []
     pending = ctx.ledger(TO_DELETE)
     now = datetime.now(timezone.utc)
-    due = [entry for entry in pending if (now - pending.added_at(entry)).total_seconds() >= settings["delete_retry"]]
-    queued = {entry.rsplit("|", 1)[0] for entry in pending}
-    kept = ctx.ledger(KEPT)
-    due += [queue_key(key, None) for key in ctx.ledger(LEDGER) if key not in queued and key not in kept]
-    return due
+    return [entry for entry in pending if (now - pending.added_at(entry)).total_seconds() >= settings["delete_retry"]]
 
 
 def delete_remote(ctx: Ctx, entries: list[str]) -> None:
@@ -89,7 +84,12 @@ def delete_remote(ctx: Ctx, entries: list[str]) -> None:
     try:
         completed = ctx.run(argv, input=watcher_source(options), check=False)
         stdout, stderr = completed.stdout, completed.stderr
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired as exc:
+        # Keep what the helper reported before the deadline: files it already deleted are not retried.
+        output = exc.stdout or b""
+        stdout = output.decode("utf-8", "replace") if isinstance(output, bytes) else output
+        stderr = "timed out (raise action_timeout: the helper re-reads each file to check it)"
+    except OSError as exc:
         stdout, stderr = "", str(exc)
     results: dict[int, dict[str, Any]] = {}
     for line in stdout.splitlines():
@@ -103,16 +103,18 @@ def delete_remote(ctx: Ctx, entries: list[str]) -> None:
         name = item["path"].rsplit("/", 1)[-1]
         result = results.get(index)
         event = result["event"] if result else None
-        if event in ("deleted", "gone", "changed"):
+        if event in ("deleted", "gone"):
             pending.discard(entry)
             pulled.discard(key)
             skipped.add(key)
             if event == "deleted":
                 ctx.log.info("deleted %s from %s", name, remote)
-            elif event == "gone":
-                ctx.log.info("%s was already gone from %s", name, remote)
             else:
-                ctx.log.warning("%s changed on %s since it was pulled; kept there", name, remote)
+                ctx.log.info("%s was already gone from %s", name, remote)
+        elif event == "changed":
+            pending.discard(entry)
+            pulled.discard(key)  # not skipped: the new content is pulled when it is reported
+            ctx.log.warning("%s changed on %s since it was pulled; kept there", name, remote)
         elif event == "refused":
             pending.discard(entry)
             kept.add(key)
@@ -167,11 +169,11 @@ def on_true(ctx: Ctx) -> None:
                 # The file changed after it was reported; its new version comes as a new event.
                 ctx.log.warning("%s changed on %s after it was reported (%s); not pulled", item["name"], settings["remote"], exc)
                 continue
-            pulled.add(item["key"])
-            if queue is not None:
+            if queue is not None:  # queued first: a crash before the next line still gets the file deleted
                 entry = queue_key(item["key"], sha256)
                 queue.add(entry)
                 fresh.append(entry)
+            pulled.add(item["key"])
             ctx.log.info("pulled %s", item["name"], extra={"local": str(final), "size": item["size"]})
     except Exception as exc:  # deletes below still run for what was pulled; the error is raised after them
         error = exc
