@@ -44,7 +44,7 @@ Keyword arguments of `copy`, `pull` and `push` (`--option` for `keepwatch kit`):
 | Option | Meaning |
 |---|---|
 | `password_env` | Name of the environment variable holding the password. Default: keys only. |
-| `identity` | A private key file (`ssh -i`); ssh then offers only that key. On Windows the file must be readable by you alone, or OpenSSH ignores it ("bad permissions"): `icacls KEY /inheritance:r /grant:r "%USERNAME%:F"` (keys made by ssh-keygen in `~\.ssh` already are). |
+| `identity` | A private key file (`ssh -i`); ssh then offers only that key. On Windows the file must be readable by you alone, or OpenSSH ignores it ("bad permissions"): `icacls KEY /inheritance:r /grant:r "%USERNAME%:F"` (keys made by ssh-keygen in `~\.ssh` already are). If ssh then says "Try removing permissions for user: OWNER RIGHTS", also run `icacls KEY /remove:g *S-1-3-4`. |
 | `known_hosts` | A known_hosts file to check host keys against (default: ssh's own, `~/.ssh/known_hosts`). |
 | `port` | ssh port for `user@host:path` endpoints. |
 | `protocol` | `"scp"` (default): the classic protocol, which scp-only servers accept; keepwatch adds `-O` on OpenSSH 9 and newer, where scp otherwise speaks SFTP. `"sftp"`: needs OpenSSH 9+. |
@@ -64,7 +64,7 @@ keepwatch hands it to scp through `SSH_ASKPASS` (with `SSH_ASKPASS_REQUIRE=force
 
 ## Errors
 
-- **Remote login scripts must print nothing** for non-interactive sessions: an `echo` in the remote `.cshrc`/`.bashrc` corrupts scp in both protocols ("Received message too long"). Guard it: `if ($?prompt) then … endif` in csh/tcsh, `case $- in *i*) … ;; esac` in sh/bash. (The remote watcher of `remote_files` tolerates such output; scp cannot.) File names with spaces or shell characters are fine: keepwatch backslash-escapes remote paths.
+- **Remote login scripts must print nothing** for non-interactive sessions: an `echo` in the remote `.cshrc`/`.bashrc` corrupts scp in both protocols ("Received message too long"). Guard it: `if ($?prompt) then … endif` in csh/tcsh, `case $- in *i*) … ;; esac` in sh/bash. (The remote watcher of `remote_files` tolerates such output; scp cannot.) File names with spaces or shell characters work: keepwatch writes remote paths the way each scp needs them (backslash escapes with the classic protocol on Linux; on Windows, where Windows' scp turns backslashes into slashes, `?` wildcards for pulls and quotes for pushes; plain names with SFTP). A name holding both kinds of quotes cannot be pushed with the classic protocol from Windows; use `protocol = "sftp"` or rename it.
 - scp failing (wrong password: "Permission denied"; unknown host key: "Host key verification failed"; missing file; network) raises `keepwatch.CommandFailed` with scp's last stderr lines, and `keepwatch kit` exits 1 with them on stderr.
 - Anything keepwatch refuses or a failed check (sha256, size, conflict, unset password variable, a check trying to transfer, no time left) raises `keepwatch.TransferFailed` (exit 1 for `keepwatch kit`).
 - An action that raises fails the poll: the watch backs off and retries, and observer events stay queued until a poll succeeds.
