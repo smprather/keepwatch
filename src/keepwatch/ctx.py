@@ -27,8 +27,7 @@ if TYPE_CHECKING:
     from keepwatch.transfer import Transfer
 
 Emit = Callable[[dict[str, Any]], None]
-_LEDGER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
-LEDGER_NAME = _LEDGER_NAME  # public: config.py validates ledger names with it
+LEDGER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
 class Unknown(Exception):
@@ -318,7 +317,7 @@ class Ctx:
         `expire` is a duration ("90d"); entries older than that are forgotten.
         Read-only inside check().
         """
-        if not _LEDGER_NAME.fullmatch(name):
+        if not LEDGER_NAME.fullmatch(name):
             raise ValueError(f"invalid ledger name {name!r}: use letters, digits, '_', '.', '-'")
         seconds = None if expire is None else parse_duration(expire)
         return Ledger(ledger_file(self._data_dir, name), expire=seconds, writable=self.hook != "check")

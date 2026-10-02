@@ -76,3 +76,4 @@ def test_install_checks_the_registered_program_too(xdg, monkeypatch, tmp_path):
     monkeypatch.setattr(installcheck, "service_check_argv", lambda: [str(program), "--version"])
     result = run("install", "--dry-run")
     assert result.exit_code == 1 and "uv's cache" in result.output
+    assert "the program the login service would run" in result.output

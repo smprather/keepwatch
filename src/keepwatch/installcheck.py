@@ -53,13 +53,15 @@ def _inside(path: Path, parent: Path) -> bool:
         return False
 
 
-def transient_reason(prefix: Path, *, cache_dirs: Sequence[Path], temp_dir: Path) -> str | None:
+def transient_reason(
+    prefix: Path, *, cache_dirs: Sequence[Path], temp_dir: Path, subject: str = "this keepwatch"
+) -> str | None:
     """Why the environment at `prefix` (sys.prefix) will not last, or None."""
     for cache in cache_dirs:
         if _inside(prefix, cache):
-            return f"this keepwatch runs from uv's cache ({prefix}): uvx and `uv run --with` environments are pruned later"
+            return f"{subject} runs from uv's cache ({prefix}): uvx and `uv run --with` environments are pruned later"
     if _inside(prefix, temp_dir):
-        return f"this keepwatch runs from the temporary directory ({prefix})"
+        return f"{subject} runs from the temporary directory ({prefix})"
     return None
 
 

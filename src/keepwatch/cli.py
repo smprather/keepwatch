@@ -754,18 +754,19 @@ def _install_windows(app: App, dry_run: bool) -> None:
 
 def _install_problem(force: bool) -> str | None:
     """Why the login service would break, or None (see keepwatch.installcheck)."""
+    argv = installcheck.service_check_argv()
     if not force:
         caches, temp = installcheck.uv_cache_dirs(os.environ), Path(tempfile.gettempdir())
-        program = Path(installcheck.service_check_argv()[0])
-        reason = None
-        for candidate in (Path(sys.prefix), program):  # the program the service will run may live elsewhere
-            reason = reason or installcheck.transient_reason(candidate, cache_dirs=caches, temp_dir=temp)
+        reason = installcheck.transient_reason(Path(sys.prefix), cache_dirs=caches, temp_dir=temp)
+        reason = reason or installcheck.transient_reason(
+            Path(argv[0]), cache_dirs=caches, temp_dir=temp, subject="the program the login service would run"
+        )
         if reason is not None:
             return (
                 f"{reason}, and the login service would stop working when it disappears. Install keepwatch for good "
                 "with `uv tool install keepwatch` and run `keepwatch install` from there (or pass --force)."
             )
-    problem = installcheck.verify_command(installcheck.service_check_argv(), os.environ)
+    problem = installcheck.verify_command(argv, os.environ)
     if problem is not None:
         return f"the login service would run a command that does not work: {problem}"
     return None
@@ -954,8 +955,8 @@ def _scp(protocol, password_env, identity, known_hosts, port, ssh_options, timeo
         raise click.UsageError(str(exc)) from None
 
 
-def _kit_run(action, *, transfers: bool = True) -> None:
-    if transfers and os.environ.get("KEEPWATCH_HOOK") == "check":
+def _kit_run(action) -> None:
+    if os.environ.get("KEEPWATCH_HOOK") == "check":
         _fail("a check must not transfer files; do it in an action (keepwatch kit tcp-open is fine in a check)")
     try:
         result = action()

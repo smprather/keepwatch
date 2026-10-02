@@ -253,7 +253,6 @@ _OBSERVER_KIND_KEYS = {
 _OBSERVER_REQUIRED = {"command": ("command",), "files": ("path",), "remote_files": ("remote", "dir")}
 _OBSERVER_NON_EMPTY = ("path", "remote", "dir", "remote_python")
 _OBSERVER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
-_LEDGER = LEDGER_NAME
 
 
 @dataclass(frozen=True)
@@ -370,6 +369,14 @@ def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any],
             continue
         if name in ("port", "reachable_port") and not 1 <= converted <= 65535:
             collector.add(f"'{name}' must be between 1 and 65535, got {converted}", key=name, table="settings", topic="recipes")
+            continue
+        if name == "ssh_options" and converted and not converted[0].startswith("-"):
+            collector.add(
+                f"'ssh_options' are scp arguments and must start with an option, e.g. ['-o', {converted[0]!r}]",
+                key=name,
+                table="settings",
+                topic="recipes",
+            )
             continue
         values[name] = converted
     for name in _RECIPE_REQUIRED[recipe]:
@@ -698,7 +705,7 @@ def _observer(collector: _Collector, name: str, raw: dict[str, Any], watch_dir: 
                 f"'port' must be between 1 and 65535, got {converted}", key="port", table=table, topic="observers"
             )
             continue
-        if key_name == "skip_ledger" and not _LEDGER.fullmatch(converted):
+        if key_name == "skip_ledger" and not LEDGER_NAME.fullmatch(converted):
             collector.add(
                 f"'skip_ledger' must be a ledger name (letters, digits, '_', '.', '-'), got {converted!r}",
                 key="skip_ledger",
