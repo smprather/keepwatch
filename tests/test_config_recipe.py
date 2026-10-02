@@ -127,3 +127,13 @@ def test_pull_on_conflict_must_be_a_choice(make_watch):
 def test_recipe_ssh_options_must_start_with_an_option(make_watch):
     [problem] = problems(make_watch, PUSH + 'ssh_options = ["ProxyJump=bastion"]\n')
     assert "'ssh_options' are scp arguments" in problem and "['-o', 'ProxyJump=bastion']" in problem
+
+
+def test_delete_remote_needs_checksum(make_watch):
+    [problem] = problems(make_watch, PULL + "delete_remote = true\nchecksum = false\n")
+    assert "delete_remote = true needs checksum = true" in problem
+
+
+def test_delete_remote_defaults(make_watch):
+    settings = load(make_watch, PULL).settings
+    assert (settings["delete_remote"], settings["delete_retry"]) == (False, 600.0)

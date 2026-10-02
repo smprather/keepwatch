@@ -1,0 +1,123 @@
+import hashlib
+import os
+import shutil
+import time
+from pathlib import Path
+
+import pytest
+
+from keepwatch.config import load_global_config, load_watch_config
+from keepwatch.ctx import Ledger
+from keepwatch.pollengine import PollEngine
+from keepwatch.runner import Runner
+from keepwatch.state import Outcome, WatchState
+from portable import PY, literal, toml_path
+from scp_server import ScpServer
+
+pytestmark = [pytest.mark.posix_only, pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")]
+FAKE_SSH = Path(__file__).resolve().with_name("fake_ssh.py")
+
+
+@pytest.fixture
+def linux1(tmp_path):
+    root = tmp_path / "linux1"
+    root.mkdir()
+    (tmp_path / "keys").mkdir()
+    server = ScpServer(root, tmp_path / "keys", chroot=False).start()
+    yield server
+    server.stop()
+
+
+def sweep_watch(make_watch, server, tmp_path, extra=""):
+    config = tmp_path / "ssh_config"
+    config.write_text("", encoding="utf-8")
+    return load_watch_config(
+        make_watch(
+            "sweep",
+            config=(
+                'recipe = "pull"\n[settings]\nremote = "u@127.0.0.1"\n'
+                f"remote_dir = {toml_path(server.root)}\nlocal_dir = {toml_path(tmp_path / 'stage')}\n"
+                f"port = {server.port}\nidentity = {toml_path(server.client_key)}\n"
+                f"known_hosts = {toml_path(server.known_hosts)}\nremote_python = {literal(PY)}\n"
+                f"ssh_command = [{literal(PY)}, {toml_path(FAKE_SSH)}]\n"
+                f"ssh_options = ['-F', {toml_path(config)}, '-o', 'IdentityAgent=none']\n"
+                f"delete_remote = true\n{extra}"
+            ),
+        )
+    )
+
+
+def file_event(path):
+    info = path.stat()
+    return {
+        "event": "file",
+        "path": str(path),
+        "name": path.name,
+        "size": info.st_size,
+        "mtime": info.st_mtime,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "observer": "remote",
+        "received": "2026-10-02T00:00:00.000+00:00",
+    }
+
+
+def poll(xdg, watch, events=(), state=None, records=None):
+    global_config = load_global_config(xdg.config_file, xdg)
+    sink = records.append if records is not None else (lambda record: None)
+    engine = PollEngine(runner=Runner(), paths=xdg, global_config=global_config, sink=sink, pid=os.getpid())
+    return engine.poll(watch, state or WatchState(False), events=list(events))
+
+
+def ledger(xdg, name):
+    return Ledger(xdg.watch_data_dir("sweep") / "ledgers" / f"{name}.json")
+
+
+def test_a_verified_pull_deletes_the_source(linux1, make_watch, tmp_path, xdg):
+    source = linux1.root / "a.tar.gz"
+    source.write_bytes(b"data")
+    records = []
+    report = poll(xdg, sweep_watch(make_watch, linux1, tmp_path), [file_event(source)], records=records)
+    assert report.outcome is Outcome.TRUE and not report.failed
+    assert (tmp_path / "stage" / "a.tar.gz").read_bytes() == b"data"
+    assert not source.exists()
+    assert len(ledger(xdg, "to_delete")) == 0 and len(ledger(xdg, "pulled")) == 1
+    messages = [r["message"] for r in records if r["event"] == "plugin.log"]
+    assert any(m.startswith("deleted a.tar.gz from u@127.0.0.1") for m in messages)
+
+
+def test_a_failed_delete_is_retried_after_delete_retry(linux1, make_watch, tmp_path, xdg):
+    source = linux1.root / "a.tar.gz"
+    source.write_bytes(b"data")
+    watch = sweep_watch(make_watch, linux1, tmp_path, "delete_retry = '1s'\n")
+    os.chmod(linux1.root, 0o500)
+    try:
+        first = poll(xdg, watch, [file_event(source)])
+        assert first.outcome is Outcome.TRUE and not first.failed
+        assert source.exists() and len(ledger(xdg, "to_delete")) == 1
+        assert poll(xdg, watch, [], state=first.after).outcome is Outcome.FALSE  # not due yet
+    finally:
+        os.chmod(linux1.root, 0o700)
+    time.sleep(1.2)
+    retry = poll(xdg, watch, [], state=first.after)
+    assert retry.outcome is Outcome.TRUE and not retry.failed
+    assert not source.exists() and len(ledger(xdg, "to_delete")) == 0
+
+
+def test_a_changed_source_is_kept(linux1, make_watch, tmp_path, xdg):
+    source = linux1.root / "a.tar.gz"
+    source.write_bytes(b"data")
+    event = file_event(source)
+    watch = sweep_watch(make_watch, linux1, tmp_path, "delete_retry = '0s'\n")  # the queued key is due at once
+    source.write_bytes(b"changed after the observer reported it")  # different size: the pull fails its check
+    records = []
+    report = poll(xdg, watch, [event], records=records)
+    assert report.failed  # the pull's size check failed, so nothing was pulled or queued
+    assert source.exists() and len(ledger(xdg, "to_delete")) == 0
+    from keepwatch.recipes import pull
+
+    ledger(xdg, "to_delete").add(pull.event_key(event))  # queue the old version's key directly
+    records.clear()
+    second = poll(xdg, watch, [], records=records)
+    assert not second.failed and source.exists()
+    assert len(ledger(xdg, "to_delete")) == 0
+    assert any("changed on u@127.0.0.1" in r["message"] for r in records if r["event"] == "plugin.log")

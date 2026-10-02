@@ -319,6 +319,19 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
             "When local_dir already holds a different file of that name (a newer version arrived before the old "
             "one was pushed): `rename` the new one to NAME-1.ext, `overwrite` the old one, or `skip-identical` (fail).",
         ),
+        Key(
+            "delete_remote",
+            "bool",
+            False,
+            "Delete each file from the source host once its copy in local_dir is verified (size and sha256) and "
+            "recorded. Only an unchanged regular file directly in remote_dir is deleted. Needs checksum = true.",
+        ),
+        Key(
+            "delete_retry",
+            "duration",
+            600.0,
+            "With delete_remote: retry a delete that failed (permissions, host away) after this long.",
+        ),
         Key("remote_python", "str", "auto", "The source host's Python 3.6+ (see `keepwatch docs observers`)."),
         *_SSH_SETTINGS,
         Key("ssh_command", "argv", None, 'The ssh program for the observer. Default: ["ssh"].'),
@@ -385,6 +398,13 @@ def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any],
     for name in _RECIPE_PATHS:
         if isinstance(values.get(name), str) and values[name]:
             values[name] = str(_observed_path(values[name], watch_dir))
+    if recipe == "pull" and values["delete_remote"] and not values["checksum"]:
+        collector.add(
+            "delete_remote = true needs checksum = true: the only other copy may go only after a verified pull",
+            key="delete_remote",
+            table="settings",
+            topic="recipes",
+        )
     if recipe == "push":
         try:
             dest_remote = not values["dest"] or parse_endpoint(values["dest"]).remote
