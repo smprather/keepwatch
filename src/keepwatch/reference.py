@@ -159,6 +159,7 @@ def _members(owner: type, prefix: str) -> list[str]:
 
 def ctx_topic() -> str:
     from keepwatch.ctx import Ctx, Ledger
+    from keepwatch.transfer import Transfer
 
     lines = [narrative("ctx"), "", "## Methods and properties", ""]
     lines += _members(Ctx, "ctx.")
@@ -171,6 +172,8 @@ def ctx_topic() -> str:
         "",
     ]
     lines += _members(Ledger, "ledger.")
+    lines += ["## ctx.transfer", "", inspect.getdoc(Transfer) or "", ""]
+    lines += _members(Transfer, "ctx.transfer.")
     return "\n".join(lines).rstrip()
 
 

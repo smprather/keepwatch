@@ -83,8 +83,10 @@ def test_every_config_key_is_documented():
 
 
 def test_every_public_ctx_and_ledger_member_is_documented():
+    from keepwatch.transfer import Transfer
+
     text = render_topic("ctx")
-    for owner, prefix in ((Ctx, "ctx."), (Ledger, "ledger.")):
+    for owner, prefix in ((Ctx, "ctx."), (Ledger, "ledger."), (Transfer, "ctx.transfer.")):
         for name, member in inspect.getmembers(owner):
             if name.startswith("_"):
                 continue

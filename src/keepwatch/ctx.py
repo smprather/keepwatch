@@ -17,11 +17,14 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from keepwatch import platform
 from keepwatch.durations import parse_duration
 from keepwatch.protocol import clip
+
+if TYPE_CHECKING:
+    from keepwatch.transfer import Transfer
 
 Emit = Callable[[dict[str, Any]], None]
 _LEDGER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -209,6 +212,23 @@ class Ctx:
         """Run-only scratch space, deleted when the keepwatch process exits; created on first access."""
         self._run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         return self._run_dir
+
+    @property
+    def transfer(self) -> Transfer:
+        """scp transfers (copy, pull, push) and tcp_open, logged like ctx.run; see `keepwatch docs transfers`."""
+        from keepwatch.transfer import Transfer
+
+        return Transfer(
+            base=self.watch_dir,
+            report=self._report_transfer,
+            remaining=self._remaining,
+            writable=self.hook != "check",
+        )
+
+    def _report_transfer(
+        self, argv: list[str], exit_code: int | None, timed_out: bool, duration: float, stdout: str, stderr: str
+    ) -> None:
+        self._report(argv, False, exit_code, timed_out, duration, stdout, stderr)
 
     def _remaining(self) -> float:
         return max(self._deadline - time.time(), 0.0)

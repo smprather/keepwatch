@@ -20,6 +20,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from keepwatch import platform
 from keepwatch.ctx import CommandFailed
@@ -385,3 +386,82 @@ def tcp_open(host: str, port: int = 22, timeout: float = 5.0) -> bool:
             return True
     except OSError:
         return False
+
+
+class Transfer:
+    """Transfers for hooks, as `ctx.transfer`: relative local paths start at the watch directory, every scp run
+    is logged as a `command` record (like ctx.run), and the hook's remaining time caps `timeout`.
+
+    Options (keyword arguments of copy, pull and push): protocol ("scp" or "sftp"), password_env (the name
+    of an environment variable holding the password), identity (a private key file), known_hosts (a
+    known_hosts file), port, ssh_options (extra scp arguments), timeout (seconds). A check may only use
+    tcp_open: transferring files changes things, which a check must not do.
+    """
+
+    def __init__(
+        self,
+        *,
+        base: Path,
+        report: Report | None = None,
+        remaining: Callable[[], float] | None = None,
+        writable: bool = True,
+    ) -> None:
+        self._base = base
+        self._report = report
+        self._remaining = remaining
+        self._writable = writable
+
+    def _options(self, options: dict[str, Any]) -> ScpOptions:
+        if not self._writable:
+            raise TransferFailed("a check must not transfer files; do it in an action (ctx.transfer.tcp_open is fine)")
+        timeout = options.pop("timeout", None)
+        if self._remaining is not None:
+            left = self._remaining()
+            if left <= 0:
+                raise TransferFailed("no time left in this hook for a transfer (raise action_timeout)")
+            timeout = left if timeout is None else min(timeout, left)
+        return ScpOptions(timeout=timeout, **options)
+
+    def _local(self, value: str | os.PathLike[str] | Endpoint) -> Endpoint:
+        endpoint = _endpoint(value)
+        if endpoint.remote or Path(endpoint.path).is_absolute():
+            return endpoint
+        return Endpoint(path=str(self._base / endpoint.path))
+
+    def copy(self, source: str | os.PathLike[str], destination: str | os.PathLike[str], **options: Any) -> None:
+        """Copy one file with scp; one side must be remote (user@host:path or scp://user@host:port/path)."""
+        scp = self._options(options)
+        copy(self._local(source), self._local(destination), options=scp, report=self._report)
+
+    def pull(
+        self,
+        remote: str,
+        local_dir: str | os.PathLike[str],
+        *,
+        size: int | None = None,
+        sha256: str | None = None,
+        on_conflict: str = "skip-identical",
+        **options: Any,
+    ) -> Path:
+        """Copy `remote` into local_dir through `.NAME.part`, verify size/sha256 when given, rename; returns the path.
+
+        An existing file with the given sha256 makes this a no-op; any other existing file is an error unless
+        on_conflict is "rename" (NAME-1.ext) or "overwrite".
+        """
+        scp = self._options(options)
+        directory = Path(local_dir)
+        if not directory.is_absolute():
+            directory = self._base / directory
+        return pull(remote, directory, size=size, sha256=sha256, on_conflict=on_conflict, options=scp, report=self._report)
+
+    def push(self, path: str | os.PathLike[str], remote_dir: str, *, marker: str = "sha256", **options: Any) -> str:
+        """Upload a file into remote_dir, then NAME.sha256 (sha256sum format) unless marker="none"; returns the remote path."""
+        scp = self._options(options)
+        local = Path(path)
+        if not local.is_absolute():
+            local = self._base / local
+        return push(local, remote_dir, marker=marker, options=scp, report=self._report)
+
+    def tcp_open(self, host: str, port: int = 22, timeout: float = 5.0) -> bool:
+        """True when host:port accepts a TCP connection within `timeout` seconds (allowed in a check)."""
+        return tcp_open(host, port, timeout)
