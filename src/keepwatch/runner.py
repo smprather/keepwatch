@@ -517,7 +517,10 @@ class Runner:
         return _WorkerRun(returncode, timed_out, out, err, messages, process)
 
     def _run_python(self, call: HookCall) -> HookResult:
-        target = f"watch.py:{call.hook}" if call.mode == "call" else "watch.py (describe)"
+        if call.watch.recipe is not None:
+            target = f"recipe {call.watch.recipe}:{call.hook}"
+        else:
+            target = f"watch.py:{call.hook}" if call.mode == "call" else "watch.py (describe)"
         started = time.monotonic()
         dependencies = call.watch.python_dependencies
         if dependencies and not self.uv:
@@ -538,6 +541,7 @@ class Runner:
             "deadline": deadline,
             "capture_bytes": call.capture_bytes,
             "mode": call.mode,
+            "recipe": call.watch.recipe,
         }
         env = self._environment(call)
         env["PYTHONUNBUFFERED"] = "1"

@@ -44,3 +44,13 @@ def resolve_hooks(watch_dir: Path, command_hooks: Collection[str]) -> tuple[froz
         names = ", ".join(sorted(both))
         return python | commands, f"defined both in watch.py and in [hooks] of config.toml: {names} (keep one)"
     return python | commands, None
+
+
+RECIPE_HOOKS = {"pull": frozenset({CHECK, "on_true"}), "push": frozenset({CHECK, "on_true"})}
+
+
+def watch_hooks(watch_dir: Path, command_hooks: Collection[str], recipe: str | None) -> tuple[frozenset[str], str | None]:
+    """The hooks a watch has: its recipe's, or those of watch.py and [hooks] (with a problem message if broken)."""
+    if recipe is not None:
+        return RECIPE_HOOKS[recipe], None
+    return resolve_hooks(watch_dir, command_hooks)

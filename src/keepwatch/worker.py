@@ -8,6 +8,7 @@ result pipe.
 from __future__ import annotations
 
 import argparse
+import importlib
 import importlib.util
 import json
 import logging
@@ -101,19 +102,21 @@ def run_request(request: dict[str, Any], send: Send) -> dict[str, Any]:
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
     logger.addHandler(_PipeHandler(send))
+    recipe = request.get("recipe")
     try:
-        module = _load_module(watch_dir)
+        module = importlib.import_module(f"keepwatch.recipes.{recipe}") if recipe else _load_module(watch_dir)
     except BaseException as exc:
+        source = f"recipe {recipe}" if recipe else WATCH_PY
         return {
             "status": "error",
-            "reason": f"importing watch.py failed: {type(exc).__name__}: {exc}",
+            "reason": f"importing {source} failed: {type(exc).__name__}: {exc}",
             "exception": _exception_info(exc),
         }
     if request.get("mode") == "describe":
         return {"status": "ok", "hooks": sorted(name for name in HOOK_NAMES if callable(getattr(module, name, None)))}
     function = getattr(module, hook, None)
     if not callable(function):
-        return {"status": "error", "reason": f"watch.py has no function {hook}()"}
+        return {"status": "error", "reason": f"{f'recipe {recipe}' if recipe else WATCH_PY} has no function {hook}()"}
     ctx = Ctx(
         watch=request["watch"],
         hook=hook,

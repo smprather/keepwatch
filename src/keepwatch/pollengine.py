@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from keepwatch.config import GlobalConfig, WatchConfig
-from keepwatch.hooks import CHECK, NO_CHECK, resolve_hooks
+from keepwatch.hooks import CHECK, NO_CHECK, watch_hooks
 from keepwatch.logstore import Sink, make_record
 from keepwatch.paths import Paths
 from keepwatch.runner import FAILED_STATUSES, HookCall, HookResult, Runner
@@ -119,7 +119,7 @@ class PollEngine:
         tag = {"watch": watch.name, "poll_id": poll_id}
         faked = fake is not None
         self._sink(make_record("poll.start", **tag, condition=state.condition, faked=faked, dry_run=dry_run, trial=trial, events=len(events)))
-        hooks, problem = resolve_hooks(watch.watch_dir, watch.hooks)
+        hooks, problem = watch_hooks(watch.watch_dir, watch.hooks, watch.recipe)
         if problem is None and fake is None and CHECK not in hooks:
             problem = NO_CHECK
         if problem is not None:

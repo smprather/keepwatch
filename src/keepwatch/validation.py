@@ -62,6 +62,15 @@ def check_watch(watch_dir: Path, global_config: GlobalConfig, runner: Runner, pa
     except ConfigError as exc:
         report.problems.extend(str(problem) for problem in exc.problems)
         return report
+    if watch.recipe is not None:
+        search = {**os.environ, **global_config.environment, **watch.environment}.get("PATH", "")
+        for program in ("ssh", "scp") if watch.recipe == "pull" else ("scp",):
+            if not shutil.which(program, path=search):
+                report.problems.append(
+                    f"{watch.config_file}: recipe = \"{watch.recipe}\" needs OpenSSH '{program}' on PATH; "
+                    "see: keepwatch docs transfers"
+                )
+        return report
     hooks, problem = resolve_hooks(watch_dir, watch.hooks)
     source = watch_dir / WATCH_PY
     if problem is not None:
