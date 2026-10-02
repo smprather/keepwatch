@@ -65,11 +65,9 @@ class ScpServer:
         client_key.write_private_key(str(self.client_key))
         if os.name == "nt":
             # Windows OpenSSH ignores a private key that other accounts can read ("bad permissions").
-            subprocess.run(
-                ["icacls", str(self.client_key), "/inheritance:r", "/grant:r", f"{getpass.getuser()}:F"],
-                check=True,
-                capture_output=True,
-            )
+            # pytest's temp dirs also give files an explicit OWNER RIGHTS entry, which OpenSSH rejects too.
+            for change in (["/inheritance:r", "/grant:r", f"{getpass.getuser()}:F"], ["/remove:g", "*S-1-3-4"]):
+                subprocess.run(["icacls", str(self.client_key), *change], check=True, capture_output=True)
         else:
             self.client_key.chmod(0o600)
         authorized = asyncssh.import_authorized_keys(client_key.export_public_key().decode())
