@@ -1,14 +1,17 @@
 """Observers: event sources the service keeps running for a watch (see `keepwatch docs observers`).
 
-A command observer runs a long-lived program and turns each line it prints into an event. Each
-observer runs on its own thread, restarts its source with backoff when it stops, and hands events
-to a `deliver` callback.
+A command observer runs a long-lived program and turns each line it prints into an event; a files
+observer reports settled files in a local directory. Each observer runs on its own thread, restarts
+its source with backoff when it stops, and hands events to a `deliver` callback.
 """
 
 from __future__ import annotations
 
 import contextlib
+import fnmatch
 import json
+import os
+import stat
 import subprocess
 import threading
 import time
@@ -17,6 +20,9 @@ from collections import deque
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import IO, Any
+
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
+from watchdog.observers import Observer as NativeObserver
 
 from keepwatch import platform
 from keepwatch.config import ObserverConfig, WatchConfig
@@ -36,6 +42,11 @@ MAX_LINE = 1024 * 1024
 OUTPUT_RECORDS_PER_MINUTE = 20
 STDERR_TAIL = 5
 _SUPERVISE_STEP = 0.2
+
+FILES_RESCAN = 30.0  # rescan this often even without notifications (network shares can miss them)
+FILES_POLL = 2.0  # rescan this often when native notifications are unavailable
+FILES_SETTLE_STEP = 1.0  # rescan this often while a file is settling
+FILES_MIN_RESCAN = 0.5  # at most two scans a second, however many notifications arrive
 
 
 def parse_event(text: str) -> dict[str, Any] | None:
@@ -393,6 +404,135 @@ class CommandObserver(Observer):
             stream.close()
 
 
+class _Poke(FileSystemEventHandler):
+    """Any filesystem notification just asks for a rescan."""
+
+    def __init__(self, changed: threading.Event) -> None:
+        super().__init__()
+        self._changed = changed
+
+    def on_any_event(self, event: FileSystemEvent) -> None:
+        self._changed.set()
+
+
+class FilesObserver(Observer):
+    """Reports settled files in a local directory: native notifications (watchdog) trigger rescans."""
+
+    kind = "files"
+
+    def __init__(self, watch: WatchConfig, config: ObserverConfig, *, deliver: Deliver, sink: Sink) -> None:
+        super().__init__(watch, config, deliver=deliver, sink=sink)
+        self._reported: set[tuple[str, int, int]] = set()
+
+    def _wanted(self, name: str) -> bool:
+        if not fnmatch.fnmatch(name, self.config.pattern):
+            return False
+        return not any(fnmatch.fnmatch(name, pattern) for pattern in self.config.ignore)
+
+    def _scan(self) -> dict[str, os.stat_result]:
+        """Regular files to consider, by absolute path. Raises OSError if the directory is gone."""
+        root = self.config.path
+        assert root is not None
+        names = os.listdir(root)
+        if self.config.recursive:
+            listing = [(Path(directory), files) for directory, _, files in os.walk(root)]
+        else:
+            listing = [(root, names)]
+        found = {}
+        for directory, entries in listing:
+            for name in entries:
+                if not self._wanted(name):
+                    continue
+                path = directory / name
+                try:
+                    info = path.stat()
+                except OSError:
+                    continue
+                if stat.S_ISREG(info.st_mode):
+                    found[str(path)] = info
+        return found
+
+    def run_once(self) -> None:
+        started = time.monotonic()
+        root = self.config.path
+        assert root is not None
+        if not root.is_dir():
+            self._stopped(started, exit_code=None, reason=f"directory {root} does not exist", stderr_tail=[])
+            return
+        changed = threading.Event()
+        native: NativeObserver | None = NativeObserver()
+        native_error = None
+        try:
+            native.schedule(_Poke(changed), str(root), recursive=self.config.recursive)
+            native.start()
+        except Exception as exc:  # OSError, or a platform-specific watchdog error
+            native_error = f"{type(exc).__name__}: {exc}"
+            native = None
+        self._sink(
+            make_record(
+                "observer.started",
+                level="INFO" if native_error is None else "WARNING",
+                **self._tag(),
+                kind=self.kind,
+                path=str(root),
+                native=native_error is None,
+                native_error=native_error,
+            )
+        )
+        try:
+            reason = self._watch(changed, FILES_RESCAN if native_error is None else FILES_POLL)
+        finally:
+            if native is not None:
+                native.stop()
+                native.join(5.0)
+        self._stopped(started, exit_code=None, reason=reason, stderr_tail=[])
+
+    def _watch(self, changed: threading.Event, idle: float) -> str:
+        """Scan, report settled files, wait for a notification or a timeout; repeat until stopped."""
+        settle = self.config.settle
+        candidates: dict[str, tuple[tuple[int, int], float]] = {}
+        last_scan = 0.0
+        while not self._stop.is_set():
+            self._stop.wait(max(last_scan + FILES_MIN_RESCAN - time.monotonic(), 0.0))
+            if self._stop.is_set():
+                break
+            changed.clear()
+            last_scan = time.monotonic()
+            try:
+                found = self._scan()
+            except OSError as exc:
+                return f"cannot scan {self.config.path}: {exc.strerror or exc}"
+            now, wall = time.monotonic(), time.time()
+            current = set()
+            for path, info in sorted(found.items()):
+                key = (info.st_size, info.st_mtime_ns)
+                current.add((path, *key))
+                if (path, *key) in self._reported:
+                    continue
+                seen = candidates.get(path)
+                if seen is None or seen[0] != key:
+                    seen = candidates[path] = (key, now)
+                if now - seen[1] >= settle and wall - info.st_mtime >= settle:
+                    del candidates[path]
+                    self._reported.add((path, *key))
+                    self.emit(
+                        {
+                            "event": "file",
+                            "path": path,
+                            "name": Path(path).name,
+                            "size": info.st_size,
+                            "mtime": info.st_mtime,
+                        }
+                    )
+            for path in set(candidates) - set(found):
+                del candidates[path]
+            self._reported &= current
+            deadline = time.monotonic() + (FILES_SETTLE_STEP if candidates else idle)
+            while not self._stop.is_set() and not changed.is_set() and time.monotonic() < deadline:
+                changed.wait(min(0.2, max(deadline - time.monotonic(), 0.0)))
+        return "stopped"
+
+
 def build_observer(
     watch: WatchConfig,
     config: ObserverConfig,
@@ -408,4 +548,6 @@ def build_observer(
             data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         env = observer_environment(watch, config.name, environment=environment, data_dir=data_dir)
         return CommandObserver(watch, config, deliver=deliver, sink=sink, env=env)
+    if config.kind == "files":
+        return FilesObserver(watch, config, deliver=deliver, sink=sink)
     raise ValueError(f"unknown observer kind {config.kind!r}")

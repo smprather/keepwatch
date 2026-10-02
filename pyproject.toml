@@ -5,7 +5,10 @@ description = "Poll conditions and run actions, from login onward."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
-dependencies = ["rich-click>=1.9"]
+dependencies = [
+    "rich-click>=1.9",
+    "watchdog>=6",
+]
 
 [project.scripts]
 keepwatch = "keepwatch.cli:main"
