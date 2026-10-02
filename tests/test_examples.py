@@ -117,3 +117,24 @@ def test_relay_receive_example_processes_a_verified_arrival(xdg):
     done = Path.home() / "incoming" / "done"
     assert (done / "a.tar.gz").read_bytes() == b"payload" and (done / "a.tar.gz.sha256").exists()
     assert watch_dir.exists()
+
+
+def test_relay_receive_example_leaves_a_file_that_changed_since_its_report(xdg):
+    install(xdg, "relay-receive")
+    incoming = Path.home() / "incoming"
+    incoming.mkdir(parents=True)
+    digest = hashlib.sha256(b"payload").hexdigest()
+    (incoming / "a.tar.gz").write_bytes(b"payload, then more")  # a new upload under the same name has begun
+    (incoming / "a.tar.gz.sha256").write_text(f"{digest}  a.tar.gz\n", encoding="utf-8")
+    event = {
+        "event": "file",
+        "path": str(incoming / "a.tar.gz"),
+        "name": "a.tar.gz",
+        "size": len(b"payload"),
+        "mtime": 1.5,
+        "sha256": digest,
+        "marker": str(incoming / "a.tar.gz.sha256"),
+    }
+    result = run("poll", "relay-receive", "--events", json.dumps([event]), "--json")
+    assert json.loads(result.output)["polls"][0]["failed"] is False, result.output
+    assert (incoming / "a.tar.gz").exists() and not (incoming / "done" / "a.tar.gz").exists()

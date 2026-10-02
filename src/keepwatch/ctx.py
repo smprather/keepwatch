@@ -64,7 +64,8 @@ def ledger_file(data_dir: Path, name: str) -> Path:
     return data_dir / "ledgers" / f"{name}.json"
 
 
-def _as_text(value: str | bytes | None) -> str:
+def as_text(value: str | bytes | None) -> str:
+    """Captured output as text (subprocess leaves bytes in TimeoutExpired even in text mode)."""
     if value is None:
         return ""
     if isinstance(value, bytes):
@@ -277,7 +278,7 @@ class Ctx:
                 creationflags=platform.NO_WINDOW,
             )
         except subprocess.TimeoutExpired as exc:
-            self._report(args, shell, None, True, time.monotonic() - started, _as_text(exc.stdout), _as_text(exc.stderr))
+            self._report(args, shell, None, True, time.monotonic() - started, as_text(exc.stdout), as_text(exc.stderr))
             raise
         self._report(args, shell, completed.returncode, False, time.monotonic() - started, completed.stdout, completed.stderr)
         if check and completed.returncode != 0:

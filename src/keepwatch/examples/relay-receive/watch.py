@@ -21,6 +21,13 @@ def on_true(ctx):
     for item in ctx.payload:
         if key(item) in handled:
             continue
+        try:
+            info = Path(item["path"]).stat()
+        except OSError:
+            continue  # moved or deleted since it was reported
+        if (info.st_size, info.st_mtime) != (item["size"], item["mtime"]):
+            ctx.log.warning("%s changed since it was reported; left for its next report", Path(item["path"]).name)
+            continue
         for path in (item["path"], item["marker"]):
             if Path(path).exists():
                 shutil.move(path, str(done / Path(path).name))

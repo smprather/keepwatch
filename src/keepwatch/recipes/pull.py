@@ -6,7 +6,7 @@ the observer which files to skip when it reconnects.
 
 With delete_remote, each verified file is queued in "to_delete" (with the sha256 it was verified with) and
 deleted from the source host by keepwatch's remote helper, which first checks that it is still exactly that
-file. Deleted or gone keys leave "pulled" for "skipped" (forgotten after 7 days; stale events for them are ignored); changed ones just leave "pulled" (the new version is pulled when reported); refused ones go to "kept". Files pulled while delete_remote was off have no recorded sha256 and are never deleted. See keepwatch docs recipes.
+file. Deleted or gone keys leave "pulled" for "skipped" (forgotten after 7 days; stale events for them are ignored); changed ones just leave "pulled" (the new version is pulled when reported); refused ones go to "kept". Files pulled while delete_remote was off have no recorded sha256 and are never deleted (an entry without one goes to "kept"). See keepwatch docs recipes.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-from keepwatch.ctx import Ctx
+from keepwatch.ctx import Ctx, as_text
 from keepwatch.remote import ssh_argv, watcher_source
 from keepwatch.transfer import TransferMismatch, with_known_hosts
 
@@ -71,6 +71,15 @@ def delete_remote(ctx: Ctx, entries: list[str]) -> None:
     pending, pulled, kept = ctx.ledger(TO_DELETE), ctx.ledger(LEDGER), ctx.ledger(KEPT)
     skipped = ctx.ledger(SKIPPED, expire=SKIP_FOR)
     remote = settings["remote"]
+    for entry in [entry for entry in entries if entry.endswith(f"|{UNKNOWN_SHA}")]:
+        key, item = split_queue_key(entry)
+        pending.discard(entry)
+        kept.add(key)
+        name = item["path"].rsplit("/", 1)[-1]
+        ctx.log.warning("not deleting %s on %s: no verified sha256 was recorded for it (delete it by hand)", name, remote)
+    entries = [entry for entry in entries if not entry.endswith(f"|{UNKNOWN_SHA}")]
+    if not entries:
+        return
     argv = ssh_argv(
         remote,
         port=settings["port"],
@@ -86,9 +95,8 @@ def delete_remote(ctx: Ctx, entries: list[str]) -> None:
         stdout, stderr = completed.stdout, completed.stderr
     except subprocess.TimeoutExpired as exc:
         # Keep what the helper reported before the deadline: files it already deleted are not retried.
-        output = exc.stdout or b""
-        stdout = output.decode("utf-8", "replace") if isinstance(output, bytes) else output
-        stderr = "timed out (raise action_timeout: the helper re-reads each file to check it)"
+        stdout = as_text(exc.stdout)
+        stderr = as_text(exc.stderr) + "\ntimed out (for large files raise action_timeout: the helper re-reads each one)"
     except OSError as exc:
         stdout, stderr = "", str(exc)
     results: dict[int, dict[str, Any]] = {}

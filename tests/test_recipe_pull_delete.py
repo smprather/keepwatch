@@ -160,9 +160,70 @@ def test_a_refused_delete_is_kept_and_not_retried(linux1, make_watch, tmp_path, 
     info = os.lstat(link)
     key = f"{link}|{info.st_size}|{info.st_mtime!r}"
     ledger(xdg, "pulled").add(key)
-    ledger(xdg, "to_delete").add(pull.queue_key(key, None))
+    ledger(xdg, "to_delete").add(pull.queue_key(key, hashlib.sha256(b"x").hexdigest()))
     watch = sweep_watch(make_watch, linux1, tmp_path, "delete_retry = '0s'\n")
     first = poll(xdg, watch, [])
     assert not first.failed and link.is_symlink() and target.exists()
     assert key in ledger(xdg, "kept") and key in ledger(xdg, "pulled")
     assert poll(xdg, watch, [], state=first.after).outcome is Outcome.FALSE  # nothing left to do
+
+
+def test_an_entry_without_a_sha256_is_never_deleted(linux1, make_watch, tmp_path, xdg):
+    from keepwatch.recipes import pull
+
+    source = linux1.root / "old.tar.gz"
+    source.write_bytes(b"old")
+    key = pull.event_key(file_event(source))
+    ledger(xdg, "pulled").add(key)
+    ledger(xdg, "to_delete").add(pull.queue_key(key, None))  # no verified sha256 (an earlier build queued these)
+    records = []
+    report = poll(xdg, sweep_watch(make_watch, linux1, tmp_path, "delete_retry = '0s'\n"), [], records=records)
+    assert not report.failed and source.exists()
+    assert key in ledger(xdg, "kept") and len(ledger(xdg, "to_delete")) == 0
+    messages = [r["message"] for r in records if r["event"] == "plugin.log"]
+    assert any("no verified sha256 was recorded" in m for m in messages)
+
+
+def test_a_timed_out_delete_keeps_the_results_it_had(tmp_path, caplog):
+    from keepwatch import Ctx
+    from keepwatch.recipes import pull
+
+    slow = tmp_path / "slow_ssh.py"
+    slow.write_text(
+        "import json, sys, time\n"
+        "sys.stdin.read()\n"
+        "print(json.dumps({'event': 'deleted', 'index': 0, 'path': '/out/a.tar.gz'}), flush=True)\n"
+        "print('ssh: still talking to the host', file=sys.stderr, flush=True)\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    settings = {
+        "remote": "u@h",
+        "remote_dir": "/out",
+        "port": None,
+        "identity": None,
+        "known_hosts": None,
+        "ssh_options": [],
+        "ssh_command": [PY, str(slow)],
+        "remote_python": "python3",
+    }
+    ctx = Ctx(
+        watch="sweep",
+        hook="on_true",
+        poll_id="p1",
+        condition=True,
+        payload=None,
+        settings=settings,
+        watch_dir=tmp_path,
+        data_dir=tmp_path / "data",
+        run_dir=tmp_path / "run",
+        deadline=time.time() + 3,
+    )
+    entries = [pull.queue_key(f"/out/{name}|4|1.5", "0" * 64) for name in ("a.tar.gz", "b.tar.gz")]
+    for entry in entries:
+        ctx.ledger("to_delete").add(entry)
+    with caplog.at_level("WARNING"):
+        pull.delete_remote(ctx, entries)
+    assert list(ctx.ledger("to_delete")) == [entries[1]]  # a.tar.gz was deleted before the deadline
+    assert "/out/a.tar.gz|4|1.5" in ctx.ledger("skipped")
+    assert "ssh: still talking to the host" in caplog.text and "timed out" in caplog.text
