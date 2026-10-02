@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import threading
 import time
 import traceback
@@ -12,13 +13,17 @@ from typing import Any
 from keepwatch.config import WatchConfig
 from keepwatch.locks import hold_lock
 from keepwatch.logstore import Sink, make_record
+from keepwatch.observers import EventQueue, Observer, build_observer
 from keepwatch.offline import OfflineMarker, clear_offline, iso_time, read_offline, write_offline
 from keepwatch.paths import Paths
 from keepwatch.pollengine import PollEngine, PollReport
+from keepwatch.runner import DRAIN_GRACE, KILL_GRACE
 from keepwatch.state import ANSWERS, initial_state, next_delay, should_go_offline
 
 Alert = Callable[[str, str, str], None]
 CRASH_RETRY = 60.0
+OBSERVER_JOIN = KILL_GRACE + DRAIN_GRACE + 1.0
+DROP_REPORT_EVERY = 1000
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,11 @@ class WatchRunner:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
+        self.events = EventQueue()
+        self._wake_requested = False
+        self._observers: dict[str, Observer] = {}
+        self._observers_lock = threading.Lock()
+        self._observer_key: Any = None
 
     @property
     def config(self) -> WatchConfig:
@@ -80,6 +90,68 @@ class WatchRunner:
         with self._lock:
             self._pending = config
         self._wake.set()
+
+    def add_event(self, event: dict[str, Any], *, wake: bool = True) -> None:
+        """Queue an observer event for the next poll; with wake, poll as soon as the schedule allows. Thread-safe."""
+        with self._lock:
+            dropped = self.events.put(event)
+            total = self.events.dropped
+            if wake:
+                self._wake_requested = True
+        if dropped and (total == 1 or total % DROP_REPORT_EVERY == 0):
+            self._sink(
+                make_record(
+                    "observer.dropped",
+                    level="WARNING",
+                    watch=self.name,
+                    observer=event.get("observer"),
+                    dropped=total,
+                    cap=self.events.cap,
+                )
+            )
+        if wake:
+            self._wake.set()
+
+    def _observers_wanted(self) -> Any:
+        """What the running observers depend on, or None when none should run."""
+        config = self._config
+        if self._stop.is_set() or not config.enabled or self.offline is not None or not config.observers:
+            return None
+        environment = self._engine.global_config.environment
+        return (config.observers, config.watch_dir, config.shell, config.environment, config.settings, environment)
+
+    def sync_observers(self) -> None:
+        """Start, stop or restart this watch's observers to match its config and state. Runner thread only."""
+        self._apply_pending()
+        key = self._observers_wanted()
+        if key == self._observer_key:
+            return
+        self._stop_observers()
+        # Recorded before starting: a failure below is logged once instead of retried every second.
+        self._observer_key = key
+        if key is None:
+            return
+        config = self._config
+        for name, observer_config in config.observers.items():
+            observer = build_observer(
+                config,
+                observer_config,
+                deliver=functools.partial(self.add_event, wake=observer_config.wake),
+                sink=self._sink,
+                environment=self._engine.global_config.environment,
+                data_dir=self._paths.watch_data_dir(self.name),
+            )
+            with self._observers_lock:
+                self._observers[name] = observer
+            observer.start()
+
+    def _stop_observers(self) -> None:
+        with self._observers_lock:
+            running, self._observers = list(self._observers.values()), {}
+        for observer in running:
+            observer.stop()
+        for observer in running:
+            observer.join(OBSERVER_JOIN)
 
     def _apply_pending(self) -> None:
         with self._lock:
@@ -123,6 +195,8 @@ class WatchRunner:
                 return None
             base = self.last_trial if self.last_trial is not None else self.offline.since_epoch()
             return max(base + config.retry_after - now, 0.0)
+        if self._wake_requested and self.state.failures == 0:
+            return 0.0
         return max(self.next_due - now, 0.0)
 
     def poll_once(self, now: float) -> PollReport | None:
@@ -133,6 +207,9 @@ class WatchRunner:
         if wait is None or wait > 0:
             return None
         config = self._config
+        with self._lock:
+            self._wake_requested = False
+            mark, events = self.events.pending()
         with hold_lock(self._paths.watch_lock(self.name)):
             # Checked under the lock: `keepwatch rename` moves the directory while holding it.
             if not config.watch_dir.is_dir():
@@ -140,8 +217,11 @@ class WatchRunner:
             trial = self.offline is not None
             if trial:
                 self.last_trial = now
-            report = self._engine.poll(config, self.state, trial=trial)
+            report = self._engine.poll(config, self.state, trial=trial, events=events)
         self.state = report.after
+        if not report.failed and report.outcome in ANSWERS:
+            with self._lock:
+                self.events.ack(mark)
         finished = self._clock()
         self.last_poll = LastPoll(
             poll_id=report.poll_id,
@@ -206,6 +286,21 @@ class WatchRunner:
             "last_poll": asdict(self.last_poll) if self.last_poll else None,
             "next_poll": None if wait is None else iso_time(now + wait),
             "config_error": self.config_error,
+            "pending_events": len(self.events),
+            "observers": self._observer_status(),
+        }
+
+    def _observer_status(self) -> dict[str, Any]:
+        with self._observers_lock:
+            running = dict(self._observers)
+        return {
+            name: {
+                "kind": observer.kind,
+                "running": observer.running,
+                "restarts": observer.restarts,
+                "last_event": iso_time(observer.last_event) if observer.last_event is not None else None,
+            }
+            for name, observer in sorted(running.items())
         }
 
     def start(self) -> None:
@@ -213,30 +308,38 @@ class WatchRunner:
         self._thread.start()
 
     def _loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                report = self.poll_once(self._clock())
-            except Exception as exc:
-                self._sink(
-                    make_record(
-                        "watch.crash",
-                        level="ERROR",
-                        watch=self.name,
-                        error=f"{type(exc).__name__}: {exc}",
-                        traceback=traceback.format_exc(),
+        try:
+            while not self._stop.is_set():
+                try:
+                    self.sync_observers()
+                    report = self.poll_once(self._clock())
+                except Exception as exc:
+                    self._sink(
+                        make_record(
+                            "watch.crash",
+                            level="ERROR",
+                            watch=self.name,
+                            error=f"{type(exc).__name__}: {exc}",
+                            traceback=traceback.format_exc(),
+                        )
                     )
-                )
-                self.next_due = self._clock() + CRASH_RETRY
-                report = None
-            if report is None:
-                wait = self.seconds_until_due(self._clock())
-                self._wake.wait(1.0 if wait is None else min(wait, 1.0))
-                self._wake.clear()
+                    self.next_due = self._clock() + CRASH_RETRY
+                    report = None
+                if report is None:
+                    wait = self.seconds_until_due(self._clock())
+                    self._wake.wait(1.0 if wait is None else min(wait, 1.0))
+                    self._wake.clear()
+        finally:
+            self._stop_observers()
 
     def stop(self) -> None:
-        """Stop after the current poll. Polls that end after this never change offline state."""
+        """Stop after the current poll, and stop the observers. Polls that end after this never change offline state."""
         self._stop.set()
         self._wake.set()
+        with self._observers_lock:
+            running = list(self._observers.values())
+        for observer in running:
+            observer.stop()
 
     def join(self, timeout: float | None = None) -> bool:
         if self._thread is None:
