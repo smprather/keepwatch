@@ -22,10 +22,10 @@ Every record has `ts` (local time, RFC 3339 with offset), `level` (`DEBUG`, `INF
 | `watch.offline` / `watch.online` | `reason`, `by_user`, `last_failure` |
 | `watch.crash` | `error`, `traceback` (a bug in keepwatch itself; the watch retries after a minute) |
 | `observer.started` | `observer`, `kind`; `argv` and `pid` (command) or `path`, `native`, `native_error` (files) |
-| `observer.event` | DEBUG: `observer`, `data` (the event as the source produced it) |
+| `observer.event` | DEBUG: `observer`, `data` (the event as the source produced it), or `data_clipped` (its JSON, shortened) when that is over 4 KiB |
 | `observer.output` | `observer`, `stream`, `text`; `suppressed` on the record counting lines over the limit |
 | `observer.stopped` / `observer.restarting` | `observer`; `reason`, `exit_code`, `duration`, `stderr_tail` / `delay` |
-| `observer.dropped` | `observer`, `dropped` (total so far), `cap`: the event queue was full |
+| `observer.dropped` | `observer`, `dropped` (total so far), `cap`, `max_bytes`: the event queue was full |
 | `observer.crash` | `observer`, `error`, `traceback` (a bug in keepwatch itself; the observer restarts) |
 | `alert.end` | `alert_event`, `command`, `status`, `exit_code`, `reason`, `stdout`, `stderr`, `duration` |
 

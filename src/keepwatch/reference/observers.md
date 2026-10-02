@@ -59,9 +59,18 @@ Every event carries `"observer"` (the observer's name) and `"received"` (when ke
 
 ```python
 def check(ctx):
-    pulled = ctx.ledger("done")
-    new = [e for e in ctx.events if e.get("event") == "file" and ctx.file_key(e["path"]) not in pulled]
-    return bool(new), [e["path"] for e in new]
+    done = ctx.ledger("done")
+    new = []
+    for event in ctx.events:
+        if event.get("event") != "file":
+            continue
+        try:
+            key = ctx.file_key(event["path"])
+        except FileNotFoundError:
+            continue  # moved or deleted since it was reported: nothing to do
+        if key not in done:
+            new.append(event["path"])
+    return bool(new), new
 
 
 def on_true(ctx):
@@ -73,10 +82,11 @@ def on_true(ctx):
 
 ## Delivery rules
 
-- Events wait in a per-watch queue (at most 10 000; when full the oldest are dropped with an `observer.dropped` WARNING).
+- Events wait in a per-watch queue (at most 10 000 events and 64 MiB; when full the oldest are dropped with an `observer.dropped` WARNING).
 - **Events are acknowledged only by a successful poll:** one that did not fail and answered TRUE or FALSE. After a failed or unknown poll the same events (plus newer ones) come again: delivery is **at-least-once**. Record what you handled in a ledger and skip it next time, as above.
-- With `wake = true` an event makes the watch poll at once, unless it is backing off after failures or is offline (then it waits for its schedule). With `wake = false` events just wait for the next scheduled poll.
-- Observers start with their watch and stop when it is removed, parked (`enabled = false`), disabled or offline; any change to the watch's config restarts them. Events still queued when a watch goes offline are delivered to its trial polls.
+- With `wake = true` an event makes the watch poll at once, but no sooner than 1 second after the previous poll ended, so a busy source is handled in batches; not at all while the watch is backing off after failures or is offline (then it waits for its schedule). With `wake = false` events just wait for the next scheduled poll.
+- Observers start with their watch and stop when it is removed, parked (`enabled = false`), disabled or offline. A change to the `[observe.*]` tables, `shell`, `[environment]`, `[settings]` or the global `[environment]` restarts them; other changes (`interval`, hooks, timeouts) do not restart them. Events still queued when a watch goes offline are delivered to its trial polls.
+- **An event that makes a hook fail is delivered again on every poll** (it is never dropped), so the watch keeps failing until the hook is fixed and goes offline after `max_failures`. Skip events you cannot act on instead of raising, as the example above does for files that have disappeared.
 - A **files** event can be stale by the time the hook runs (the file was moved or deleted); check that it still exists.
 
 ## Developing observers

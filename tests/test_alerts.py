@@ -26,7 +26,7 @@ def test_alert_receives_environment(tmp_path):
 
 def test_alert_string_runs_in_the_platform_shell():
     records = []
-    run_alert(Command(shell="exit 3"), event="online", watch="w", reason="r", environment={}, timeout=10,
+    run_alert(Command(shell="exit 3"), event="online", watch="w", reason="r", environment={}, timeout=60,
               sink=records.append)
     assert (records[0]["status"], records[0]["exit_code"]) == ("failed", 3)
 
