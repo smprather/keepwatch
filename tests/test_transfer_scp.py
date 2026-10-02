@@ -175,3 +175,17 @@ def test_reports_each_scp_run(tmp_path, server, ssh_config):
     assert len(calls) == 2  # the file, then its marker
     argv, returncode, timed_out, duration, stdout, stderr = calls[0]
     assert argv[0] == "scp" and returncode == 0 and timed_out is False and duration >= 0
+
+
+def test_pull_a_name_with_a_space(tmp_path, server, ssh_config):
+    (server.root / "a b.tar.gz").write_bytes(b"spaced")
+    final = pull(REMOTE + "a b.tar.gz", tmp_path / "stage", size=6, options=key_options(server, ssh_config))
+    assert final.name == "a b.tar.gz" and final.read_bytes() == b"spaced"
+
+
+def test_push_a_name_with_a_space(tmp_path, server, ssh_config):
+    local = tmp_path / "c d.txt"
+    local.write_bytes(b"up")
+    assert push(local, REMOTE, options=key_options(server, ssh_config)) == "u@127.0.0.1:c\\ d.txt"
+    assert (server.root / "c d.txt").read_bytes() == b"up"
+    assert (server.root / "c d.txt.sha256").exists()

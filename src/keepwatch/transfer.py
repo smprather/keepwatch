@@ -44,6 +44,20 @@ _VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 _URI = re.compile(r"scp://(?:([^@/]+)@)?([^:/@]+)(?::(\d+))?/(.*)", re.S)
 _VERSION = re.compile(r"OpenSSH_(?:for_Windows_)?(\d+)\.(\d+)")
+_SAFE = re.compile(r"[A-Za-z0-9_./:@%+,=-]")
+
+
+def escape_remote_path(path: str) -> str:
+    """Backslash-escape a remote path for scp, whose classic protocol hands it to the remote shell.
+
+    Backslashes are the one form that works in both protocols (spike 2026-10-02: single quotes fail in both).
+    A leading `~/` (or a lone `~`) is kept so that it still means the remote home.
+    """
+    if path == "~":
+        return path
+    prefix = "~/" if path.startswith("~/") else ""
+    rest = path[len(prefix) :]
+    return prefix + "".join(char if _SAFE.fullmatch(char) else "\\" + char for char in rest)
 
 Report = Callable[[list[str], int | None, bool, float, str, str], None]
 
@@ -77,7 +91,7 @@ class Endpoint:
         if self.uri:
             port = f":{self.port}" if self.port else ""
             return f"scp://{who}{port}/{self.path}"
-        return f"{who}:{self.path}"
+        return f"{who}:{escape_remote_path(self.path)}"
 
     def child(self, name: str) -> Endpoint:
         """This endpoint taken as a directory, with `name` inside it."""

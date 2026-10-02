@@ -10,6 +10,7 @@ from keepwatch.transfer import (
     Endpoint,
     ScpOptions,
     TransferFailed,
+    escape_remote_path,
     parse_endpoint,
     parse_openssh_version,
     scp_argv,
@@ -164,3 +165,18 @@ def test_askpass_launcher_runs_the_helper(tmp_path):
 def test_a_one_letter_host_with_a_slash_is_a_drive():
     assert parse_endpoint("h:/a.gz") == Endpoint(path="h:/a.gz")
     assert parse_endpoint("me@h:/a.gz").remote and parse_endpoint("scp://h/a.gz").remote
+
+
+def test_escape_remote_path():
+    assert escape_remote_path("/data/out/a.tar.gz") == "/data/out/a.tar.gz"
+    assert escape_remote_path("/data/a b.tar.gz") == "/data/a\\ b.tar.gz"
+    assert escape_remote_path("it's $HOME;(x)") == "it\\'s\\ \\$HOME\\;\\(x\\)"
+    assert escape_remote_path("~/incoming/a b") == "~/incoming/a\\ b"
+    assert escape_remote_path("~") == "~"
+    assert escape_remote_path("dir/~x") == "dir/\\~x"
+
+
+def test_remote_paths_are_escaped_in_scp_arguments():
+    assert parse_endpoint("me@h:/out/a b.gz").scp_arg() == "me@h:/out/a\\ b.gz"
+    assert parse_endpoint("/local/a b.gz").scp_arg() == "/local/a b.gz"
+    assert parse_endpoint("me@h:in/").child("a b.gz").scp_arg() == "me@h:in/a\\ b.gz"
