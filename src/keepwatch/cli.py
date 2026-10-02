@@ -37,14 +37,17 @@ from keepwatch.config import (
     load_watch_config,
 )
 from keepwatch.control import ControlError, disable_watch, enable_watch, rename_watch, require_known
+from keepwatch.durations import DurationError, parse_duration
 from keepwatch.locks import LockBusy, hold_lock
 from keepwatch.logquery import LogFilter, follow_log, parse_when, select_records
 from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter, make_record
+from keepwatch.observers import build_observer
+from keepwatch.offline import iso_time
 from keepwatch.output import ConsolePrinter, make_console, plain_output
 from keepwatch.paths import PathError, Paths, ensure_private_dir, remove_stale_process_dirs, resolve_paths
 from keepwatch.pollengine import Fake, PollEngine, PollReport, parse_fakes
 from keepwatch.reference import UnknownTopic, render_all, render_topic, topic_index
-from keepwatch.runner import Runner
+from keepwatch.runner import DRAIN_GRACE, KILL_GRACE, Runner
 from keepwatch.service import Service
 from keepwatch.state import initial_state
 from keepwatch.statusview import collect_status, format_status, service_running
@@ -54,7 +57,7 @@ from keepwatch.validation import validate_watches
 COMMAND_GROUPS = {
     "keepwatch": [
         {"name": "Run", "commands": ["run", "stop"]},
-        {"name": "Develop", "commands": ["new", "validate", "poll"]},
+        {"name": "Develop", "commands": ["new", "validate", "poll", "observe"]},
         {"name": "Inspect", "commands": ["status", "logs"]},
         {"name": "Control", "commands": ["enable", "disable", "rename"]},
         {"name": "Setup", "commands": ["init", "install", "uninstall"]},
@@ -176,6 +179,14 @@ def cli(ctx: click.Context, config_path: Path | None) -> None:
     help='With --fake: the payload handed to the actions, e.g. \'["a.tar.gz"]\'.',
 )
 @click.option(
+    "--events",
+    "events_json",
+    metavar="JSON",
+    help='Observer events for the hooks (ctx.events, KEEPWATCH_EVENTS_FILE): a JSON array of objects, e.g. '
+    '\'[{"event": "file", "name": "a.tar.gz"}]\'. Each gets "observer": "manual" and "received" unless it has '
+    "them. Every poll of this run gets the same events. Default: none (a manual poll runs no observers).",
+)
+@click.option(
     "--initial-condition",
     type=click.BOOL,
     default=None,
@@ -190,6 +201,7 @@ def poll(
     dry_run: bool,
     fake_spec: str | None,
     payload_json: str | None,
+    events_json: str | None,
     initial_condition: bool | None,
     verbose: bool,
     as_json: bool,
@@ -199,6 +211,8 @@ def poll(
     Every record also goes to the log file. A manual poll shares the watch's persistent data (ledgers)
     with the service but not its condition or failure count, and holds the watch's lock so the service
     and a manual poll never run the same watch at once.
+
+    Observers do not run during a manual poll: hooks see the events given with --events, or none.
 
     Exit status: 0 if no poll failed, 1 if a poll failed or the watch could not be loaded, 2 for bad usage.
     """
@@ -216,6 +230,16 @@ def poll(
             payload = json.loads(payload_json)
         except json.JSONDecodeError as exc:
             raise click.BadParameter(f"not valid JSON: {exc}", param_hint="--payload") from None
+    events: list[dict] = []
+    if events_json is not None:
+        try:
+            parsed = json.loads(events_json)
+        except json.JSONDecodeError as exc:
+            raise click.BadParameter(f"not valid JSON: {exc}", param_hint="--events") from None
+        if not isinstance(parsed, list) or not all(isinstance(item, dict) for item in parsed):
+            raise click.BadParameter("must be a JSON array of objects", param_hint="--events")
+        received = iso_time(time.time())
+        events = [{"observer": "manual", "received": received, **item} for item in parsed]
     global_config, watch = _load_one(app, name)
     records: list[dict] = []
     writer = LogWriter(app.paths.log_file, max_bytes=global_config.log.max_bytes, backups=global_config.log.backups)
@@ -237,12 +261,89 @@ def poll(
         with hold_lock(app.paths.watch_lock(watch.name), on_wait=waiting):
             for outcome in fakes or [None]:
                 fake = None if outcome is None else Fake(outcome, payload)
-                report = engine.poll(watch, state, fake=fake, dry_run=dry_run)
+                report = engine.poll(watch, state, fake=fake, dry_run=dry_run, events=events)
                 reports.append(report)
                 state = report.after
     if as_json:
         click.echo(json.dumps({"polls": [r.to_dict() for r in reports], "records": records}, indent=2, default=str))
     raise SystemExit(1 if any(report.failed for report in reports) else 0)
+
+
+@cli.command()
+@click.argument("name")
+@click.argument("observer", required=False)
+@click.option(
+    "--for",
+    "duration",
+    metavar="DURATION",
+    help='Stop after this long, e.g. "30s" or "5m". Default: run until interrupted (Ctrl-C).',
+)
+@click.option("--count", type=int, metavar="N", help="Stop after N events.")
+@click.pass_obj
+def observe(app: App, name: str, observer: str | None, duration: str | None, count: int | None) -> None:
+    """Run watch NAME's observers (or only OBSERVER) in the foreground and print their events.
+
+    Each event is printed to stdout as one JSON line, exactly as hooks receive it in ctx.events. Observer
+    records (started, stopped, restarting, stderr output) go to stderr; nothing is written to the log file
+    and the watch is not polled. It runs its own copies of the observers, so it does not disturb a running
+    service. Agents: always pass --for or --count, since there is no Ctrl-C.
+
+    Exit status: 0 when stopped by --for, --count or Ctrl-C; 1 if the watch cannot be loaded, has no
+    observers or has no observer named OBSERVER; 2 for bad usage.
+    """
+    seconds = None
+    if duration is not None:
+        try:
+            seconds = parse_duration(duration)
+        except DurationError as exc:
+            raise click.BadParameter(str(exc), param_hint="--for") from None
+    if count is not None and count < 1:
+        raise click.BadParameter("must be at least 1", param_hint="--count")
+    global_config, watch = _load_one(app, name)
+    if not watch.observers:
+        _fail(f"watch '{name}' has no observers; add an [observe.<name>] table (see: keepwatch docs observers)")
+    if observer is not None and observer not in watch.observers:
+        _fail(f"watch '{name}' has no observer '{observer}'; its observers: {', '.join(watch.observers)}")
+    done = threading.Event()
+    lock = threading.Lock()
+    seen = 0
+
+    def deliver(event: dict) -> None:
+        nonlocal seen
+        with lock:
+            if done.is_set():
+                return
+            click.echo(json.dumps(event, ensure_ascii=False, default=str))
+            seen += 1
+            if count is not None and seen >= count:
+                done.set()
+
+    printer = ConsolePrinter(make_console(stderr=True))
+    running = [
+        build_observer(
+            watch,
+            watch.observers[key],
+            deliver=deliver,
+            sink=printer,
+            environment=global_config.environment,
+            data_dir=app.paths.watch_data_dir(watch.name),
+        )
+        for key in ([observer] if observer else list(watch.observers))
+    ]
+    for item in running:
+        item.start()
+    deadline = None if seconds is None else time.monotonic() + seconds
+    try:
+        while not done.wait(0.5):  # short waits: Ctrl-C cannot interrupt an endless wait on Windows
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for item in running:
+            item.stop()
+        for item in running:
+            item.join(KILL_GRACE + DRAIN_GRACE + 1.0)
 
 
 @cli.command()

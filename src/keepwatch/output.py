@@ -12,6 +12,7 @@ from typing import Any, TextIO
 from rich.console import Console
 from rich.text import Text
 
+from keepwatch.durations import format_duration
 from keepwatch.runner import FAILED_STATUSES
 
 LEVEL_STYLES = {"DEBUG": "dim", "INFO": "", "WARNING": "yellow", "ERROR": "red", "CRITICAL": "bold red"}
@@ -191,6 +192,41 @@ def _alert_end(record: dict[str, Any], verbose: bool) -> str:
     return line
 
 
+def _observer_started(record: dict[str, Any], verbose: bool) -> str:
+    source = record.get("path") or " ".join(str(item) for item in record.get("argv") or [])
+    line = f"observer {record.get('observer')} started ({record.get('kind')}): {source}"
+    if record.get("native") is False:
+        line += f" [no notifications, rescanning: {record.get('native_error')}]"
+    return line
+
+
+def _observer_stopped(record: dict[str, Any], verbose: bool) -> str:
+    line = f"observer {record.get('observer')} stopped: {record.get('reason')}"
+    if record.get("exit_code") is not None:
+        line += f" [exit {record['exit_code']}]"
+    tail = record.get("stderr_tail") or []
+    if tail and (verbose or record.get("reason") != "stopped"):
+        line += _block("stderr", "\n".join(tail))
+    return line
+
+
+def _observer_restarting(record: dict[str, Any], verbose: bool) -> str:
+    return f"observer {record.get('observer')} restarting in {format_duration(float(record.get('delay') or 0))}"
+
+
+def _observer_output(record: dict[str, Any], verbose: bool) -> str:
+    return f"observer {record.get('observer')} {record.get('stream')}: {record.get('text')}"
+
+
+def _observer_event(record: dict[str, Any], verbose: bool) -> str:
+    data = json.dumps(record.get("data"), ensure_ascii=False, default=str)
+    return f"observer {record.get('observer')} event: {data[:2000]}"
+
+
+def _observer_dropped(record: dict[str, Any], verbose: bool) -> str:
+    return f"event queue full ({record.get('cap')} events): {record.get('dropped')} oldest event(s) dropped so far"
+
+
 _SKIP = {"ts", "level", "event", "pid", "watch", "poll_id"}
 
 
@@ -218,6 +254,13 @@ _FORMATTERS: dict[str, Callable[[dict[str, Any], bool], str]] = {
     "watch.offline": _watch_offline,
     "watch.online": _watch_online,
     "watch.crash": _watch_crash,
+    "observer.started": _observer_started,
+    "observer.stopped": _observer_stopped,
+    "observer.restarting": _observer_restarting,
+    "observer.output": _observer_output,
+    "observer.event": _observer_event,
+    "observer.dropped": _observer_dropped,
+    "observer.crash": _watch_crash,
     "alert.end": _alert_end,
 }
 
