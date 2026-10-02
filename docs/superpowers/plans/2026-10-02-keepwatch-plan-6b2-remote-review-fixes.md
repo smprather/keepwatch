@@ -275,7 +275,7 @@ and in `test_watcher_source_carries_the_options`, add `"rescan": 30.0,` after `"
 ```python
 def test_remote_heartbeat_timeout_must_exceed_heartbeat(make_watch):
     [problem] = problems(make_watch, REMOTE + "heartbeat = '60s'\nheartbeat_timeout = '30s'\n")
-    assert "'heartbeat_timeout' (30s) must be longer than 'heartbeat' (60s)" in problem
+    assert "'heartbeat_timeout' (30s) must be longer than 'heartbeat' (1m)" in problem
 
 
 def test_remote_heartbeat_timeout_is_checked_against_the_default_heartbeat(make_watch):
