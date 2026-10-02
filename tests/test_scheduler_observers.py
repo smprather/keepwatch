@@ -118,6 +118,8 @@ def test_a_waking_event_makes_the_watch_due(make_watch, runner_for):
     runner.add_event({"n": 1}, wake=False)
     assert runner.seconds_until_due(clock()) == 60
     runner.add_event({"n": 2})
+    assert runner.seconds_until_due(clock()) == 1.0  # WAKE_GAP after the previous poll ended
+    clock.now += 1
     assert runner.seconds_until_due(clock()) == 0
     assert runner.poll_once(clock()).payload == [1, 2]
     assert runner.seconds_until_due(clock()) == 60
@@ -147,7 +149,7 @@ def test_event_arriving_during_a_poll_is_kept_and_wakes(make_watch, runner_for):
     runner._engine.poll = poll
     assert runner.poll_once(clock()).payload == [1]
     assert runner.events.pending()[1] == [{"n": 2}]
-    assert runner.seconds_until_due(clock()) == 0
+    assert runner.seconds_until_due(clock()) == 1.0
 
 
 def test_a_full_queue_drops_the_oldest_with_a_warning(make_watch, runner_for):
@@ -229,3 +231,49 @@ def test_a_config_change_restarts_the_observers(make_watch, runner_for):
         runner.stop()
         assert runner.join(20)
     assert len(kinds(records, "observer.started")) == 2
+
+
+def test_a_woken_first_poll_is_due_at_once(make_watch, runner_for):
+    watch_dir = make_watch("w", config="interval = '1h'\n", files={"watch.py": RECORDING_WATCH})
+    clock = Clock()
+    runner = runner_for(watch_dir, [], clock)
+    runner.next_due = clock() + 3600
+    runner.add_event({"n": 1})
+    assert runner.seconds_until_due(clock()) == 0
+
+
+def test_a_busy_observer_cannot_drive_polls_back_to_back(make_watch, runner_for):
+    watch_dir = make_watch("w", config="interval = '1h'\n", files={"watch.py": RECORDING_WATCH})
+    records = []
+    runner = runner_for(watch_dir, records, time.time)
+    runner.start()
+    try:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            runner.add_event({"n": 1})
+            time.sleep(0.05)
+    finally:
+        runner.stop()
+        assert runner.join(20)
+    # One poll at start, then at most one woken poll per WAKE_GAP (1s): never one per event (about 60).
+    assert len(kinds(records, "poll.start")) <= 5
+
+
+def test_events_do_not_cut_the_crash_pause_short(make_watch, runner_for):
+    watch_dir = make_watch("w", files={"watch.py": RECORDING_WATCH})
+    records = []
+    runner = runner_for(watch_dir, records, time.time)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("keepwatch bug")
+
+    runner._engine.poll = broken
+    runner.start()
+    try:
+        assert wait_for(lambda: kinds(records, "watch.crash"))
+        runner.add_event({"n": 1})
+        time.sleep(2.5)
+    finally:
+        runner.stop()
+        assert runner.join(20)
+    assert len(kinds(records, "watch.crash")) == 1

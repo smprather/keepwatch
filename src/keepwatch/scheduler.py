@@ -24,6 +24,7 @@ Alert = Callable[[str, str, str], None]
 CRASH_RETRY = 60.0
 OBSERVER_JOIN = KILL_GRACE + DRAIN_GRACE + 1.0
 DROP_REPORT_EVERY = 1000
+WAKE_GAP = 1.0  # a woken poll starts at least this long after the previous poll ended: busy sources are batched
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,8 @@ class WatchRunner:
         self._thread: threading.Thread | None = None
         self.events = EventQueue()
         self._wake_requested = False
+        self._last_end: float | None = None
+        self._hold_until = 0.0
         self._observers: dict[str, Observer] = {}
         self._observers_lock = threading.Lock()
         self._observer_key: Any = None
@@ -196,7 +199,8 @@ class WatchRunner:
             base = self.last_trial if self.last_trial is not None else self.offline.since_epoch()
             return max(base + config.retry_after - now, 0.0)
         if self._wake_requested and self.state.failures == 0:
-            return 0.0
+            earliest = now if self._last_end is None else self._last_end + WAKE_GAP
+            return max(min(self.next_due, max(earliest, self._hold_until)) - now, 0.0)
         return max(self.next_due - now, 0.0)
 
     def poll_once(self, now: float) -> PollReport | None:
@@ -223,6 +227,7 @@ class WatchRunner:
             with self._lock:
                 self.events.ack(mark)
         finished = self._clock()
+        self._last_end = finished
         self.last_poll = LastPoll(
             poll_id=report.poll_id,
             at=iso_time(finished),
@@ -323,7 +328,7 @@ class WatchRunner:
                             traceback=traceback.format_exc(),
                         )
                     )
-                    self.next_due = self._clock() + CRASH_RETRY
+                    self.next_due = self._hold_until = self._clock() + CRASH_RETRY
                     report = None
                 if report is None:
                     wait = self.seconds_until_due(self._clock())
