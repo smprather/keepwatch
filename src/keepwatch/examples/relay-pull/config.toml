@@ -1,0 +1,14 @@
+# Relay, step 1 of 2 (on the hub): pull finished exports from linux1 into a staging folder.
+# linux1 needs key authentication from this machine, a known host key, a silent login shell and
+# Python 3.6+; nothing is installed there. See: keepwatch docs relay
+description = "Pull finished .tar.gz exports from linux1 into the relay staging folder"
+recipe = "pull"
+action_timeout = "2h"      # big files over a slow link
+retry_after = "15m"        # if it goes offline (linux1 down for a while), try again every 15 minutes
+
+[settings]
+remote = "me@linux1.example"
+remote_dir = "/data/exports"
+local_dir = "staging"      # relative to this watch's directory; relay-push reads the same folder
+pattern = "*.tar.gz"
+settle = "30s"             # unchanged this long on linux1 before it counts as finished

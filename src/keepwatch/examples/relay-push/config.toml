@@ -1,0 +1,13 @@
+# Relay, step 2 of 2: push staged files to linux2 whenever it is reachable, then delete them here.
+# linux2 accepts uploads only (scp); its password comes from an environment variable.
+# See: keepwatch docs relay
+description = "Push staged exports to linux2 when it is reachable"
+recipe = "push"
+interval = "5m"            # retry this often while linux2 is away (new files wake it at once)
+action_timeout = "2h"
+
+[settings]
+local_dir = "staging"      # relative to this watch's directory: point both watches at one folder
+dest = "me@linux2.example:incoming/"
+password_env = "RELAY_PASSWORD"   # Windows: setx RELAY_PASSWORD "...", then restart keepwatch
+pattern = "*.tar.gz"

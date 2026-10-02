@@ -21,7 +21,7 @@ def install(xdg, name):
 
 def test_examples_are_in_the_docs():
     text = render_topic("examples")
-    assert [d.name for d in example_dirs()] == ["disk-space-ps", "greet-once", "psg-export", "site-down"]
+    assert [d.name for d in example_dirs()] == ["disk-space-ps", "greet-once", "psg-export", "relay-pull", "relay-push", "site-down"]
     for directory in example_dirs():
         for path in directory.iterdir():
             if path.is_file():
@@ -61,3 +61,25 @@ def test_disk_space_example_runs_on_windows(xdg):
     assert [p["results"][0]["status"] for p in data["polls"]] == ["ok", "ok"]
     real = json.loads(run("poll", "disk-space-ps", "--json").output)["polls"][0]
     assert real["outcome"] in ("true", "false")
+
+
+needs_openssh = pytest.mark.skipif(shutil.which("scp") is None or shutil.which("ssh") is None, reason="needs OpenSSH")
+
+
+@needs_openssh
+def test_relay_examples_validate(xdg):
+    install(xdg, "relay-pull")
+    install(xdg, "relay-push")
+    result = run("validate", "relay-pull", "relay-push")
+    assert result.exit_code == 0, result.output
+
+
+@needs_openssh
+def test_relay_push_example_waits_when_linux2_is_away(xdg):
+    install(xdg, "relay-push")
+    staging = xdg.default_watches_dir / "relay-push" / "staging"
+    staging.mkdir(parents=True)
+    data = json.loads(run("poll", "relay-push", "--json").output)
+    poll = data["polls"][0]
+    assert poll["outcome"] == "unknown" and poll["failed"] is False
+    assert "linux2.example" in poll["reason"]
