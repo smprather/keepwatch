@@ -100,7 +100,16 @@ def test_relay_receive_example_processes_a_verified_arrival(xdg):
     incoming.mkdir(parents=True)
     (incoming / "a.tar.gz").write_bytes(b"payload")
     digest = hashlib.sha256(b"payload").hexdigest()
-    event = {"event": "file", "path": str(incoming / "a.tar.gz"), "name": "a.tar.gz", "sha256": digest, "marker": str(incoming / "a.tar.gz.sha256")}
+    info = (incoming / "a.tar.gz").stat()
+    event = {
+        "event": "file",
+        "path": str(incoming / "a.tar.gz"),
+        "name": "a.tar.gz",
+        "size": info.st_size,
+        "mtime": info.st_mtime,
+        "sha256": digest,
+        "marker": str(incoming / "a.tar.gz.sha256"),
+    }
     (incoming / "a.tar.gz.sha256").write_text(f"{digest}  a.tar.gz\n", encoding="utf-8")
     assert run("validate", "relay-receive").exit_code == 0
     result = run("poll", "relay-receive", "--events", json.dumps([event]), "--json")

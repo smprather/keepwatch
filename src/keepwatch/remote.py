@@ -13,8 +13,6 @@ from collections.abc import Mapping, Sequence
 from importlib import resources
 from typing import Any
 
-from keepwatch.transfer import known_hosts_option
-
 AUTO_PYTHON = (
     "sh -c 'if [ -x /usr/bin/python3 ]; then exec /usr/bin/python3 \"$@\"; else exec python3 \"$@\"; fi' sh -u -"
 )
@@ -59,8 +57,3 @@ def watcher_source(options: Mapping[str, Any]) -> str:
     """The remote helper's source with its options prepended as an assignment (ASCII: json escapes the rest)."""
     source = resources.files("keepwatch").joinpath("remote_watcher.py").read_text(encoding="utf-8")
     return f"KEEPWATCH_REMOTE_ARGS = {json.dumps(json.dumps(options))}\n{source}"
-
-
-def with_known_hosts(ssh_options: Sequence[str], known_hosts: str | os.PathLike[str] | None) -> list[str]:
-    """ssh_options plus the known_hosts check: what the remote_files observer and the pull recipe's deletes use."""
-    return [*ssh_options, *(known_hosts_option(known_hosts) if known_hosts else [])]

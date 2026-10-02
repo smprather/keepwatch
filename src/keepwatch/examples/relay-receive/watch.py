@@ -11,7 +11,7 @@ from pathlib import Path
 def check(ctx):
     handled = ctx.ledger("handled")
     new = [event for event in ctx.events if event.get("event") == "file" and key(event) not in handled]
-    return bool(new), [{"path": event["path"], "marker": event["marker"], "sha256": event["sha256"]} for event in new]
+    return bool(new), [{"path": event["path"], "marker": event["marker"], "size": event["size"], "mtime": event["mtime"], "sha256": event["sha256"]} for event in new]
 
 
 def on_true(ctx):
@@ -29,5 +29,5 @@ def on_true(ctx):
 
 
 def key(event):
-    """One arrival: its path and content (the same bytes arriving again under any name is a new arrival)."""
-    return f"{event['path']}|{event['sha256']}"
+    """One arrival: path, size, mtime and content (the same bytes arriving again later is a new arrival)."""
+    return f"{event['path']}|{event['size']}|{event['mtime']!r}|{event['sha256']}"

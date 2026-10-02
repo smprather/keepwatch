@@ -20,8 +20,7 @@ from keepwatch.ctx import LEDGER_NAME
 from keepwatch.durations import DurationError, format_duration, parse_duration
 from keepwatch.hooks import HOOK_NAMES, WATCH_PY
 from keepwatch.paths import Paths
-from keepwatch.remote import with_known_hosts
-from keepwatch.transfer import CONFLICTS, MARKERS, PROTOCOLS, parse_endpoint
+from keepwatch.transfer import CONFLICTS, MARKERS, PROTOCOLS, parse_endpoint, with_known_hosts
 
 CONFIG_NAME = "config.toml"
 

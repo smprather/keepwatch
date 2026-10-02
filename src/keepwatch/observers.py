@@ -59,6 +59,7 @@ FILES_RESCAN = 30.0  # rescan this often even without notifications (network sha
 FILES_POLL = 2.0  # rescan this often when native notifications are unavailable
 FILES_SETTLE_STEP = 1.0  # rescan this often while a file is settling
 FILES_MIN_RESCAN = 0.5  # at most two scans a second, however many notifications arrive
+FILES_MARKER_WAIT = 60.0  # re-check a file waiting for its marker every second for this long, then on events/rescans
 
 
 def parse_event(text: str) -> dict[str, Any] | None:
@@ -470,6 +471,7 @@ class FilesObserver(Observer):
         super().__init__(watch, config, deliver=deliver, sink=sink)
         self._reported: set[tuple[str, int, int]] = set()
         self._mismatched: set[tuple[str, int, int, int, int]] = set()
+        self._waiting: dict[str, float] = {}
 
     def _ignored(self, name: str) -> bool:
         return any(fnmatch.fnmatch(name, pattern) for pattern in self.config.ignore)
@@ -603,9 +605,12 @@ class FilesObserver(Observer):
                 if now - seen[1] >= settle and wall - info.st_mtime >= settle:
                     extra = self._verified(path, info)
                     if extra is None:
-                        if any(version[:3] == (path, *key) for version in self._mismatched):
-                            del candidates[path]  # a wrong marker: wait for a new upload (an event or the rescan)
+                        mismatched = any(version[:3] == (path, *key) for version in self._mismatched)
+                        waited = now - self._waiting.setdefault(path, now)
+                        if mismatched or waited >= FILES_MARKER_WAIT:
+                            del candidates[path]  # wait for a filesystem event or the rescan instead
                         continue  # no marker yet: stay a candidate, re-checked every FILES_SETTLE_STEP
+                    self._waiting.pop(path, None)
                     del candidates[path]
                     self._reported.add((path, *key))
                     self.emit(
@@ -620,6 +625,8 @@ class FilesObserver(Observer):
                     )
             for path in set(candidates) - set(found):
                 del candidates[path]
+            for path in set(self._waiting) - set(found):
+                del self._waiting[path]
             self._reported &= current
             self._mismatched = {version for version in self._mismatched if version[:3] in current}
             deadline = time.monotonic() + (FILES_SETTLE_STEP if candidates else idle)

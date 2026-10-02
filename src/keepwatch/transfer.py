@@ -249,12 +249,16 @@ def known_hosts_option(path: str | os.PathLike[str]) -> list[str]:
     return ["-o", f'UserKnownHostsFile="{Path(path).as_posix()}"']
 
 
+def with_known_hosts(ssh_options: Sequence[str], known_hosts: str | os.PathLike[str] | None) -> list[str]:
+    """ssh_options plus the known_hosts check: what the remote_files observer and the pull recipe's deletes use."""
+    return [*ssh_options, *(known_hosts_option(known_hosts) if known_hosts else [])]
+
+
 def scp_argv(
     source: Endpoint,
     destination: Endpoint,
     options: ScpOptions,
     version: tuple[int, int] | None,
-    extra_sources: Sequence[Endpoint] = (),
 ) -> list[str]:
     """The scp command line for one copy (see the module docs for every option)."""
     if not (source.remote or destination.remote):
@@ -291,8 +295,7 @@ def scp_argv(
     if both:
         argv.append("-3")
     classic = options.protocol == "scp"
-    sources = [_operand(end, classic=classic, source=True) for end in (source, *extra_sources)]
-    return [*argv, "--", *sources, _operand(destination, classic=classic, source=False)]
+    return [*argv, "--", _operand(source, classic=classic, source=True), _operand(destination, classic=classic, source=False)]
 
 
 def _askpass_python() -> str:
@@ -376,14 +379,12 @@ def copy(
     source: str | os.PathLike[str] | Endpoint,
     destination: str | os.PathLike[str] | Endpoint,
     *,
-    extra_sources: Sequence[str | os.PathLike[str] | Endpoint] = (),
     options: ScpOptions = ScpOptions(),
     report: Report | None = None,
 ) -> None:
-    """Copy one file (and extra_sources, in order, into destination as a directory) with scp. Raises CommandFailed when scp fails, TransferFailed when it cannot be attempted."""
+    """Copy one file with scp. Raises CommandFailed when scp fails, TransferFailed when it cannot be attempted."""
     src, dst = _endpoint(source), _endpoint(destination)
-    extra = [_endpoint(item) for item in extra_sources]
-    argv = scp_argv(src, dst, options, openssh_version(_ssh_beside(options.scp_command[0])), extra_sources=extra)
+    argv = scp_argv(src, dst, options, openssh_version(_ssh_beside(options.scp_command[0])))
     limit = options.timeout
     if options.deadline is not None:
         left = options.deadline - time.time()

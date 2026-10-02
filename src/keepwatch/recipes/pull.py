@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from keepwatch.ctx import Ctx
-from keepwatch.remote import ssh_argv, watcher_source, with_known_hosts
-from keepwatch.transfer import TransferMismatch
+from keepwatch.remote import ssh_argv, watcher_source
+from keepwatch.transfer import TransferMismatch, with_known_hosts
 
 LEDGER = "pulled"
 TO_DELETE = "to_delete"

@@ -20,6 +20,7 @@ from keepwatch.transfer import (
     pull,
     remote_path_arg,
     scp_argv,
+    with_known_hosts,
     write_askpass,
 )
 
@@ -303,6 +304,6 @@ def test_pull_refuses_names_windows_cannot_store(tmp_path):
         pull("me@h:/x/a:b.gz", tmp_path)
 
 
-def test_extra_sources_follow_the_first():
-    argv = scp_argv(parse_endpoint("a.gz"), parse_endpoint("me@h:in/"), ScpOptions(), (10, 5), extra_sources=[parse_endpoint("a.gz.sha256")])
-    assert argv[-3:] == ["a.gz", "a.gz.sha256", "me@h:in/"]
+def test_with_known_hosts():
+    assert with_known_hosts(["-o", "X=1"], None) == ["-o", "X=1"]
+    assert with_known_hosts([], "C:/k h/kh") == ["-o", 'UserKnownHostsFile="C:/k h/kh"']

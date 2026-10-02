@@ -117,8 +117,8 @@ def wanted(name, options):
     return True
 
 
-def sha256_of(path, output, heartbeat):
-    """The file's sha256, read in chunks; heartbeats keep flowing while a large file is hashed."""
+def sha256_of(path, output=None, heartbeat=None):
+    """The file's sha256, read in chunks; with an output, heartbeats keep flowing while a large file is hashed."""
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         while True:
@@ -126,7 +126,8 @@ def sha256_of(path, output, heartbeat):
             if not chunk:
                 break
             digest.update(chunk)
-            output.heartbeat_if_due(heartbeat)
+            if output is not None:
+                output.heartbeat_if_due(heartbeat)
     return digest.hexdigest()
 
 
@@ -259,17 +260,6 @@ class Watcher(object):
                 pass
 
 
-def file_sha256(raw):
-    digest = hashlib.sha256()
-    with open(raw, "rb") as handle:
-        while True:
-            chunk = handle.read(CHUNK)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def delete_one(item, directory):
     """Delete one pulled file if it is still exactly what was pulled (size, mtime and, when given, sha256)."""
     raw = str(item.get("path", "")).encode("utf-8", "surrogateescape")
@@ -288,7 +278,7 @@ def delete_one(item, directory):
     expected = item.get("sha256")
     if expected:
         try:
-            if file_sha256(raw) != expected:
+            if sha256_of(raw) != expected:
                 return {"event": "changed", "reason": "its content differs from the pulled copy"}
         except OSError as exc:
             return {"event": "failed", "reason": exc.strerror or str(exc)}
