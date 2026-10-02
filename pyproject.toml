@@ -22,6 +22,7 @@ packages = ["src/keepwatch"]
 
 [dependency-groups]
 dev = [
+    "asyncssh>=2.24.0",
     "pytest>=8",
     "ruff>=0.6",
 ]
