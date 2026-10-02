@@ -18,6 +18,7 @@ TOPICS: tuple[tuple[str, str], ...] = (
     ("executables", "Command hooks: exit codes, environment variables, payload files"),
     ("observers", "Event sources the service keeps running: [observe.*], ctx.events, delivery, keepwatch observe"),
     ("transfers", "scp transfers for hooks: ctx.transfer, keepwatch kit, passwords, host keys, markers"),
+    ("recipes", "Built-in watches configured in config.toml: pull and push (every setting)"),
     ("states", "Outcomes, the state table, startup, retries and ordering"),
     ("failures", "Failed polls, backoff, offline, enable, retry_after and alert_command"),
     ("storage", "Directories, persistent and run-only data, ledgers, renaming"),
@@ -230,6 +231,19 @@ def _options(command: Any) -> list[str]:
 
 
 GENERATED.update({"config": config_topic, "ctx": ctx_topic, "cli": cli_topic})
+
+
+def recipes_topic() -> str:
+    from keepwatch.config import RECIPE_SETTINGS
+
+    lines = [narrative("recipes")]
+    for recipe, keys in RECIPE_SETTINGS.items():
+        lines += ["", f"## `{recipe}` settings", ""]
+        lines += _key_table(keys, defaultable_column=False)
+    return "\n".join(lines)
+
+
+GENERATED["recipes"] = recipes_topic
 
 
 _LANGUAGES = {".toml": "toml", ".py": "python", ".sh": "sh", ".exp": "tcl", ".ps1": "powershell"}

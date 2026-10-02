@@ -62,6 +62,7 @@ keepwatch hands it to scp through `SSH_ASKPASS` (with `SSH_ASKPASS_REQUIRE=force
 
 ## Errors
 
+- **Remote login scripts must print nothing** for non-interactive sessions: an `echo` in the remote `.cshrc`/`.bashrc` corrupts scp in both protocols ("Received message too long"). Guard it: `if ($?prompt) then … endif` in csh/tcsh, `case $- in *i*) … ;; esac` in sh/bash. (The remote watcher of `remote_files` tolerates such output; scp cannot.) File names with spaces or shell characters are fine: keepwatch backslash-escapes remote paths.
 - scp failing (wrong password: "Permission denied"; unknown host key: "Host key verification failed"; missing file; network) raises `keepwatch.CommandFailed` with scp's last stderr lines, and `keepwatch kit` exits 1 with them on stderr.
 - Anything keepwatch refuses or a failed check (sha256, size, conflict, unset password variable, a check trying to transfer, no time left) raises `keepwatch.TransferFailed` (exit 1 for `keepwatch kit`).
 - An action that raises fails the poll: the watch backs off and retries, and observer events stay queued until a poll succeeds.

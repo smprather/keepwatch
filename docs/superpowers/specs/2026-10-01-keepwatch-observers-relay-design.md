@@ -160,9 +160,10 @@ not allowed.
 ### 5.1 `pull`
 
 Settings: `remote`, `remote_dir`, `pattern` (`*`), `ignore`, `settle` (`10s`), `checksum` (true),
-`remote_python` (`auto`), `port`, `identity`, `password_env`, and a destination: `local_dir` (staging)
-**or** `dest` (a remote endpoint, which switches to direct `scp -3`; it needs `protocol = "sftp"` and
-key authentication on both hosts, so it does not suit an scp-only destination such as linux2).
+`remote_python` (`auto`), `port`, `identity`, `known_hosts`, `ssh_options`, `ssh_command`, and `local_dir`
+(staging). No `password_env` (the observer needs key authentication anyway) and no `dest` (direct `scp -3`
+needs SFTP and keys on both hosts; a watch.py with `ctx.transfer.copy` can do it). The observer gets
+`skip_ledger = "pulled"`, so reconnects do not re-hash files already pulled.
 
 - Observer: a `remote_files` observer named `remote`, built from the settings.
 - check: file events not in the ledger `pulled` (key `path|size|mtime`) → TRUE with them as payload;
@@ -174,7 +175,8 @@ key authentication on both hosts, so it does not suit an scp-only destination su
 
 Settings: `local_dir`, `pattern` (`*`), `dest` (remote endpoint), `password_env`, `marker`
 (`sha256`|`none`), `after` (`delete`|`archive`|`keep`), `archive_dir`, `keep_for` (`7d`), `settle`
-(`10s`), `reachable_port` (22), `reachable_timeout` (`5s`).
+(`10s`), `reachable_port` (22), `reachable_timeout` (`5s`), `reachable_host` (defaults to the host in
+`dest`; set it when `dest` is a Host alias).
 
 - Observer: a `files` observer on `local_dir` (wakes the watch when a file settles).
 - check: if the destination host's `reachable_port` does not accept a TCP connection → **unknown**
