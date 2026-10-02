@@ -199,3 +199,19 @@ docs topic `relay`, covering the topology, key setup for linux1, the password va
   heartbeat timeout); files observer on temporary directories.
 - Recipes and an end-to-end relay test combine the fake ssh, the asyncssh server and temporary
   directories.
+
+## 9. Install guards (Plan 6d)
+
+`keepwatch install` keeps registering the interpreter that runs it (`pythonw.exe` beside `sys.executable` on
+Windows; the same keepwatch on Linux), never one found on PATH, through `py` or `uv python find` (those can be
+the Microsoft Store placeholder or an interpreter without keepwatch). Two guards, on every OS:
+
+- **No transient environments.** Refuse when the interpreter's prefix is inside uv's cache (`UV_CACHE_DIR`, or
+  `uv cache dir` when uv is on PATH, or the default cache location) or the temp directory: `uvx` and
+  `uv run --with` environments are pruned later and the logon task would break silently. The message says to
+  `uv tool install keepwatch` and run `keepwatch install` from there; `--force` overrides.
+- **Verify before registering.** Run `<interpreter> -m keepwatch --version` (console `python.exe` beside
+  `pythonw.exe` on Windows) with the service's environment and require this keepwatch's version; otherwise fail
+  with the command, its exit code and output (the Store placeholder exits 9009).
+
+The user's Windows hub runs keepwatch from `uv tool install keepwatch`, which passes both guards.
