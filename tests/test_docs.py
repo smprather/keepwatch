@@ -6,7 +6,7 @@ from click.testing import CliRunner
 
 from keepwatch import Ctx, Ledger
 from keepwatch.cli import cli
-from keepwatch.config import GLOBAL_KEYS, GLOBAL_TABLES, LOG_KEYS, WATCH_KEYS, WATCH_TABLES
+from keepwatch.config import GLOBAL_KEYS, GLOBAL_TABLES, LOG_KEYS, OBSERVER_KEYS, WATCH_KEYS, WATCH_TABLES
 from keepwatch.reference import TOPICS, render_all, render_topic, topic_index
 
 
@@ -74,7 +74,7 @@ def test_narrative_topics_cover_their_key_facts(topic):
 
 def test_every_config_key_is_documented():
     text = render_topic("config")
-    for key in (*WATCH_KEYS, *GLOBAL_KEYS, *LOG_KEYS):
+    for key in (*WATCH_KEYS, *GLOBAL_KEYS, *LOG_KEYS, *OBSERVER_KEYS):
         assert key.doc.strip(), key.name
         assert f"`{key.name}`" in text, key.name
     for table, doc in (*WATCH_TABLES.items(), *GLOBAL_TABLES.items()):

@@ -120,7 +120,77 @@ WATCH_TABLES = {
     "check_exit_codes": "Exit-code mapping for a command check: true, false, unknown (lists of 0-255).",
     "environment": "Extra environment variables for this watch's hooks.",
     "settings": "Free-form plugin parameters: ctx.settings in Python, KEEPWATCH_SETTING_* for commands.",
+    "observe": "Event sources the service keeps running for this watch, one [observe.<name>] table each; "
+    "see `keepwatch docs observers`.",
 }
+
+OBSERVER_KINDS = ("command", "files")
+DEFAULT_IGNORE = (".*", "*.tmp", "*.part", "*~")
+
+OBSERVER_KEYS = (
+    Key(
+        "kind",
+        "str",
+        None,
+        "Required. `command`: a long-running program; each line it prints is an event. "
+        "`files`: a local directory; each settled file is an event.",
+    ),
+    Key("wake", "bool", True, "Poll the watch as soon as an event arrives (unless it is backing off or offline)."),
+    Key(
+        "command",
+        "command",
+        None,
+        "kind = command, required: the program. A list runs directly (a relative program is resolved against the "
+        "watch directory); a string runs through the watch's `shell`.",
+    ),
+    Key("stdin", "str", None, "kind = command: text written to the program's standard input once at start; then stdin is closed."),
+    Key(
+        "heartbeat_timeout",
+        "interval",
+        None,
+        "kind = command: restart the program when it prints no line (heartbeats included) for this long.",
+    ),
+    Key(
+        "path",
+        "str",
+        None,
+        "kind = files, required: the directory to observe. Relative to the watch directory; `~` and environment "
+        "variables are expanded.",
+    ),
+    Key("pattern", "str", "*", "kind = files: report only file names matching this glob."),
+    Key("ignore", "str_list", DEFAULT_IGNORE, "kind = files: never report file names matching any of these globs."),
+    Key("recursive", "bool", False, "kind = files: also observe subdirectories."),
+    Key(
+        "settle",
+        "duration",
+        10.0,
+        "kind = files: report a file once its size and modification time have not changed for this long and it "
+        "was last modified at least this long ago.",
+    ),
+)
+_OBSERVER_KIND_KEYS = {
+    "command": ("command", "stdin", "heartbeat_timeout"),
+    "files": ("path", "pattern", "ignore", "recursive", "settle"),
+}
+_OBSERVER_REQUIRED = {"command": "command", "files": "path"}
+_OBSERVER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+
+@dataclass(frozen=True)
+class ObserverConfig:
+    """One [observe.<name>] table. Only the keys of its kind are meaningful."""
+
+    name: str
+    kind: str
+    wake: bool = True
+    command: Command | None = None
+    stdin: str | None = None
+    heartbeat_timeout: float | None = None
+    path: Path | None = None
+    pattern: str = "*"
+    ignore: tuple[str, ...] = DEFAULT_IGNORE
+    recursive: bool = False
+    settle: float = 10.0
 
 
 @dataclass(frozen=True)
@@ -141,6 +211,7 @@ class WatchConfig:
     exit_codes: ExitCodes = ExitCodes()
     environment: Mapping[str, str] = field(default_factory=dict)
     settings: Mapping[str, Any] = field(default_factory=dict)
+    observers: Mapping[str, ObserverConfig] = field(default_factory=dict)
 
     @property
     def config_file(self) -> Path:
@@ -329,6 +400,92 @@ def _settings_table(collector: _Collector, value: dict[str, Any]) -> dict[str, A
         return {}
 
 
+def _observed_path(text: str, watch_dir: Path) -> Path:
+    expanded = Path(os.path.expandvars(os.path.expanduser(text)))
+    return expanded if expanded.is_absolute() else watch_dir / expanded
+
+
+def _observer(collector: _Collector, name: str, raw: dict[str, Any], watch_dir: Path) -> ObserverConfig | None:
+    table = f"observe.{name}"
+    kind = raw.get("kind")
+    if kind not in OBSERVER_KINDS:
+        shown = "missing" if kind is None else repr(kind)
+        collector.add(
+            f"[{table}] needs kind = one of {', '.join(OBSERVER_KINDS)}; got {shown}",
+            key="kind" if kind is not None else None,
+            table=table,
+            topic="observers",
+        )
+        return None
+    by_name = {key.name: key for key in OBSERVER_KEYS}
+    allowed = ("kind", "wake", *_OBSERVER_KIND_KEYS[kind])
+    before = len(collector.problems)
+    values: dict[str, Any] = {}
+    for key_name, item in raw.items():
+        if key_name == "kind":
+            continue
+        if key_name not in by_name:
+            _unknown_key(collector, key_name, allowed, table=table)
+            continue
+        if key_name not in allowed:
+            other = next(owner for owner, names in _OBSERVER_KIND_KEYS.items() if key_name in names)
+            collector.add(
+                f"'{key_name}' only applies to kind = \"{other}\"; this observer is kind = \"{kind}\"",
+                key=key_name,
+                table=table,
+                topic="observers",
+            )
+            continue
+        if key_name == "command":
+            command = _command(collector, item, key="command", table=table, topic="observers")
+            if command is not None:
+                values["command"] = command
+            continue
+        converted = _convert(collector, by_name[key_name], item, table=table)
+        if converted is _INVALID:
+            continue
+        if key_name == "path" and converted == "":
+            collector.add("'path' must not be empty", key="path", table=table, topic="observers")
+            continue
+        values[key_name] = converted
+    required = _OBSERVER_REQUIRED[kind]
+    if required not in raw:
+        collector.add(f"[{table}] (kind = \"{kind}\") needs '{required}'", table=table, topic="observers")
+    if len(collector.problems) > before:
+        return None
+    if "path" in values:
+        values["path"] = _observed_path(values["path"], watch_dir)
+    return ObserverConfig(name=name, kind=kind, **values)
+
+
+def _observe_table(collector: _Collector, value: Any, watch_dir: Path) -> dict[str, ObserverConfig]:
+    if not isinstance(value, dict):
+        collector.add(
+            "'observe' must be a table of observers, one [observe.<name>] table each",
+            key="observe",
+            topic="observers",
+        )
+        return {}
+    observers = {}
+    for name, raw in value.items():
+        if not _OBSERVER_NAME.fullmatch(name):
+            collector.add(
+                f"observer name '{name}' may contain only letters, digits, '_' and '-', starting with a letter or digit",
+                table=f"observe.{name}",
+                topic="observers",
+            )
+            continue
+        if not isinstance(raw, dict):
+            collector.add(
+                f"'observe.{name}' must be a table ([observe.{name}])", key=name, table="observe", topic="observers"
+            )
+            continue
+        observer = _observer(collector, name, raw, watch_dir)
+        if observer is not None:
+            observers[name] = observer
+    return observers
+
+
 def load_watch_config(watch_dir: Path, defaults: Mapping[str, Any] | None = None) -> WatchConfig:
     """Read and validate <watch_dir>/config.toml. Raises ConfigError listing every problem."""
     path = watch_dir / CONFIG_NAME
@@ -342,6 +499,7 @@ def load_watch_config(watch_dir: Path, defaults: Mapping[str, Any] | None = None
     exit_codes = ExitCodes()
     environment: dict[str, str] = {}
     settings: dict[str, Any] = {}
+    observers: dict[str, ObserverConfig] = {}
     for name, value in data.items():
         if name in by_name:
             converted = _convert(collector, by_name[name], value)
@@ -358,6 +516,8 @@ def load_watch_config(watch_dir: Path, defaults: Mapping[str, Any] | None = None
                 settings = _settings_table(collector, value)
             else:
                 collector.add("'settings' must be a table ([settings])", key="settings")
+        elif name == "observe":
+            observers = _observe_table(collector, value, watch_dir)
         else:
             _unknown_key(collector, name, [*by_name, *WATCH_TABLES])
     if collector.problems:
@@ -369,6 +529,7 @@ def load_watch_config(watch_dir: Path, defaults: Mapping[str, Any] | None = None
         exit_codes=exit_codes,
         environment=MappingProxyType(environment),
         settings=MappingProxyType(settings),
+        observers=MappingProxyType(observers),
         **values,
     )
 

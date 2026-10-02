@@ -95,7 +95,7 @@ def _default_text(key: Any) -> str:
     if isinstance(value, bool):
         return f"`{str(value).lower()}`"
     if isinstance(value, tuple):
-        return "`[]`"
+        return "`[" + ", ".join(f'"{item}"' for item in value) + "]`"
     if value == "":
         return '`""`'
     return f"`{value}`"
@@ -118,12 +118,14 @@ def _key_table(keys: Any, *, defaultable_column: bool) -> list[str]:
 
 
 def config_topic() -> str:
-    from keepwatch.config import GLOBAL_KEYS, GLOBAL_TABLES, LOG_KEYS, WATCH_KEYS, WATCH_TABLES
+    from keepwatch.config import GLOBAL_KEYS, GLOBAL_TABLES, LOG_KEYS, OBSERVER_KEYS, WATCH_KEYS, WATCH_TABLES
 
     lines = [narrative("config"), "", "## Watch config.toml", ""]
     lines += _key_table(WATCH_KEYS, defaultable_column=True)
     lines += ["", "Tables:", ""]
     lines += [f"- `[{name}]`: {doc}" for name, doc in WATCH_TABLES.items()]
+    lines += ["", "### `[observe.<name>]`", "", "One table per observer; see `keepwatch docs observers`.", ""]
+    lines += _key_table(OBSERVER_KEYS, defaultable_column=False)
     lines += ["", "## Global config.toml", ""]
     lines += _key_table(
         [key for key in GLOBAL_KEYS],
