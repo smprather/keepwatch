@@ -182,3 +182,13 @@ def test_remote_heartbeat_timeout_must_exceed_heartbeat(make_watch):
 def test_remote_heartbeat_timeout_is_checked_against_the_default_heartbeat(make_watch):
     [problem] = problems(make_watch, REMOTE + "heartbeat_timeout = '20s'\n")
     assert "must be longer than 'heartbeat' (30s)" in problem
+
+
+def test_remote_skip_ledger(make_watch):
+    config = load(make_watch, REMOTE + "skip_ledger = 'pulled'\n")
+    assert config.observers["r"].skip_ledger == "pulled"
+
+
+def test_remote_skip_ledger_must_be_a_ledger_name(make_watch):
+    [problem] = problems(make_watch, REMOTE + "skip_ledger = '../x'\n")
+    assert "'skip_ledger' must be a ledger name" in problem

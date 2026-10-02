@@ -283,6 +283,13 @@ class WatcherTests(unittest.TestCase):
         self.write("a.gz")
         self.assertEqual(self.start(rescan=60).next_file()["name"], "a.gz")
 
+    def test_skipped_files_are_not_reported(self):
+        done = self.write("done.gz")
+        self.write("new.gz")
+        key = "%s|%d|%r" % (os.path.abspath(done), os.stat(done).st_size, os.stat(done).st_mtime)
+        running = self.start(skip=[key], heartbeat=0.5)
+        self.assertEqual(running.file_names_for(3.0), ["new.gz"])
+
 
 if __name__ == "__main__":
     unittest.main()

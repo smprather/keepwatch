@@ -31,6 +31,7 @@ from watchdog.observers import Observer as NativeObserver
 
 from keepwatch import platform
 from keepwatch.config import Command, ObserverConfig, WatchConfig
+from keepwatch.ctx import Ledger, LedgerCorrupt
 from keepwatch.durations import format_duration
 from keepwatch.logstore import Sink, make_record
 from keepwatch.offline import iso_time
@@ -638,16 +639,41 @@ class RemoteFilesObserver(CommandObserver):
     kind = "remote_files"
 
     def __init__(
-        self, watch: WatchConfig, config: ObserverConfig, *, deliver: Deliver, sink: Sink, env: Mapping[str, str]
+        self,
+        watch: WatchConfig,
+        config: ObserverConfig,
+        *,
+        deliver: Deliver,
+        sink: Sink,
+        env: Mapping[str, str],
+        data_dir: Path | None = None,
     ) -> None:
         timeout = config.heartbeat_timeout if config.heartbeat_timeout is not None else 3 * config.heartbeat
+        self._options = watcher_options(config)
+        self._skip_ledger = (
+            None if config.skip_ledger is None or data_dir is None else data_dir / "ledgers" / f"{config.skip_ledger}.json"
+        )
         command_config = replace(
             config,
             command=Command(argv=tuple(remote_command(config))),
-            stdin=watcher_source(watcher_options(config)),
+            stdin=watcher_source(self._options),
             heartbeat_timeout=timeout,
         )
         super().__init__(watch, command_config, deliver=deliver, sink=sink, env=env)
+
+    def run_once(self) -> None:
+        if self._skip_ledger is not None:
+            # Read at every (re)connect: files handled since the last connection are skipped too.
+            self.config = replace(self.config, stdin=watcher_source({**self._options, "skip": self._skipped()}))
+        super().run_once()
+
+    def _skipped(self) -> list[str]:
+        assert self._skip_ledger is not None
+        try:
+            return list(Ledger(self._skip_ledger, writable=False))
+        except LedgerCorrupt as exc:
+            self._output.line(str(exc))
+            return []
 
     def emit(self, event: dict[str, Any]) -> None:
         kind = event.get("event")
@@ -686,8 +712,9 @@ def build_observer(
         with contextlib.suppress(OSError):
             data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         env = observer_environment(watch, config.name, environment=environment, data_dir=data_dir)
-        cls = CommandObserver if config.kind == "command" else RemoteFilesObserver
-        return cls(watch, config, deliver=deliver, sink=sink, env=env)
+        if config.kind == "command":
+            return CommandObserver(watch, config, deliver=deliver, sink=sink, env=env)
+        return RemoteFilesObserver(watch, config, deliver=deliver, sink=sink, env=env, data_dir=data_dir)
     if config.kind == "files":
         return FilesObserver(watch, config, deliver=deliver, sink=sink)
     raise ValueError(f"unknown observer kind {config.kind!r}")

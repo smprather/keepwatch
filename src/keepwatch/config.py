@@ -212,6 +212,13 @@ OBSERVER_KEYS = (
         None,
         'kind = remote_files: the ssh program and leading arguments. Default: ["ssh"].',
     ),
+    Key(
+        "skip_ledger",
+        "str",
+        None,
+        "kind = remote_files: a ledger of this watch (ctx.ledger(name)) whose keys \"path|size|mtime\" are files "
+        "already handled; they are neither hashed nor reported again, which keeps reconnects cheap.",
+    ),
 )
 _OBSERVER_KIND_KEYS = {
     "command": ("command", "stdin", "heartbeat_timeout"),
@@ -231,11 +238,13 @@ _OBSERVER_KIND_KEYS = {
         "identity",
         "ssh_options",
         "ssh_command",
+        "skip_ledger",
     ),
 }
 _OBSERVER_REQUIRED = {"command": ("command",), "files": ("path",), "remote_files": ("remote", "dir")}
 _OBSERVER_NON_EMPTY = ("path", "remote", "dir", "remote_python")
 _OBSERVER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+_LEDGER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
 @dataclass(frozen=True)
@@ -263,6 +272,7 @@ class ObserverConfig:
     identity: Path | None = None
     ssh_options: tuple[str, ...] = ()
     ssh_command: tuple[str, ...] | None = None
+    skip_ledger: str | None = None
 
 
 @dataclass(frozen=True)
@@ -522,6 +532,14 @@ def _observer(collector: _Collector, name: str, raw: dict[str, Any], watch_dir: 
         if key_name == "port" and not 1 <= converted <= 65535:
             collector.add(
                 f"'port' must be between 1 and 65535, got {converted}", key="port", table=table, topic="observers"
+            )
+            continue
+        if key_name == "skip_ledger" and not _LEDGER.fullmatch(converted):
+            collector.add(
+                f"'skip_ledger' must be a ledger name (letters, digits, '_', '.', '-'), got {converted!r}",
+                key="skip_ledger",
+                table=table,
+                topic="observers",
             )
             continue
         values[key_name] = converted

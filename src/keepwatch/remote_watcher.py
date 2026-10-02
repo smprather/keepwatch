@@ -40,6 +40,7 @@ DEFAULTS = {
     "checksum": True,
     "heartbeat": 30.0,
     "rescan": 30.0,
+    "skip": [],
 }
 SETTLE_STEP = 1.0  # rescan this often while a file is settling
 MIN_RESCAN = 0.5  # at most two scans a second, however many notifications arrive
@@ -136,6 +137,7 @@ class Watcher(object):
         self.reported = set()  # (path, size, mtime_ns)
         self.unreadable = {}  # (path, size, mtime_ns) -> when reading it last failed
         self.noted = set()
+        self.skip = set(options["skip"])  # "path|size|mtime" keys the caller has already handled
 
     def note(self, message):
         """Tell keepwatch about a problem once (stderr lines become observer.output records)."""
@@ -173,6 +175,9 @@ class Watcher(object):
             present.add(path)
             current.add((path,) + key)
             if (path,) + key in self.reported:
+                continue
+            if self.skip and "%s|%d|%r" % (decode(path), info.st_size, info.st_mtime) in self.skip:
+                self.reported.add((path,) + key)
                 continue
             failed_at = self.unreadable.get((path,) + key)
             if failed_at is not None and now - failed_at < self.options["rescan"]:

@@ -10,6 +10,7 @@ import pytest
 
 from keepwatch import observers
 from keepwatch.config import ObserverConfig, load_watch_config
+from keepwatch.ctx import Ledger
 from keepwatch.observers import (
     AUTO_PYTHON,
     RemoteFilesObserver,
@@ -255,3 +256,21 @@ def test_auto_remote_python(tmp_path, make_watch, xdg):
     finally:
         stop(observer)
     assert kinds(records, "observer.connected")[0]["python"].startswith("3.")
+
+
+def test_skip_ledger_files_are_not_reported(tmp_path, make_watch, xdg):
+    remote_dir = remote_dir_with_file(tmp_path)
+    (remote_dir / "b.tar.gz").write_bytes(b"more")
+    age(remote_dir / "b.tar.gz")
+    done = remote_dir / "a.tar.gz"
+    info = done.stat()
+    key = f"{os.path.join(os.path.abspath(remote_dir), 'a.tar.gz')}|{info.st_size}|{info.st_mtime!r}"
+    Ledger(xdg.watch_data_dir("w") / "ledgers" / "pulled.json").add(key)
+    observer, events, records = remote_observer(make_watch, xdg, remote_dir, "skip_ledger = 'pulled'\n")
+    observer.start()
+    try:
+        assert wait_for(lambda: events)
+        time.sleep(2.5)
+    finally:
+        stop(observer)
+    assert [event["name"] for event in events] == ["b.tar.gz"]
