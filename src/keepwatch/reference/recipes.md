@@ -21,6 +21,7 @@ settle = "30s"
 - **check** answers TRUE with the reported files not yet in the ledger `pulled`.
 - **on_true** pulls each one into `local_dir` through `.NAME.part`, verifies size and sha256, renames it, and adds it to `pulled`. A failure stops the action (the files already done stay recorded) and the poll fails: the watch backs off and retries, and the events stay queued (at-least-once).
 - When `local_dir` already holds a different file of the same name (a newer version arrived while the old one still waits to be pushed), `on_conflict` decides: `rename` (default: the new one becomes NAME-1.ext), `overwrite`, or `skip-identical` (fail). An identical file (same sha256) is never copied again.
+- With `delete_remote = true`, each verified file is also queued in the ledger `to_delete` and deleted from the source host by keepwatch's remote helper (one ssh call per poll): only an unchanged regular file directly in `remote_dir`. Problems never fail the poll; failed deletes are retried after `delete_retry`. Needs `checksum = true`.
 - The same ledger is the observer's `skip_ledger`: after a reconnect, files already pulled are neither hashed nor reported again. Files stay on the source host; pulled files are never pulled again while their size and modification time stay the same.
 
 ## push: a local folder → a remote directory, when it is reachable

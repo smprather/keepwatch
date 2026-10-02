@@ -50,6 +50,8 @@ Each settled file is reported once per (path, size, modification time) while the
 
 A missing directory is retried with the same backoff as a command, so an observer may be configured before its directory exists.
 
+With `marker = "sha256"` a file is reported only once `NAME.sha256` (sha256sum format) beside it has settled and matches; the event gains `sha256` and `marker`, and the markers themselves are never reported. A mismatch is logged once (an `observer.output` WARNING) and the file is reported after a corrected upload. The receiving end of a relay uses this (`keepwatch docs relay`).
+
 ### kind = "remote_files"
 
 Watches a directory on another host through **one long-lived outbound ssh connection**. Nothing is installed there: keepwatch sends its remote watcher (one Python file) over ssh's standard input to the remote host's Python 3.6 or newer, which runs it from memory.

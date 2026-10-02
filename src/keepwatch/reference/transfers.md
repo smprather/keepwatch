@@ -28,7 +28,7 @@ At least one side must be remote. **Two remote endpoints** (copying linux1 → l
 |---|---|---|
 | `ctx.transfer.copy(src, dst)` | `keepwatch kit copy SRC DST` | One scp; nothing else. |
 | `ctx.transfer.pull(remote, local_dir, size=, sha256=, on_conflict=)` | `keepwatch kit pull REMOTE DIR [--size N] [--sha256 HEX] [--on-conflict …]` | Copies to `DIR/.NAME.part`, checks size and sha256 when given, then renames to `DIR/NAME`. A failed check deletes the part file, so a half or wrong file never appears under its real name. Returns / prints the final path. |
-| `ctx.transfer.push(path, remote_dir, marker=)` | `keepwatch kit push PATH REMOTE_DIR [--marker sha256\|none]` | Uploads `NAME`, then `NAME.sha256` in `sha256sum` format. Returns / prints the remote path. |
+| `ctx.transfer.push(path, remote_dir, marker=)` | `keepwatch kit push PATH REMOTE_DIR [--marker sha256\|none]` | Uploads `NAME`, then `NAME.sha256` in `sha256sum` format, in one scp run (one login, data first). Returns / prints the remote path. |
 | `ctx.transfer.tcp_open(host, port=22, timeout=5)` | `keepwatch kit tcp-open HOST [--port N]` | Whether the port accepts a TCP connection (exit 0 open, 1 closed). Allowed in a check. |
 
 `pull` when `DIR/NAME` already exists: with `sha256` given and matching, nothing is copied (an earlier pull finished); otherwise it fails unless `on_conflict = "rename"` (`NAME-1.ext`) or `"overwrite"`.

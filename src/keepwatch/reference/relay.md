@@ -23,13 +23,23 @@ Both are in `keepwatch docs examples` (`relay-pull`, `relay-push`).
 6. **The watches:** copy the two examples into your watches directory (`keepwatch docs examples` prints them), set `remote`, `remote_dir` and `dest`, and give both the same path in `local_dir` (the examples use `~/relay/staging`; a relative path would be relative to each watch's own directory, and the two would never meet), then `keepwatch validate relay-pull relay-push`.
 7. **Try each part:** `keepwatch observe relay-pull remote --for 1m` must print the files on linux1 as JSON lines; `keepwatch poll relay-push --dry-run` shows whether linux2 is reachable (unknown when it is not). Then `keepwatch install`.
 
-## On linux2
+## Receiving on linux2
 
-Files arrive in `incoming/` as `NAME`, then `NAME.sha256`. A consumer should wait for the marker and check before using the file:
+Run keepwatch on linux2 too, with a watch like the `relay-receive` example: a `files` observer with `marker = "sha256"` on the incoming directory. It reports `NAME` only once `NAME.sha256` has arrived beside it and matches, so the hook never sees a half-uploaded file:
 
-```sh
-cd ~/incoming && for marker in *.sha256; do sha256sum -c "$marker" && process "${marker%.sha256}"; done
+```toml
+[observe.arrivals]
+kind = "files"
+path = "~/incoming"
+pattern = "*.tar.gz"
+marker = "sha256"
 ```
+
+Each event carries the verified `sha256` and the `marker` path; record handled files in a ledger (events can come more than once) and move or delete the file and its marker when done. Without keepwatch there, a script can do the same: wait for the marker, then `sha256sum -c NAME.sha256`.
+
+## Sweep: delete from the source
+
+Set `delete_remote = true` in relay-pull to delete each file from linux1 once its copy on the hub is verified (size and sha256) and recorded. Only an unchanged regular file directly in `remote_dir` is deleted: a file that changed since it was pulled stays on linux1 (with a WARNING). Deletes go through keepwatch's remote helper in one short ssh call per poll; a delete that fails (permissions, linux1 away) never fails the poll and is retried after `delete_retry` (10 minutes). linux1 then only ever holds files that have not reached the hub yet.
 
 ## Watching it work
 

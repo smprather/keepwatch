@@ -12,3 +12,4 @@ remote_dir = "/data/exports"
 local_dir = "~/relay/staging"   # the staging folder: the SAME path in relay-pull and relay-push
 pattern = "*.tar.gz"
 settle = "30s"             # unchanged this long on linux1 before it counts as finished
+# delete_remote = true     # sweep: delete each file from linux1 once its copy here is verified (needs checksum)

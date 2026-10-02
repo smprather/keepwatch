@@ -1,0 +1,15 @@
+# Relay, the receiving end (keepwatch on linux2): act on each file once it has fully arrived.
+# relay-push uploads NAME, then NAME.sha256; marker = "sha256" reports NAME only when they match.
+# See: keepwatch docs relay
+description = "Move each verified arrival from incoming/ to incoming/done/"
+interval = "1h"            # events wake the watch at once; this is only a fallback
+
+[observe.arrivals]
+kind = "files"
+path = "~/incoming"
+pattern = "*.tar.gz"
+marker = "sha256"
+settle = "10s"
+
+[settings]
+done_dir = "~/incoming/done"

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -23,7 +24,7 @@ def install(xdg, name):
 
 def test_examples_are_in_the_docs():
     text = render_topic("examples")
-    assert [d.name for d in example_dirs()] == ["disk-space-ps", "greet-once", "psg-export", "relay-pull", "relay-push", "site-down"]
+    assert [d.name for d in example_dirs()] == ["disk-space-ps", "greet-once", "psg-export", "relay-pull", "relay-push", "relay-receive", "site-down"]
     for directory in example_dirs():
         for path in directory.iterdir():
             if path.is_file():
@@ -91,3 +92,19 @@ def test_relay_examples_share_the_staging_folder(xdg):
     pulled = load_watch_config(install(xdg, "relay-pull")).settings["local_dir"]
     pushed = load_watch_config(install(xdg, "relay-push")).settings["local_dir"]
     assert pulled == pushed == str(Path.home() / "relay" / "staging")
+
+
+def test_relay_receive_example_processes_a_verified_arrival(xdg):
+    watch_dir = install(xdg, "relay-receive")
+    incoming = Path.home() / "incoming"
+    incoming.mkdir(parents=True)
+    (incoming / "a.tar.gz").write_bytes(b"payload")
+    digest = hashlib.sha256(b"payload").hexdigest()
+    event = {"event": "file", "path": str(incoming / "a.tar.gz"), "name": "a.tar.gz", "sha256": digest, "marker": str(incoming / "a.tar.gz.sha256")}
+    (incoming / "a.tar.gz.sha256").write_text(f"{digest}  a.tar.gz\n", encoding="utf-8")
+    assert run("validate", "relay-receive").exit_code == 0
+    result = run("poll", "relay-receive", "--events", json.dumps([event]), "--json")
+    assert json.loads(result.output)["polls"][0]["failed"] is False, result.output
+    done = Path.home() / "incoming" / "done"
+    assert (done / "a.tar.gz").read_bytes() == b"payload" and (done / "a.tar.gz.sha256").exists()
+    assert watch_dir.exists()
