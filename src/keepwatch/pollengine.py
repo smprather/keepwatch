@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -99,6 +100,10 @@ class PollEngine:
         """Use a reloaded global config from the next hook call on."""
         self._global = global_config
 
+    @property
+    def global_config(self) -> GlobalConfig:
+        return self._global
+
     def poll(
         self,
         watch: WatchConfig,
@@ -107,11 +112,13 @@ class PollEngine:
         fake: Fake | None = None,
         dry_run: bool = False,
         trial: bool = False,
+        events: Sequence[dict[str, Any]] = (),
     ) -> PollReport:
         poll_id = uuid.uuid4().hex[:12]
+        events = tuple(events)
         tag = {"watch": watch.name, "poll_id": poll_id}
         faked = fake is not None
-        self._sink(make_record("poll.start", **tag, condition=state.condition, faked=faked, dry_run=dry_run, trial=trial))
+        self._sink(make_record("poll.start", **tag, condition=state.condition, faked=faked, dry_run=dry_run, trial=trial, events=len(events)))
         hooks, problem = resolve_hooks(watch.watch_dir, watch.hooks)
         if problem is None and fake is None and CHECK not in hooks:
             problem = NO_CHECK
@@ -120,7 +127,7 @@ class PollEngine:
         elif fake is not None:
             outcome, reason, payload = fake.outcome, "faked with --fake", fake.payload
         else:
-            result = self._run(watch, CHECK, poll_id, state.condition, None, watch.check_timeout)
+            result = self._run(watch, CHECK, poll_id, state.condition, None, watch.check_timeout, events)
             outcome, reason, payload = result.outcome(), result.reason, result.payload
         plan = plan_poll(state, outcome, hooks)
         answered = outcome in (Outcome.TRUE, Outcome.FALSE, Outcome.UNKNOWN)
@@ -144,7 +151,7 @@ class PollEngine:
             after, failed = finish_poll(plan, [(hook, True) for hook in plan.actions])
         else:
             for hook in plan.actions:
-                result = self._run(watch, hook, poll_id, plan.state.condition, payload, watch.action_timeout)
+                result = self._run(watch, hook, poll_id, plan.state.condition, payload, watch.action_timeout, events)
                 results.append(result)
                 if not result.succeeded:
                     break
@@ -204,6 +211,7 @@ class PollEngine:
         condition: bool,
         payload: Any,
         timeout: float,
+        events: tuple[dict[str, Any], ...],
     ) -> HookResult:
         tag = {"watch": watch.name, "poll_id": poll_id, "hook": hook}
         call = HookCall(
@@ -217,6 +225,7 @@ class PollEngine:
             timeout=timeout,
             capture_bytes=self._global.log.capture_bytes,
             environment=self._global.environment,
+            events=events,
             on_message=functools.partial(self._emit_message, tag),
         )
         result = self._runner.run(call)

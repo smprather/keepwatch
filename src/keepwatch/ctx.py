@@ -159,7 +159,7 @@ class Ctx:
 
     Attributes: watch (name), hook (which hook is running), poll_id (on every
     log record of this poll), condition (before the answer in check, after it
-    in actions), payload (what check returned with its answer; actions only),
+    in actions), payload (what check returned with its answer; actions only), events (observer events delivered with this poll, oldest first; see keepwatch docs observers),
     settings (the [settings] table), watch_dir (also the working directory),
     log (a logging.Logger whose records land in keepwatch's log).
     """
@@ -180,12 +180,14 @@ class Ctx:
         capture_bytes: int = 65_536,
         emit: Emit | None = None,
         shell: Sequence[str] | None = None,
+        events: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         self.watch = watch
         self.hook = hook
         self.poll_id = poll_id
         self.condition = condition
         self.payload = payload
+        self.events: list[dict[str, Any]] = [dict(event) for event in events or ()]
         self.settings = settings
         self.watch_dir = watch_dir
         self.log = logging.getLogger(f"keepwatch.watch.{watch}")

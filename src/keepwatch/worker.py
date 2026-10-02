@@ -128,6 +128,7 @@ def run_request(request: dict[str, Any], send: Send) -> dict[str, Any]:
         capture_bytes=request.get("capture_bytes", 65_536),
         emit=send,
         shell=request.get("shell"),
+        events=request.get("events") or [],
     )
     try:
         value = function(ctx)

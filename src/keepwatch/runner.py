@@ -52,6 +52,7 @@ class HookCall:
     capture_bytes: int = 65_536
     environment: Mapping[str, str] = field(default_factory=dict)
     mode: str = "call"
+    events: tuple[dict[str, Any], ...] = ()
     on_message: Callable[[dict[str, Any]], None] | None = field(default=None, compare=False)
 
 
@@ -251,6 +252,16 @@ def setting_variables(settings: Mapping[str, Any]) -> dict[str, str]:
     return variables
 
 
+def base_environment(environment: Mapping[str, str], watch: WatchConfig) -> dict[str, str]:
+    """What hooks and observers start from: the service's environment without inherited KEEPWATCH_*
+    (except KEEPWATCH_CONFIG), then the global [environment], the watch's [environment] and KEEPWATCH_SETTING_*."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("KEEPWATCH_") or key == "KEEPWATCH_CONFIG"}
+    env.update(environment)
+    env.update(watch.environment)
+    env.update(setting_variables(watch.settings))
+    return env
+
+
 def make_shim(directory: Path) -> Path:
     """A PYTHONPATH directory exposing only the running keepwatch package (for uv environments)."""
     import keepwatch
@@ -363,14 +374,7 @@ class Runner:
         )
 
     def _environment(self, call: HookCall) -> dict[str, str]:
-        env = {
-            key: value
-            for key, value in os.environ.items()
-            if not key.startswith("KEEPWATCH_") or key == "KEEPWATCH_CONFIG"
-        }
-        env.update(call.environment)
-        env.update(call.watch.environment)
-        env.update(setting_variables(call.watch.settings))
+        env = base_environment(call.environment, call.watch)
         env.update(
             {
                 "KEEPWATCH_WATCH": call.watch.name,
@@ -528,6 +532,7 @@ class Runner:
             "poll_id": call.poll_id,
             "condition": call.condition,
             "payload": call.payload,
+            "events": list(call.events),
             "settings": dict(call.watch.settings),
             "shell": list(call.watch.shell) if call.watch.shell else None,
             "deadline": deadline,
@@ -640,6 +645,10 @@ class Runner:
                 settings_file.write_text(json.dumps(dict(call.watch.settings)), encoding="utf-8")
                 temp_files.append(settings_file)
                 env["KEEPWATCH_SETTINGS_FILE"] = str(settings_file)
+                events_file = call.run_dir / f"{stem}-events.json"
+                events_file.write_text(json.dumps(list(call.events)), encoding="utf-8")
+                temp_files.append(events_file)
+                env["KEEPWATCH_EVENTS_FILE"] = str(events_file)
                 if call.hook == CHECK:
                     payload_out = call.run_dir / f"{stem}-payload-out.json"
                     payload_out.unlink(missing_ok=True)
