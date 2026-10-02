@@ -26,8 +26,9 @@ class _Server(asyncssh.SSHServer):
 
 
 class ScpServer:
-    def __init__(self, root: Path, workdir: Path) -> None:
+    def __init__(self, root: Path, workdir: Path, chroot: bool = True) -> None:
         self.root = root
+        self.chroot = chroot
         self.client_key = workdir / "client_key"
         self.known_hosts = workdir / "known_hosts"
         self.port = 0
@@ -70,7 +71,11 @@ class ScpServer:
             server_factory=_Server,
             authorized_client_keys=authorized,
             allow_scp=True,
-            sftp_factory=lambda channel: asyncssh.SFTPServer(channel, chroot=str(self.root)),
+            sftp_factory=(
+                (lambda channel: asyncssh.SFTPServer(channel, chroot=str(self.root)))
+                if self.chroot
+                else asyncssh.SFTPServer
+            ),
         )
         self.port = self._server.sockets[0].getsockname()[1]
         self.known_hosts.write_text(
