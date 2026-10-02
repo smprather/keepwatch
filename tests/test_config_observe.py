@@ -192,3 +192,13 @@ def test_remote_skip_ledger(make_watch):
 def test_remote_skip_ledger_must_be_a_ledger_name(make_watch):
     [problem] = problems(make_watch, REMOTE + "skip_ledger = '../x'\n")
     assert "'skip_ledger' must be a ledger name" in problem
+
+
+def test_files_marker(make_watch):
+    config = load(make_watch, "[observe.in]\nkind = 'files'\npath = 'in'\nmarker = 'sha256'\n")
+    assert config.observers["in"].marker == "sha256"
+
+
+def test_files_marker_must_be_a_choice(make_watch):
+    [problem] = problems(make_watch, "[observe.in]\nkind = 'files'\npath = 'in'\nmarker = 'md5'\n")
+    assert "'marker' must be none or sha256" in problem

@@ -183,6 +183,13 @@ OBSERVER_KEYS = (
         "kind = files or remote_files: report a file once its size and modification time have not changed for "
         "this long and it was last modified at least this long ago.",
     ),
+    Key(
+        "marker",
+        "str",
+        "none",
+        "kind = files: `sha256` reports a file only once NAME.sha256 beside it (sha256sum format) matches it; the "
+        "markers themselves are never reported. `none`: no markers.",
+    ),
     Key("remote", "str", None, "kind = remote_files, required: `user@host`, or a Host alias from ~/.ssh/config."),
     Key(
         "dir",
@@ -231,7 +238,7 @@ OBSERVER_KEYS = (
 )
 _OBSERVER_KIND_KEYS = {
     "command": ("command", "stdin", "heartbeat_timeout"),
-    "files": ("path", "pattern", "ignore", "recursive", "settle"),
+    "files": ("path", "pattern", "ignore", "recursive", "settle", "marker"),
     "remote_files": (
         "remote",
         "dir",
@@ -281,6 +288,7 @@ class ObserverConfig:
     ssh_options: tuple[str, ...] = ()
     ssh_command: tuple[str, ...] | None = None
     skip_ledger: str | None = None
+    marker: str = "none"
 
 
 RECIPES = ("pull", "push")
@@ -732,6 +740,9 @@ def _observer(collector: _Collector, name: str, raw: dict[str, Any], watch_dir: 
                 table=table,
                 topic="observers",
             )
+            continue
+        if key_name == "marker" and converted not in ("none", "sha256"):
+            collector.add(f"'marker' must be none or sha256, got {converted!r}", key="marker", table=table, topic="observers")
             continue
         values[key_name] = converted
     if kind == "remote_files" and "heartbeat_timeout" in values:

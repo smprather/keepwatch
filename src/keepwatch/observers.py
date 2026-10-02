@@ -13,6 +13,7 @@ import errno
 import fnmatch
 import json
 import os
+import re
 import stat
 import subprocess
 import threading
@@ -38,6 +39,7 @@ from keepwatch.protocol import clip
 from keepwatch.remote import AUTO_PYTHON as AUTO_PYTHON
 from keepwatch.remote import ssh_argv, watcher_source
 from keepwatch.runner import DRAIN_GRACE, KILL_GRACE, base_environment
+from keepwatch.transfer import sha256_file
 
 Deliver = Callable[[dict[str, Any]], None]
 
@@ -467,12 +469,49 @@ class FilesObserver(Observer):
     def __init__(self, watch: WatchConfig, config: ObserverConfig, *, deliver: Deliver, sink: Sink) -> None:
         super().__init__(watch, config, deliver=deliver, sink=sink)
         self._reported: set[tuple[str, int, int]] = set()
+        self._mismatched: set[tuple[str, int, int, int, int]] = set()
 
     def _ignored(self, name: str) -> bool:
         return any(fnmatch.fnmatch(name, pattern) for pattern in self.config.ignore)
 
     def _wanted(self, name: str) -> bool:
+        if self.config.marker == "sha256" and name.endswith(".sha256"):
+            return False
         return fnmatch.fnmatch(name, self.config.pattern) and not self._ignored(name)
+
+    def _verified(self, path: str, info: os.stat_result) -> dict[str, Any] | None:
+        """{} without markers; with marker = sha256 the event fields, or None while the marker is missing or wrong."""
+        if self.config.marker != "sha256":
+            return {}
+        marker = Path(path + ".sha256")
+        try:
+            marker_info = marker.stat()
+        except OSError:
+            return None
+        if time.time() - marker_info.st_mtime < self.config.settle:
+            return None
+        version = (path, info.st_size, info.st_mtime_ns, marker_info.st_size, marker_info.st_mtime_ns)
+        if version in self._mismatched:
+            return None
+        try:
+            fields = marker.read_text(encoding="utf-8", errors="replace").split()
+            expected = fields[0].lower() if fields else ""
+            actual = sha256_file(path)
+        except OSError:
+            return None
+        if re.fullmatch(r"[0-9a-f]{64}", expected) and actual == expected:
+            return {"sha256": actual, "marker": str(marker)}
+        self._mismatched.add(version)
+        self._sink(
+            make_record(
+                "observer.output",
+                level="WARNING",
+                **self._tag(),
+                stream="marker",
+                text=f"{Path(path).name}: {marker.name} does not match (sha256 {actual}); waiting for a new upload",
+            )
+        )
+        return None
 
     def _scan(self) -> dict[str, os.stat_result]:
         """Regular files to consider, by absolute path. Raises OSError if the directory is gone."""
@@ -562,7 +601,10 @@ class FilesObserver(Observer):
                 if seen is None or seen[0] != key:
                     seen = candidates[path] = (key, now)
                 if now - seen[1] >= settle and wall - info.st_mtime >= settle:
-                    del candidates[path]
+                    del candidates[path]  # settled; without a matching marker it settles again and is re-checked
+                    extra = self._verified(path, info)
+                    if extra is None:
+                        continue
                     self._reported.add((path, *key))
                     self.emit(
                         {
@@ -571,11 +613,13 @@ class FilesObserver(Observer):
                             "name": Path(path).name,
                             "size": info.st_size,
                             "mtime": info.st_mtime,
+                            **extra,
                         }
                     )
             for path in set(candidates) - set(found):
                 del candidates[path]
             self._reported &= current
+            self._mismatched = {version for version in self._mismatched if version[:3] in current}
             deadline = time.monotonic() + (FILES_SETTLE_STEP if candidates else idle)
             while not self._stop.is_set() and not changed.is_set() and time.monotonic() < deadline:
                 changed.wait(min(0.2, max(deadline - time.monotonic(), 0.0)))

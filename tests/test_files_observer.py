@@ -1,3 +1,4 @@
+import hashlib
 import os
 import time
 from pathlib import Path
@@ -193,3 +194,51 @@ def test_recursive_skips_ignored_directories(tmp_path, make_watch, xdg):
     finally:
         stop(observer)
     assert [event["name"] for event in events] == ["a.gz"]
+
+
+def write_marker(directory, name, digest=None):
+    data = (directory / name).read_bytes()
+    marker = directory / f"{name}.sha256"
+    marker.write_text(f"{digest or hashlib.sha256(data).hexdigest()}  {name}\n", encoding="utf-8")
+    age(marker)
+    return marker
+
+
+def test_marker_mode_waits_for_a_matching_marker(tmp_path, make_watch, xdg):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "a.tar.gz").write_bytes(b"payload")
+    age(inbox / "a.tar.gz")
+    observer, events, records = files_observer(make_watch, xdg, inbox, "marker = 'sha256'\n")
+    observer.start()
+    try:
+        time.sleep(2.5)
+        assert events == []  # no marker yet
+        write_marker(inbox, "a.tar.gz")
+        assert wait_for(lambda: events)
+        time.sleep(2.0)
+    finally:
+        stop(observer)
+    assert [event["name"] for event in events] == ["a.tar.gz"]  # the marker itself is never reported
+    assert events[0]["sha256"] == hashlib.sha256(b"payload").hexdigest()
+    assert Path(events[0]["marker"]) == inbox / "a.tar.gz.sha256"
+
+
+def test_marker_mismatch_warns_once_then_a_reupload_is_reported(tmp_path, make_watch, xdg):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "a.tar.gz").write_bytes(b"payload")
+    age(inbox / "a.tar.gz")
+    write_marker(inbox, "a.tar.gz", digest="0" * 64)
+    observer, events, records = files_observer(make_watch, xdg, inbox, "marker = 'sha256'\n")
+    observer.start()
+    try:
+        assert wait_for(lambda: kinds(records, "observer.output"))
+        time.sleep(3.0)
+        assert events == []
+        write_marker(inbox, "a.tar.gz")
+        assert wait_for(lambda: events)
+    finally:
+        stop(observer)
+    warnings = [r for r in kinds(records, "observer.output") if "does not match" in r["text"]]
+    assert len(warnings) == 1
