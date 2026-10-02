@@ -1,7 +1,9 @@
 """An scp server for tests (asyncssh, in a background thread): password and key auth, a pinned host key, one root."""
 
 import asyncio
+import getpass
 import os
+import subprocess
 import threading
 from pathlib import Path
 
@@ -61,7 +63,14 @@ class ScpServer:
         host_key = asyncssh.generate_private_key("ssh-ed25519")
         client_key = asyncssh.generate_private_key("ssh-ed25519")
         client_key.write_private_key(str(self.client_key))
-        if os.name != "nt":
+        if os.name == "nt":
+            # Windows OpenSSH ignores a private key that other accounts can read ("bad permissions").
+            subprocess.run(
+                ["icacls", str(self.client_key), "/inheritance:r", "/grant:r", f"{getpass.getuser()}:F"],
+                check=True,
+                capture_output=True,
+            )
+        else:
             self.client_key.chmod(0o600)
         authorized = asyncssh.import_authorized_keys(client_key.export_public_key().decode())
         self._server = await asyncssh.listen(
