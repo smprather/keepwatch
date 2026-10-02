@@ -39,7 +39,7 @@ Each event carries the verified `sha256` and the `marker` path; record handled f
 
 ## Sweep: delete from the source
 
-Set `delete_remote = true` in relay-pull to delete each file from linux1 once its copy on the hub is verified (size and sha256) and recorded. Only an unchanged regular file directly in `remote_dir` is deleted: a file that changed since it was pulled stays on linux1 (with a WARNING). Deletes go through keepwatch's remote helper in one short ssh call per poll; a delete that fails (permissions, linux1 away) never fails the poll and is retried after `delete_retry` (10 minutes). linux1 then only ever holds files that have not reached the hub yet.
+Set `delete_remote = true` in relay-pull to delete each file from linux1 once its copy on the hub is verified (size and sha256) and recorded. Only an unchanged regular file directly in `remote_dir` is deleted: a file that changed since it was pulled stays on linux1 (with a WARNING). Deletes go through keepwatch's remote helper in one short ssh call per poll; a delete that fails (permissions, linux1 away) never fails the poll and is retried after `delete_retry` (10 minutes). linux1 then holds only files that have not reached the hub yet, plus any it refused to delete (a symlink, say) or that changed after they were pulled; both are logged.
 
 ## Watching it work
 

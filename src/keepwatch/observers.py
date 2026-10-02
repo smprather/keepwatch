@@ -601,10 +601,12 @@ class FilesObserver(Observer):
                 if seen is None or seen[0] != key:
                     seen = candidates[path] = (key, now)
                 if now - seen[1] >= settle and wall - info.st_mtime >= settle:
-                    del candidates[path]  # settled; without a matching marker it settles again and is re-checked
                     extra = self._verified(path, info)
                     if extra is None:
-                        continue
+                        if any(version[:3] == (path, *key) for version in self._mismatched):
+                            del candidates[path]  # a wrong marker: wait for a new upload (an event or the rescan)
+                        continue  # no marker yet: stay a candidate, re-checked every FILES_SETTLE_STEP
+                    del candidates[path]
                     self._reported.add((path, *key))
                     self.emit(
                         {
