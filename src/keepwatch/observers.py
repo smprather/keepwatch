@@ -13,7 +13,6 @@ import errno
 import fnmatch
 import json
 import os
-import shlex
 import stat
 import subprocess
 import threading
@@ -22,7 +21,6 @@ import traceback
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
-from importlib import resources
 from pathlib import Path
 from typing import IO, Any
 
@@ -37,6 +35,8 @@ from keepwatch.logstore import Sink, make_record
 from keepwatch.offline import iso_time
 from keepwatch.platform import HookProcess
 from keepwatch.protocol import clip
+from keepwatch.remote import AUTO_PYTHON as AUTO_PYTHON
+from keepwatch.remote import ssh_argv, watcher_source
 from keepwatch.runner import DRAIN_GRACE, KILL_GRACE, base_environment
 
 Deliver = Callable[[dict[str, Any]], None]
@@ -57,26 +57,6 @@ FILES_RESCAN = 30.0  # rescan this often even without notifications (network sha
 FILES_POLL = 2.0  # rescan this often when native notifications are unavailable
 FILES_SETTLE_STEP = 1.0  # rescan this often while a file is settling
 FILES_MIN_RESCAN = 0.5  # at most two scans a second, however many notifications arrive
-
-AUTO_PYTHON = (
-    "sh -c 'if [ -x /usr/bin/python3 ]; then exec /usr/bin/python3 \"$@\"; else exec python3 \"$@\"; fi' sh -u -"
-)
-SSH_DEFAULTS = (
-    "-T",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ConnectTimeout=15",
-    "-o",
-    "ServerAliveInterval=15",
-    "-o",
-    "ServerAliveCountMax=3",
-    # No connection sharing: a ControlPersist master would outlive the ssh keepwatch stops and hold its pipes.
-    "-o",
-    "ControlMaster=no",
-    "-o",
-    "ControlPath=none",
-)
 
 
 def parse_event(text: str) -> dict[str, Any] | None:
@@ -604,14 +584,15 @@ class FilesObserver(Observer):
 
 def remote_command(config: ObserverConfig) -> list[str]:
     """The ssh command line that runs the remote watcher. User ssh_options come first: ssh keeps the first value."""
-    argv = [*(config.ssh_command or ("ssh",)), *config.ssh_options, *SSH_DEFAULTS]
-    if config.port is not None:
-        argv += ["-p", str(config.port)]
-    if config.identity is not None:
-        argv += ["-i", str(config.identity), "-o", "IdentitiesOnly=yes"]
-    python = AUTO_PYTHON if config.remote_python == "auto" else f"{shlex.quote(config.remote_python)} -u -"
     assert config.remote is not None
-    return [*argv, "--", config.remote, python]
+    return ssh_argv(
+        config.remote,
+        port=config.port,
+        identity=config.identity,
+        ssh_options=config.ssh_options,
+        ssh_command=config.ssh_command,
+        remote_python=config.remote_python,
+    )
 
 
 def watcher_options(config: ObserverConfig) -> dict[str, Any]:
@@ -625,12 +606,6 @@ def watcher_options(config: ObserverConfig) -> dict[str, Any]:
         "heartbeat": config.heartbeat,
         "rescan": FILES_RESCAN,
     }
-
-
-def watcher_source(options: Mapping[str, Any]) -> str:
-    """The remote watcher's source with its options prepended as an assignment (ASCII: json escapes the rest)."""
-    source = resources.files("keepwatch").joinpath("remote_watcher.py").read_text(encoding="utf-8")
-    return f"KEEPWATCH_REMOTE_ARGS = {json.dumps(json.dumps(options))}\n{source}"
 
 
 class RemoteFilesObserver(CommandObserver):
