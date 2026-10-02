@@ -77,7 +77,8 @@ def test_verify_command():
     assert "without reporting keepwatch" in installcheck.verify_command(wrong, {**__import__("os").environ})
     store = [sys.executable, "-c", "import sys; print('Python was not found; run without arguments to install from the Microsoft Store'); sys.exit(9009)"]
     problem = installcheck.verify_command(store, {**__import__("os").environ})
-    assert "exited 9009" in problem and "Microsoft Store" in problem
+    code = 9009 if os.name == "nt" else 9009 & 0xFF  # POSIX exit statuses are 8-bit
+    assert f"exited {code}" in problem and "Microsoft Store" in problem
     assert "cannot run" in installcheck.verify_command([str(Path("/no/such/program"))], {})
 
 
