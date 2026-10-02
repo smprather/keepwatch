@@ -83,10 +83,14 @@ wake = true          # poll this watch as soon as an event arrives (default true
 never installed on the remote host: the observer runs
 
 ```
-ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 [opts] user@host <python> -u - '<json args>'
+ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 [opts] user@host <python> -u -
 ```
 
-and writes the watcher's source to ssh's stdin. `remote_python = "auto"` (default) runs
+and writes the watcher's source to ssh's stdin, with its options prepended as one Python assignment
+(`KEEPWATCH_REMOTE_ARGS = "<json>"`) instead of a command-line argument, so nothing passes through the
+remote login shell's quoting (EDA hosts often use csh/tcsh). keepwatch also passes `-T`,
+`-o ConnectTimeout=15`, `-o ControlMaster=no -o ControlPath=none` (no connection sharing) and `--` before the host; the watcher's `hello` becomes an `observer.connected`
+record, and stdout lines other than file events (login-script banners) are logged, not delivered. `remote_python = "auto"` (default) runs
 `sh -c 'if [ -x /usr/bin/python3 ]; then exec /usr/bin/python3 "$@"; else exec python3 "$@"; fi' sh -u - <args>`,
 preferring the system interpreter over whatever is first on PATH.
 

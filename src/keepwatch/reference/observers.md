@@ -50,6 +50,34 @@ Each settled file is reported once per (path, size, modification time) while the
 
 A missing directory is retried with the same backoff as a command, so an observer may be configured before its directory exists.
 
+### kind = "remote_files"
+
+Watches a directory on another host through **one long-lived outbound ssh connection**. Nothing is installed there: keepwatch sends its remote watcher (one Python file) over ssh's standard input to the remote host's Python 3.6 or newer, which runs it from memory.
+
+```toml
+[observe.remote]
+kind = "remote_files"
+remote = "me@linux1"           # or a Host alias from ~/.ssh/config
+dir = "/data/out"              # remote path; ~ and relative paths start at the remote home
+pattern = "*.tar.gz"
+settle = "30s"
+```
+
+- **What it reports:** the same file events as `files`, plus `"sha256"` (computed remotely; `checksum = false` turns it off) and `"remote"`. Every settled file is reported once per connection, **including everything already there when it connects**, so after a reconnect it catches up; handled files must be recorded in a ledger.
+- **How it decides:** the same settle rules as `files`. It rescans every `interval` (2s), and at once when the host has inotify (used directly, without inotify-tools).
+- **Liveness:** the watcher prints a heartbeat after `heartbeat` (30s) without output; a connection that delivers nothing for `heartbeat_timeout` (default 3 × `heartbeat`) is closed and reopened. ssh also runs with `ServerAliveInterval=15` and `ConnectTimeout=15`, and every disconnect is retried with the observer backoff (5s up to 5 minutes).
+- **The ssh command:** `ssh [ssh_options] -T -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ControlMaster=no -o ControlPath=none [-p port] [-i identity] -- <remote> <python> -u -`. Connection sharing is off on purpose (a `ControlPersist` master in `~/.ssh/config` would outlive the connection keepwatch stops). `observer.started` shows the command in full.
+- **Which Python:** `remote_python = "auto"` runs `/usr/bin/python3` when it exists (the system interpreter, which on EL8 is 3.6), else `python3` from the remote PATH. Name another one when needed: `remote_python = "/opt/python3.11/bin/python3"`. Python 2 does not work.
+- **Login scripts:** any shell works (sh, bash, csh, tcsh): the watcher's options travel inside the program text, not through shell quoting. Lines a login script prints on stdout are logged as `observer.output`, never delivered.
+
+**Requirements on the keepwatch host.** BatchMode means ssh never asks anything, so:
+
+1. **Key authentication.** A key without a passphrase (`identity = '~/.ssh/id_relay'`), or a key held by ssh-agent. On Windows the OpenSSH Authentication Agent service works for the service too; on Linux the service only sees an agent through `SSH_AUTH_SOCK` in `[environment]` (see `keepwatch docs environment`).
+2. **A known host key.** Connect once by hand (`ssh me@linux1 true`) to put the key in `known_hosts`, or the connection fails with "Host key verification failed".
+3. **Check it the way the service will:** `ssh -o BatchMode=yes me@linux1 true` must succeed without a prompt, then `keepwatch observe <watch> remote --for 1m` must print the files.
+
+When it does not connect, `keepwatch logs <watch> --event observer.stopped` shows ssh's last error lines (`stderr_tail`); `observer.connected` records each successful connection with the remote Python version and whether inotify is used.
+
 ## What hooks receive
 
 - **Python:** `ctx.events`, a list of dicts, oldest first. Empty when there are none.
