@@ -12,6 +12,7 @@ import os
 import shutil
 import signal
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Iterator
@@ -23,7 +24,7 @@ from typing import NoReturn
 import rich_click as click
 from rich.markdown import Markdown
 
-from keepwatch import __version__, platform, systemd, transfer, winsched
+from keepwatch import __version__, installcheck, platform, systemd, transfer, winsched
 from keepwatch.config import (
     ConfigError,
     Discovery,
@@ -738,10 +739,32 @@ def _install_windows(app: App, dry_run: bool) -> None:
     click.echo("check it with: keepwatch status")
 
 
+def _install_problem(force: bool) -> str | None:
+    """Why the login service would break, or None (see keepwatch.installcheck)."""
+    if not force:
+        reason = installcheck.transient_reason(
+            Path(sys.prefix), cache_dirs=installcheck.uv_cache_dirs(os.environ), temp_dir=Path(tempfile.gettempdir())
+        )
+        if reason is not None:
+            return (
+                f"{reason}, and the login service would stop working when it disappears. Install keepwatch for good "
+                "with `uv tool install keepwatch` and run `keepwatch install` from there (or pass --force)."
+            )
+    problem = installcheck.verify_command(installcheck.service_check_argv(), os.environ)
+    if problem is not None:
+        return f"the login service would run a command that does not work: {problem}"
+    return None
+
+
 @cli.command()
 @click.option("--dry-run", is_flag=True, help="Print the unit file and the commands without changing anything.")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Install even when this keepwatch runs from a temporary environment (uv's cache, uvx, the temp directory).",
+)
 @click.pass_obj
-def install(app: App, dry_run: bool) -> None:
+def install(app: App, dry_run: bool, force: bool) -> None:
     """Start keepwatch at login: a systemd user service on Linux, a Task Scheduler logon task on Windows.
 
     On Windows it registers a Task Scheduler task "keepwatch" that runs pythonw.exe -m keepwatch run at logon
@@ -754,8 +777,15 @@ def install(app: App, dry_run: bool) -> None:
     The service does not see your shell's ssh-agent unless its socket is set in [environment] of the
     global config; see: keepwatch docs environment.
 
-    Exit status: 0, or 1 if systemctl fails.
+    Before changing anything it checks the command the service will run: it must not live in a temporary
+    environment (uv's cache, where uvx puts it, or the temp directory; --force skips this check) and it must
+    report this keepwatch's version. keepwatch never looks for another Python on PATH.
+
+    Exit status: 0, or 1 if a check fails or systemctl (Task Scheduler) fails.
     """
+    problem = _install_problem(force)
+    if problem is not None:
+        _fail(problem)
     if _on_windows():
         _install_windows(app, dry_run)
         return
