@@ -95,6 +95,23 @@ class App:
         return load_global_config(self.config_path, self.paths)
 
 
+class DurationType(click.ParamType):
+    """A duration such as 30s, 5m, 1h30m or a number of seconds."""
+
+    name = "duration"
+
+    def convert(self, value, param, ctx):
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return parse_duration(value)
+        except DurationError as exc:
+            self.fail(str(exc), param, ctx)
+
+
+DURATION = DurationType()
+
+
 def _fail(message: str) -> NoReturn:
     if sys.stderr is not None:
         make_console(stderr=True).print(message)
@@ -278,12 +295,13 @@ def poll(
 @click.option(
     "--for",
     "duration",
+    type=DURATION,
     metavar="DURATION",
     help='Stop after this long, e.g. "30s" or "5m". Default: run until interrupted (Ctrl-C).',
 )
 @click.option("--count", type=int, metavar="N", help="Stop after N events.")
 @click.pass_obj
-def observe(app: App, name: str, observer: str | None, duration: str | None, count: int | None) -> None:
+def observe(app: App, name: str, observer: str | None, duration: float | None, count: int | None) -> None:
     """Run watch NAME's observers (or only OBSERVER) in the foreground and print their events.
 
     Each event is printed to stdout as one JSON line, exactly as hooks receive it in ctx.events. Observer
@@ -294,12 +312,7 @@ def observe(app: App, name: str, observer: str | None, duration: str | None, cou
     Exit status: 0 when stopped by --for, --count or Ctrl-C; 1 if the watch cannot be loaded, has no
     observers or has no observer named OBSERVER; 2 for bad usage.
     """
-    seconds = None
-    if duration is not None:
-        try:
-            seconds = parse_duration(duration)
-        except DurationError as exc:
-            raise click.BadParameter(str(exc), param_hint="--for") from None
+    seconds = duration
     if count is not None and count < 1:
         raise click.BadParameter("must be at least 1", param_hint="--count")
     global_config, watch = _load_one(app, name)
@@ -916,20 +929,14 @@ def _scp_options(function):
         click.option("--port", type=click.IntRange(1, 65535), help="ssh port for user@host:path endpoints (scp -P)."),
         click.option("--ssh-option", "ssh_options", multiple=True, metavar="OPTION",
                      help='An ssh option passed as -o OPTION, e.g. "ProxyJump=bastion" (repeatable).'),
-        click.option("--timeout", "timeout_text", metavar="DURATION", help='Give up after this long, e.g. "10m". Default: no limit.'),
+        click.option("--timeout", type=DURATION, metavar="DURATION", help='Give up after this long, e.g. "10m". Default: no limit (a command hook\'s own timeout still stops it).'),
     ]
     for decorator in reversed(decorators):
         function = decorator(function)
     return function
 
 
-def _scp(protocol, password_env, identity, known_hosts, port, ssh_options, timeout_text) -> transfer.ScpOptions:
-    timeout = None
-    if timeout_text is not None:
-        try:
-            timeout = parse_duration(timeout_text)
-        except DurationError as exc:
-            raise click.BadParameter(str(exc), param_hint="--timeout") from None
+def _scp(protocol, password_env, identity, known_hosts, port, ssh_options, timeout) -> transfer.ScpOptions:
     extra = tuple(item for option in ssh_options for item in ("-o", option))
     try:
         return transfer.ScpOptions(
@@ -945,13 +952,17 @@ def _scp(protocol, password_env, identity, known_hosts, port, ssh_options, timeo
         raise click.UsageError(str(exc)) from None
 
 
-def _kit_run(action) -> None:
+def _kit_run(action, *, transfers: bool = True) -> None:
+    if transfers and os.environ.get("KEEPWATCH_HOOK") == "check":
+        _fail("a check must not transfer files; do it in an action (keepwatch kit tcp-open is fine in a check)")
     try:
         result = action()
     except ValueError as exc:
         raise click.UsageError(str(exc)) from None
     except (CommandFailed, transfer.TransferFailed) as exc:
         _fail(str(exc))
+    except OSError as exc:
+        _fail(f"{exc.strerror or exc}: {exc.filename}" if exc.filename else str(exc))
     if result is not None:
         click.echo(str(result))
 
@@ -1015,16 +1026,12 @@ def kit_push(path: str, remote_dir: str, marker: str, **scp) -> None:
 @kit.command(name="tcp-open")
 @click.argument("host")
 @click.option("--port", type=click.IntRange(1, 65535), default=22, show_default=True, help="TCP port to try.")
-@click.option("--timeout", "timeout_text", default="5s", show_default=True, metavar="DURATION", help="How long to wait for the connection.")
-def kit_tcp_open(host: str, port: int, timeout_text: str) -> None:
+@click.option("--timeout", type=DURATION, default="5s", show_default=True, metavar="DURATION", help="How long to wait for the connection.")
+def kit_tcp_open(host: str, port: int, timeout: float) -> None:
     """Check whether HOST accepts TCP connections on --port. Prints open or closed.
 
     Exit status: 0 if open, 1 if closed or unreachable, 2 for bad usage.
     """
-    try:
-        timeout = parse_duration(timeout_text)
-    except DurationError as exc:
-        raise click.BadParameter(str(exc), param_hint="--timeout") from None
     opened = transfer.tcp_open(host, port, timeout)
     click.echo("open" if opened else "closed")
     raise SystemExit(0 if opened else 1)

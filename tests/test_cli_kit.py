@@ -70,3 +70,21 @@ def test_kit_bad_usage(xdg, tmp_path):
     assert run("kit", "push", str(tmp_path / "a.gz"), "u@h:", "--protocol", "ftp").exit_code == 2
     assert run("kit", "copy", "a", "b").exit_code == 2  # no remote endpoint
     assert run("kit", "pull", "u@h:a.gz", "stage", "--timeout", "soon").exit_code == 2
+
+
+def test_kit_refuses_to_transfer_in_a_check(xdg, tmp_path):
+    result = CliRunner().invoke(cli, ["kit", "copy", str(tmp_path / "a.gz"), "me@h:"], env={"KEEPWATCH_HOOK": "check"})
+    assert result.exit_code == 1
+    assert "a check must not transfer files" in result.output
+
+
+def test_kit_reports_os_errors_without_a_traceback(xdg, tmp_path):
+    not_a_dir = tmp_path / "file"
+    not_a_dir.write_text("x", encoding="utf-8")
+    result = run("kit", "pull", "me@h:a.gz", str(not_a_dir / "sub"), "--sha256", "0" * 64)  # mkdir fails
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output and str(not_a_dir) in result.output
+
+
+def test_kit_rejects_a_malformed_sha256(xdg, tmp_path):
+    assert run("kit", "pull", "me@h:a.gz", str(tmp_path), "--sha256", "abc").exit_code == 2
