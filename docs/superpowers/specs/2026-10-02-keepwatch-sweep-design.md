@@ -192,3 +192,19 @@ this. With `marker = "none"` nothing changes.
   `with_known_hosts` lives in `transfer.py`, so `keepwatch.remote` is stdlib-only again; the receive example keys
   arrivals by path, size, mtime and sha256.
 - Two scp runs per pushed file stay (section 8): the marker must follow a successful upload.
+
+## 10. Third revisions (2026-10-02, after reviewing section 9)
+
+- **The marker is part of a file's version** (replaces the 60s marker wait of section 9). The `files` observer
+  tracks `(size, mtime_ns)` of the file and of its marker together: when the marker appears or changes, the pair
+  settles again and is checked then. A file that settled without a matching marker is held, costs nothing, and
+  is checked again only when the file or its marker changes (a notification or the 30s rescan). No timers.
+- **Reads do not trigger rescans.** watchdog 6 reports opens and closes after reading; the observer ignores
+  them, so its own hashing (or any reader) does not cause another scan.
+- **Entries without a sha256 are never deleted.** A `to_delete` entry with `-` (none written now, but earlier
+  builds wrote them) goes to `kept` with a WARNING instead of reaching the helper.
+- **Delete timeouts keep ssh's stderr** next to the hint about `action_timeout`.
+- **The receive example checks before moving**: a file whose size or mtime differs from its report is left for
+  its next report.
+- **Known limit, documented:** a rewrite that keeps size and mtime is not re-reported by the remote watcher
+  until it reconnects; after a `changed` delete result such a file stays on the source host.
