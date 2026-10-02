@@ -133,6 +133,14 @@ OpenSSH `scp`.
   shell quoting of the secret), and scp gets `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE=force` (verified on
   Windows OpenSSH 9.5 on 2026-10-01; on OpenSSH 10.5p1 on 2026-10-02 with a password containing spaces,
   quotes and `$`, and for keyboard-interactive logins too).
+- **Remote paths are backslash-escaped**: every character outside `[A-Za-z0-9_./:@%+,=-]` gets a `\`
+  (a leading `~/` is kept for tilde expansion). Spike against OpenSSH sshd, 2026-10-02: a space breaks an
+  unquoted path in classic mode, single quotes fail in both modes ("filename does not match request" /
+  "No such file"), backslash escapes work in both.
+- **Remote login scripts must be silent**: anything a login shell prints on stdout for a non-interactive
+  session (an `echo` in `.cshrc`/`.bashrc`) breaks scp in both modes ("Received message too long";
+  spike 2026-10-02). The remote watcher tolerates it; scp cannot. The docs say how to guard the echo
+  (`if ($?prompt)` in csh, `[ -t 1 ]` or `case $- in *i*)` in sh).
 - Success is exit status 0, one file per transfer; failures raise `CommandFailed` with scp's stderr.
 - `pull(remote, local_dir, *, size=None, sha256=None, on_conflict="skip-identical")` copies to
   `local_dir/.name.part`, verifies size and sha256 when given, then renames to the final name. If the
