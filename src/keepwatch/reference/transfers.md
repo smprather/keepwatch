@@ -33,6 +33,8 @@ At least one side must be remote. **Two remote endpoints** (copying linux1 → l
 
 `pull` when `DIR/NAME` already exists: with `sha256` given and matching, nothing is copied (an earlier pull finished); otherwise it fails unless `on_conflict = "rename"` (`NAME-1.ext`) or `"overwrite"`.
 
+Two transfers must not pull the same name into the same folder at the same time (they share `.NAME.part`).
+
 **The `.sha256` marker** exists for destinations where uploads cannot be renamed into place (upload-only accounts): the data arrives first, the marker last. A consumer there waits for `NAME.sha256` and runs `sha256sum -c NAME.sha256` before using `NAME`.
 
 ## Options
@@ -42,12 +44,12 @@ Keyword arguments of `copy`, `pull` and `push` (`--option` for `keepwatch kit`):
 | Option | Meaning |
 |---|---|
 | `password_env` | Name of the environment variable holding the password. Default: keys only. |
-| `identity` | A private key file (`ssh -i`); ssh then offers only that key. |
+| `identity` | A private key file (`ssh -i`); ssh then offers only that key. On Windows the file must be readable by you alone, or OpenSSH ignores it ("bad permissions"): `icacls KEY /inheritance:r /grant:r "%USERNAME%:F"` (keys made by ssh-keygen in `~\.ssh` already are). |
 | `known_hosts` | A known_hosts file to check host keys against (default: ssh's own, `~/.ssh/known_hosts`). |
 | `port` | ssh port for `user@host:path` endpoints. |
 | `protocol` | `"scp"` (default): the classic protocol, which scp-only servers accept; keepwatch adds `-O` on OpenSSH 9 and newer, where scp otherwise speaks SFTP. `"sftp"`: needs OpenSSH 9+. |
-| `ssh_options` | Extra scp arguments, placed before keepwatch's own (ssh keeps the first value given), e.g. `["-o", "ProxyJump=bastion"]`. |
-| `timeout` | Give up after this many seconds. In `ctx.transfer` it never exceeds the hook's remaining time. |
+| `ssh_options` | Extra scp arguments, placed before keepwatch's own (ssh keeps the first value given): a list such as `["-o", "ProxyJump=bastion"]`, never a string. (`keepwatch kit --ssh-option ProxyJump=bastion` adds the `-o` itself.) |
+| `timeout` | Give up after this many seconds. In `ctx.transfer` each scp run also stops at the hook's deadline (so a push's marker never gets more than what is left). Running out of time raises `TransferFailed`, not `subprocess.TimeoutExpired` (unlike `ctx.run`). |
 
 Always set: `StrictHostKeyChecking=yes` (**host keys must already be known**: connect once by hand, `ssh me@host true`, or pass `known_hosts`), `ConnectTimeout=15`, `ServerAliveInterval=15`, `ServerAliveCountMax=3`, and `BatchMode=yes` without a password (nothing can prompt), or `NumberOfPasswordPrompts=1` with one (a wrong password fails once, instead of three times that could trip a lockout such as fail2ban).
 
