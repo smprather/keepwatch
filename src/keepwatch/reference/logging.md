@@ -13,7 +13,7 @@ Every record has `ts` (local time, RFC 3339 with offset), `level` (`DEBUG`, `INF
 | `service.start` / `service.stop` | `version`, `config`, `watch_dirs`, `only` |
 | `config.loaded` / `config.error` | `path`; `error` (with file and line); `watch` and `running_previous` for a watch's config |
 | `watch.added` / `watch.changed` / `watch.removed` | `watch` |
-| `poll.start` | `condition`, `faked`, `dry_run`, `trial` |
+| `poll.start` | `condition`, `faked`, `dry_run`, `trial`, `events` (how many observer events the poll got) |
 | `command` | from `ctx.run`: `argv`, `shell`, `exit_code`, `timed_out`, `duration`, `stdout`, `stderr`, `*_truncated` |
 | `plugin.log` | from `ctx.log`: `level`, `logger`, `message`, `fields`, `traceback` |
 | `hook.end` | `hook`, `kind`, `target`, `status`, `reason`, `payload`, `exit_code`, `signal`, `exception` (type, message, traceback), `stdout`, `stderr`, `*_truncated`, `duration` |
@@ -21,6 +21,12 @@ Every record has `ts` (local time, RFC 3339 with offset), `level` (`DEBUG`, `INF
 | `poll.end` | `failed`, `failures`, `condition`, `pending_edge`, `dry_run` |
 | `watch.offline` / `watch.online` | `reason`, `by_user`, `last_failure` |
 | `watch.crash` | `error`, `traceback` (a bug in keepwatch itself; the watch retries after a minute) |
+| `observer.started` | `observer`, `kind`; `argv` and `pid` (command) or `path`, `native`, `native_error` (files) |
+| `observer.event` | DEBUG: `observer`, `data` (the event as the source produced it) |
+| `observer.output` | `observer`, `stream`, `text`; `suppressed` on the record counting lines over the limit |
+| `observer.stopped` / `observer.restarting` | `observer`; `reason`, `exit_code`, `duration`, `stderr_tail` / `delay` |
+| `observer.dropped` | `observer`, `dropped` (total so far), `cap`: the event queue was full |
+| `observer.crash` | `observer`, `error`, `traceback` (a bug in keepwatch itself; the observer restarts) |
 | `alert.end` | `alert_event`, `command`, `status`, `exit_code`, `reason`, `stdout`, `stderr`, `duration` |
 
 For `hook.end`, `status` is the outcome for a check (`true`, `false`, `unknown`, `timeout`, `error`) and `ok`, `failed` or `timeout` for an action. Captured output keeps the first and last half of `capture_bytes` (default 64 KiB) per stream.

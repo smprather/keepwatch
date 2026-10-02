@@ -54,14 +54,15 @@ def test_help_points_agents_at_the_docs(xdg):
 KEY_FACTS = {
     "python": ["keepwatch.Unknown", "(True, payload)", "1 MiB", "keepwatch_watch", "top-level"],
     "config": ["single-quoted"],
-    "executables": ["KEEPWATCH_PAYLOAD_OUT", "KEEPWATCH_PAYLOAD_FILE", "KEEPWATCH_SETTINGS_FILE", "[check_exit_codes]", "/bin/sh -c", "Windows PowerShell", ".ps1", "UTF8Encoding"],
+    "executables": ["KEEPWATCH_PAYLOAD_OUT", "KEEPWATCH_PAYLOAD_FILE", "KEEPWATCH_SETTINGS_FILE", "KEEPWATCH_EVENTS_FILE", "[check_exit_codes]", "/bin/sh -c", "Windows PowerShell", ".ps1", "UTF8Encoding"],
     "states": ["| `true` |", "initial_condition", "stop at the first failure", "never overlap"],
     "failures": ["max_failures", "retry_after", "alert_command", "KEEPWATCH_ALERT_EVENT", "offline.json"],
     "storage": ["ctx.data_dir", "ctx.run_dir", "file_key", "LedgerCorrupt", "keepwatch rename", "%LOCALAPPDATA%"],
-    "logging": ["keepwatch.jsonl", "poll_id", "hook.end", "check.outcome", "extra="],
+    "logging": ["keepwatch.jsonl", "poll_id", "hook.end", "check.outcome", "observer.stopped", "extra="],
     "environment": ["/dev/null", "SIGTERM", "SSH_AUTH_SOCK", "BatchMode=yes", "[environment]", "Job Object", "keepwatch stop"],
     "dependencies": ["python_dependencies", "uv run", "--offline", "keepwatch validate"],
     "reload": ["reload_interval", "last valid", "watch.removed", "offline.json"],
+    "observers": ["[observe.", "./feed.py", "uv\", \"run\", \"--script", "ctx.events", "KEEPWATCH_EVENTS_FILE", "at-least-once", "heartbeat_timeout", "keepwatch observe", "--events", "wake", "settle", "flush", "ledger"],
 }
 
 

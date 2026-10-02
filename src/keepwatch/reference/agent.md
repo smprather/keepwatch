@@ -51,6 +51,7 @@ keepwatch logs --poll <id> -v                         # everything a poll did, w
 - Renaming a watch directory with `mv`. Its state stays behind under the old name, and the watch starts with empty ledgers. Use `keepwatch rename`.
 - Storing data in the watch directory. Use `ctx.data_dir`.
 - Writing Windows paths in double-quoted TOML strings: `\` starts an escape there. Use single-quoted strings (`'C:\data\in'`) or forward slashes (`"C:/data/in"`).
+- Assuming each observer event arrives exactly once. Delivery is at-least-once (events come again after a failed or unknown poll); record handled items in a ledger. See `keepwatch docs observers`.
 
 ## Reference topics
 

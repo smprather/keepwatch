@@ -50,6 +50,7 @@ An **action** succeeds with exit status 0 and fails otherwise.
 | `KEEPWATCH_RUN_DIR` | Run-only scratch space (created before the call). |
 | `KEEPWATCH_SETTINGS_FILE` | A JSON file holding the whole `[settings]` table. |
 | `KEEPWATCH_SETTING_<KEY>` | Each top-level scalar setting; the key is upper-cased and anything other than letters and digits becomes `_` (`dest-host` → `KEEPWATCH_SETTING_DEST_HOST`). Booleans are `true`/`false`. |
+| `KEEPWATCH_EVENTS_FILE` | A JSON file holding this poll's observer events, oldest first (`[]` when there are none). See `keepwatch docs observers`. |
 | `KEEPWATCH_PAYLOAD_OUT` | Check only: write JSON here to hand a payload to the actions. |
 | `KEEPWATCH_PAYLOAD_FILE` | Actions only, and only when there is a payload: the JSON file holding it. |
 

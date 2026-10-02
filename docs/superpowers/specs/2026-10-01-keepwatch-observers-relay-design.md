@@ -47,7 +47,7 @@ wake = true          # poll this watch as soon as an event arrives (default true
   `observer.output` log records (rate-limited). If the process exits, or no line (heartbeats included)
   arrives for `heartbeat_timeout` (default: none), it is stopped and restarted with backoff 5 s → 10 s →
   … → 5 min, reset after a run that lasted 5 minutes.
-- **`files`** — watches a local directory (`path`, optional `pattern`, `recursive = false`) with the
+- **`files`** — watches a local directory (`path`, optional `pattern`, `ignore` (default `.*`, `*.tmp`, `*.part`, `*~`), `recursive = false`) with the
   `watchdog` library (inotify / ReadDirectoryChangesW / FSEvents). On start and on every filesystem
   event it rescans; a file is reported once it is **settled** (size and mtime unchanged for `settle`,
   default 10 s, and its mtime at least `settle` old). Emits `{"event": "file", "path", "name", "size",

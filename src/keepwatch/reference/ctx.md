@@ -11,6 +11,7 @@ Every Python hook receives one argument, `ctx`, a `keepwatch.Ctx`. The package s
 | `ctx.poll_id` | `str` | This poll's ID; it is on every log record of the poll. |
 | `ctx.condition` | `bool` | The condition as this hook sees it: before the answer in `check`, after it in actions. |
 | `ctx.payload` | JSON value or `None` | What `check` returned with its answer. Actions only. |
+| `ctx.events` | `list[dict]` | Observer events delivered with this poll, oldest first; empty without observers. See `keepwatch docs observers`. |
 | `ctx.settings` | mapping | The watch's `[settings]` table. |
 | `ctx.watch_dir` | `Path` | The watch directory, which is also the working directory. |
 | `ctx.log` | `logging.Logger` | Logs into keepwatch's log; see `keepwatch docs logging`. |
