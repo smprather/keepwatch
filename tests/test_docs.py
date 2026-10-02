@@ -62,7 +62,7 @@ KEY_FACTS = {
     "environment": ["/dev/null", "SIGTERM", "SSH_AUTH_SOCK", "BatchMode=yes", "[environment]", "Job Object", "keepwatch stop"],
     "dependencies": ["python_dependencies", "uv run", "--offline", "keepwatch validate"],
     "reload": ["reload_interval", "last valid", "watch.removed", "offline.json"],
-    "observers": ["[observe.", "./feed.py", "uv\", \"run\", \"--script", "ctx.events", "KEEPWATCH_EVENTS_FILE", "at-least-once", "heartbeat_timeout", "keepwatch observe", "--events", "wake", "settle", "flush", "ledger", "FileNotFoundError", "64 MiB", "1 second after", "do not restart", "remote_files", "remote_python", "BatchMode", "known_hosts", "observer.connected", "Python 3.6", "ssh-agent"],
+    "observers": ["[observe.", "./feed.py", "uv\", \"run\", \"--script", "ctx.events", "KEEPWATCH_EVENTS_FILE", "at-least-once", "heartbeat_timeout", "keepwatch observe", "--events", "wake", "settle", "flush", "ledger", "FileNotFoundError", "64 MiB", "1 second after", "do not restart", "remote_files", "remote_python", "BatchMode", "known_hosts", "observer.connected", "Python 3.6", "ssh-agent", "not valid UTF-8", "IdentitiesOnly"],
 }
 
 

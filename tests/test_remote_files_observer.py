@@ -122,6 +122,8 @@ def test_remote_command_options():
         "2222",
         "-i",
         str(Path("/keys/id")),
+        "-o",
+        "IdentitiesOnly=yes",
         "--",
         "me@h",
         "'/opt/my py/python3' -u -",
@@ -144,6 +146,7 @@ def test_watcher_source_carries_the_options():
         "interval": 2.0,
         "checksum": True,
         "heartbeat": 30.0,
+        "rescan": 30.0,
     }
     source = watcher_source(options)
     first, rest = source.split("\n", 1)

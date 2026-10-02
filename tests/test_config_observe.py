@@ -172,3 +172,13 @@ def test_remote_files_ssh_command(make_watch):
     config = load(make_watch, REMOTE + f"ssh_command = [{literal(PY)}, 'fake_ssh.py']\nheartbeat_timeout = '5m'\n")
     observer = config.observers["r"]
     assert observer.ssh_command == (PY, "fake_ssh.py") and observer.heartbeat_timeout == 300.0
+
+
+def test_remote_heartbeat_timeout_must_exceed_heartbeat(make_watch):
+    [problem] = problems(make_watch, REMOTE + "heartbeat = '60s'\nheartbeat_timeout = '30s'\n")
+    assert "'heartbeat_timeout' (30s) must be longer than 'heartbeat' (1m)" in problem
+
+
+def test_remote_heartbeat_timeout_is_checked_against_the_default_heartbeat(make_watch):
+    [problem] = problems(make_watch, REMOTE + "heartbeat_timeout = '20s'\n")
+    assert "must be longer than 'heartbeat' (30s)" in problem

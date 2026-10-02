@@ -279,3 +279,8 @@ def test_a_stopped_observer_delivers_nothing(make_watch, xdg):
     observer.stop()
     observer.emit({"n": 1})
     assert events == [] and not kinds(records, "observer.event")
+
+
+def test_events_that_cannot_be_utf8_become_lines():
+    text = '{"event": "file", "name": "caf\\udce9.gz"}\n'
+    assert parse_event(text) == {"line": text.rstrip("\n")}

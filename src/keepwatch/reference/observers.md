@@ -64,7 +64,7 @@ settle = "30s"
 ```
 
 - **What it reports:** the same file events as `files`, plus `"sha256"` (computed remotely; `checksum = false` turns it off) and `"remote"`. Every settled file is reported once per connection, **including everything already there when it connects**, so after a reconnect it catches up; handled files must be recorded in a ledger.
-- **How it decides:** the same settle rules as `files`. It rescans every `interval` (2s), and at once when the host has inotify (used directly, without inotify-tools).
+- **How it decides:** the same settle rules as `files`. Where the host has inotify (used directly, without inotify-tools) it rescans at once on every change and every 30s as a safety net; without inotify it rescans every `interval` (2s). Files whose names are not valid UTF-8 are skipped, and files the remote user cannot read are retried every 30s; both are noted once in an `observer.output` record.
 - **Liveness:** the watcher prints a heartbeat after `heartbeat` (30s) without output; a connection that delivers nothing for `heartbeat_timeout` (default 3 × `heartbeat`) is closed and reopened. ssh also runs with `ServerAliveInterval=15` and `ConnectTimeout=15`, and every disconnect is retried with the observer backoff (5s up to 5 minutes).
 - **The ssh command:** `ssh [ssh_options] -T -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ControlMaster=no -o ControlPath=none [-p port] [-i identity] -- <remote> <python> -u -`. Connection sharing is off on purpose (a `ControlPersist` master in `~/.ssh/config` would outlive the connection keepwatch stops). `observer.started` shows the command in full.
 - **Which Python:** `remote_python = "auto"` runs `/usr/bin/python3` when it exists (the system interpreter, which on EL8 is 3.6), else `python3` from the remote PATH. Name another one when needed: `remote_python = "/opt/python3.11/bin/python3"`. Python 2 does not work.
@@ -72,7 +72,7 @@ settle = "30s"
 
 **Requirements on the keepwatch host.** BatchMode means ssh never asks anything, so:
 
-1. **Key authentication.** A key without a passphrase (`identity = '~/.ssh/id_relay'`), or a key held by ssh-agent. On Windows the OpenSSH Authentication Agent service works for the service too; on Linux the service only sees an agent through `SSH_AUTH_SOCK` in `[environment]` (see `keepwatch docs environment`).
+1. **Key authentication.** A key without a passphrase (`identity = '~/.ssh/id_relay'`), or a key held by ssh-agent. On Windows the OpenSSH Authentication Agent service works for the service too; on Linux the service only sees an agent through `SSH_AUTH_SOCK` in `[environment]` (see `keepwatch docs environment`). With `identity`, ssh offers only that key (IdentitiesOnly=yes), so a crowded agent cannot use up the server's login attempts.
 2. **A known host key.** Connect once by hand (`ssh me@linux1 true`) to put the key in `known_hosts`, or the connection fails with "Host key verification failed".
 3. **Check it the way the service will:** `ssh -o BatchMode=yes me@linux1 true` must succeed without a prompt, then `keepwatch observe <watch> remote --for 1m` must print the files.
 

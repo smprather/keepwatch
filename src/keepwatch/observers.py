@@ -80,6 +80,7 @@ SSH_DEFAULTS = (
 
 def parse_event(text: str) -> dict[str, Any] | None:
     """One line of a command observer's output as an event: a JSON object as-is, other text as {"line": text}.
+    So is a JSON object that cannot be encoded as UTF-8.
 
     Returns None for blank lines and heartbeats ({"event": "heartbeat"}), which are not delivered.
     """
@@ -94,6 +95,10 @@ def parse_event(text: str) -> dict[str, Any] | None:
         return {"line": line}
     if value.get("event") == "heartbeat":
         return None
+    try:
+        json.dumps(value, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError:
+        return {"line": line}  # lone surrogates (\udcxx escapes) could not be logged or handed to hooks
     return value
 
 
@@ -602,7 +607,7 @@ def remote_command(config: ObserverConfig) -> list[str]:
     if config.port is not None:
         argv += ["-p", str(config.port)]
     if config.identity is not None:
-        argv += ["-i", str(config.identity)]
+        argv += ["-i", str(config.identity), "-o", "IdentitiesOnly=yes"]
     python = AUTO_PYTHON if config.remote_python == "auto" else f"{shlex.quote(config.remote_python)} -u -"
     assert config.remote is not None
     return [*argv, "--", config.remote, python]
@@ -617,6 +622,7 @@ def watcher_options(config: ObserverConfig) -> dict[str, Any]:
         "interval": config.interval,
         "checksum": config.checksum,
         "heartbeat": config.heartbeat,
+        "rescan": FILES_RESCAN,
     }
 
 

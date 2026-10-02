@@ -16,7 +16,7 @@ from types import MappingProxyType
 from typing import Any
 
 from keepwatch import platform
-from keepwatch.durations import DurationError, parse_duration
+from keepwatch.durations import DurationError, format_duration, parse_duration
 from keepwatch.hooks import HOOK_NAMES
 from keepwatch.paths import Paths
 
@@ -197,7 +197,8 @@ OBSERVER_KEYS = (
         "identity",
         "str",
         None,
-        "kind = remote_files: a private key file for ssh -i. Relative to the watch directory; `~` is expanded.",
+        "kind = remote_files: a private key file for ssh -i; ssh then offers only this key (IdentitiesOnly=yes). "
+        "Relative to the watch directory; `~` and environment variables are expanded.",
     ),
     Key(
         "ssh_options",
@@ -524,6 +525,16 @@ def _observer(collector: _Collector, name: str, raw: dict[str, Any], watch_dir: 
             )
             continue
         values[key_name] = converted
+    if kind == "remote_files" and "heartbeat_timeout" in values:
+        heartbeat = values.get("heartbeat", by_name["heartbeat"].default)
+        if values["heartbeat_timeout"] <= heartbeat:
+            collector.add(
+                f"'heartbeat_timeout' ({format_duration(values['heartbeat_timeout'])}) must be longer than "
+                f"'heartbeat' ({format_duration(heartbeat)}), or every quiet connection is dropped",
+                key="heartbeat_timeout",
+                table=table,
+                topic="observers",
+            )
     for required in _OBSERVER_REQUIRED[kind]:
         if required not in raw:
             collector.add(f"[{table}] (kind = \"{kind}\") needs '{required}'", table=table, topic="observers")
