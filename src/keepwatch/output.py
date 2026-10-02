@@ -227,6 +227,14 @@ def _observer_dropped(record: dict[str, Any], verbose: bool) -> str:
     return f"event queue full ({record.get('cap')} events): {record.get('dropped')} oldest event(s) dropped so far"
 
 
+def _observer_connected(record: dict[str, Any], verbose: bool) -> str:
+    notify = "inotify" if record.get("inotify") else "rescanning"
+    return (
+        f"observer {record.get('observer')} connected to {record.get('remote')}: watching {record.get('dir')} "
+        f"(remote Python {record.get('python')}, {notify})"
+    )
+
+
 _SKIP = {"ts", "level", "event", "pid", "watch", "poll_id"}
 
 
@@ -255,6 +263,7 @@ _FORMATTERS: dict[str, Callable[[dict[str, Any], bool], str]] = {
     "watch.online": _watch_online,
     "watch.crash": _watch_crash,
     "observer.started": _observer_started,
+    "observer.connected": _observer_connected,
     "observer.stopped": _observer_stopped,
     "observer.restarting": _observer_restarting,
     "observer.output": _observer_output,

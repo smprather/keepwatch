@@ -1,8 +1,9 @@
 """Observers: event sources the service keeps running for a watch (see `keepwatch docs observers`).
 
 A command observer runs a long-lived program and turns each line it prints into an event; a files
-observer reports settled files in a local directory. Each observer runs on its own thread, restarts
-its source with backoff when it stops, and hands events to a `deliver` callback.
+observer reports settled files in a local directory; a remote_files observer runs keepwatch's remote
+watcher on another host over ssh. Each observer runs on its own thread, restarts its source with
+backoff when it stops, and hands events to a `deliver` callback.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import errno
 import fnmatch
 import json
 import os
+import shlex
 import stat
 import subprocess
 import threading
@@ -19,6 +21,8 @@ import time
 import traceback
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import replace
+from importlib import resources
 from pathlib import Path
 from typing import IO, Any
 
@@ -26,7 +30,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer as NativeObserver
 
 from keepwatch import platform
-from keepwatch.config import ObserverConfig, WatchConfig
+from keepwatch.config import Command, ObserverConfig, WatchConfig
 from keepwatch.durations import format_duration
 from keepwatch.logstore import Sink, make_record
 from keepwatch.offline import iso_time
@@ -52,6 +56,26 @@ FILES_RESCAN = 30.0  # rescan this often even without notifications (network sha
 FILES_POLL = 2.0  # rescan this often when native notifications are unavailable
 FILES_SETTLE_STEP = 1.0  # rescan this often while a file is settling
 FILES_MIN_RESCAN = 0.5  # at most two scans a second, however many notifications arrive
+
+AUTO_PYTHON = (
+    "sh -c 'if [ -x /usr/bin/python3 ]; then exec /usr/bin/python3 \"$@\"; else exec python3 \"$@\"; fi' sh -u -"
+)
+SSH_DEFAULTS = (
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=15",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=3",
+    # No connection sharing: a ControlPersist master would outlive the ssh keepwatch stops and hold its pipes.
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
+)
 
 
 def parse_event(text: str) -> dict[str, Any] | None:
@@ -572,6 +596,76 @@ class FilesObserver(Observer):
         return "stopped"
 
 
+def remote_command(config: ObserverConfig) -> list[str]:
+    """The ssh command line that runs the remote watcher. User ssh_options come first: ssh keeps the first value."""
+    argv = [*(config.ssh_command or ("ssh",)), *config.ssh_options, *SSH_DEFAULTS]
+    if config.port is not None:
+        argv += ["-p", str(config.port)]
+    if config.identity is not None:
+        argv += ["-i", str(config.identity)]
+    python = AUTO_PYTHON if config.remote_python == "auto" else f"{shlex.quote(config.remote_python)} -u -"
+    assert config.remote is not None
+    return [*argv, "--", config.remote, python]
+
+
+def watcher_options(config: ObserverConfig) -> dict[str, Any]:
+    return {
+        "dir": config.dir,
+        "pattern": config.pattern,
+        "ignore": list(config.ignore),
+        "settle": config.settle,
+        "interval": config.interval,
+        "checksum": config.checksum,
+        "heartbeat": config.heartbeat,
+    }
+
+
+def watcher_source(options: Mapping[str, Any]) -> str:
+    """The remote watcher's source with its options prepended as an assignment (ASCII: json escapes the rest)."""
+    source = resources.files("keepwatch").joinpath("remote_watcher.py").read_text(encoding="utf-8")
+    return f"KEEPWATCH_REMOTE_ARGS = {json.dumps(json.dumps(options))}\n{source}"
+
+
+class RemoteFilesObserver(CommandObserver):
+    """A command observer running the remote watcher over ssh; only file events are delivered."""
+
+    kind = "remote_files"
+
+    def __init__(
+        self, watch: WatchConfig, config: ObserverConfig, *, deliver: Deliver, sink: Sink, env: Mapping[str, str]
+    ) -> None:
+        timeout = config.heartbeat_timeout if config.heartbeat_timeout is not None else 3 * config.heartbeat
+        command_config = replace(
+            config,
+            command=Command(argv=tuple(remote_command(config))),
+            stdin=watcher_source(watcher_options(config)),
+            heartbeat_timeout=timeout,
+        )
+        super().__init__(watch, command_config, deliver=deliver, sink=sink, env=env)
+
+    def emit(self, event: dict[str, Any]) -> None:
+        kind = event.get("event")
+        if kind == "hello":
+            self._sink(
+                make_record(
+                    "observer.connected",
+                    **self._tag(),
+                    remote=self.config.remote,
+                    dir=event.get("dir"),
+                    python=event.get("python"),
+                    version=event.get("version"),
+                    inotify=event.get("inotify"),
+                )
+            )
+            return
+        if kind != "file":
+            # Anything else on stdout (a login script's banner, say) is logged, never delivered.
+            text = event["line"] if set(event) == {"line"} else json.dumps(event, ensure_ascii=False)
+            self._output.line(text, stream="stdout")
+            return
+        super().emit({**event, "remote": self.config.remote})
+
+
 def build_observer(
     watch: WatchConfig,
     config: ObserverConfig,
@@ -582,11 +676,12 @@ def build_observer(
     data_dir: Path,
 ) -> Observer:
     """The Observer for one [observe.<name>] table (not started)."""
-    if config.kind == "command":
+    if config.kind in ("command", "remote_files"):
         with contextlib.suppress(OSError):
             data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         env = observer_environment(watch, config.name, environment=environment, data_dir=data_dir)
-        return CommandObserver(watch, config, deliver=deliver, sink=sink, env=env)
+        cls = CommandObserver if config.kind == "command" else RemoteFilesObserver
+        return cls(watch, config, deliver=deliver, sink=sink, env=env)
     if config.kind == "files":
         return FilesObserver(watch, config, deliver=deliver, sink=sink)
     raise ValueError(f"unknown observer kind {config.kind!r}")
