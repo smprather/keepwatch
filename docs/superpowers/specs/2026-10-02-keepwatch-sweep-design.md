@@ -208,3 +208,12 @@ this. With `marker = "none"` nothing changes.
   its next report.
 - **Known limit, documented:** a rewrite that keeps size and mtime is not re-reported by the remote watcher
   until it reconnects; after a `changed` delete result such a file stays on the source host.
+
+## 11. Last revisions (2026-10-02)
+
+- **The delete helper requires a sha256**: an item without one is `refused`, whoever sends it (the pull recipe
+  already never sends one).
+- **An unreadable file stays a candidate** (on Windows a file can be locked by its writer): it is checked again
+  after another settle period instead of waiting for the 30s rescan.
+- Accepted as they are: on Windows with last-access updates enabled, a read can cause one extra scan (never a
+  loop: a held file is not re-read); where notifications are missed, a late marker is seen by the 30s rescan.
