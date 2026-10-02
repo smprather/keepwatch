@@ -1,6 +1,7 @@
 import hashlib
 import shutil
 import socket
+from pathlib import Path
 
 import pytest
 
@@ -172,7 +173,7 @@ def test_reports_each_scp_run(tmp_path, server, ssh_config):
     local.write_bytes(b"x")
     calls = []
     push(local, REMOTE, options=key_options(server, ssh_config), report=lambda *call: calls.append(call))
-    assert len(calls) == 2  # the file, then its marker
+    assert len(calls) == 1  # file and marker in one scp run
     argv, returncode, timed_out, duration, stdout, stderr = calls[0]
     assert argv[0] == "scp" and returncode == 0 and timed_out is False and duration >= 0
 
@@ -201,3 +202,15 @@ def test_a_retried_rename_reuses_the_identical_copy(tmp_path, server, ssh_config
     again = pull(REMOTE + "b.tar.gz", stage, size=3, sha256=sha(b"new"), on_conflict="rename", options=options)
     assert first == again == stage / "b-1.tar.gz"
     assert sorted(path.name for path in stage.iterdir()) == ["b-1.tar.gz", "b.tar.gz"]
+
+
+def test_push_sends_file_and_marker_in_one_scp(tmp_path, server, ssh_config):
+    local = tmp_path / "a.tar.gz"
+    local.write_bytes(b"payload")
+    calls = []
+    push(local, REMOTE, options=key_options(server, ssh_config), report=lambda *call: calls.append(call))
+    [call] = calls
+    argv = call[0]
+    assert argv[-3:-1] == [str(local), str(Path(argv[-2]))] and argv[-2].endswith("a.tar.gz.sha256")
+    assert (server.root / "a.tar.gz").read_bytes() == b"payload"
+    assert (server.root / "a.tar.gz.sha256").exists()

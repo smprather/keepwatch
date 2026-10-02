@@ -301,3 +301,8 @@ def test_scp_runs_in_the_callers_process_group(tmp_path):
 def test_pull_refuses_names_windows_cannot_store(tmp_path):
     with pytest.raises(TransferFailed, match="Windows"):
         pull("me@h:/x/a:b.gz", tmp_path)
+
+
+def test_extra_sources_follow_the_first():
+    argv = scp_argv(parse_endpoint("a.gz"), parse_endpoint("me@h:in/"), ScpOptions(), (10, 5), extra_sources=[parse_endpoint("a.gz.sha256")])
+    assert argv[-3:] == ["a.gz", "a.gz.sha256", "me@h:in/"]

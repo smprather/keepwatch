@@ -246,7 +246,11 @@ def known_hosts_option(path: str | os.PathLike[str]) -> list[str]:
 
 
 def scp_argv(
-    source: Endpoint, destination: Endpoint, options: ScpOptions, version: tuple[int, int] | None
+    source: Endpoint,
+    destination: Endpoint,
+    options: ScpOptions,
+    version: tuple[int, int] | None,
+    extra_sources: Sequence[Endpoint] = (),
 ) -> list[str]:
     """The scp command line for one copy (see the module docs for every option)."""
     if not (source.remote or destination.remote):
@@ -283,7 +287,8 @@ def scp_argv(
     if both:
         argv.append("-3")
     classic = options.protocol == "scp"
-    return [*argv, "--", _operand(source, classic=classic, source=True), _operand(destination, classic=classic, source=False)]
+    sources = [_operand(end, classic=classic, source=True) for end in (source, *extra_sources)]
+    return [*argv, "--", *sources, _operand(destination, classic=classic, source=False)]
 
 
 def _askpass_python() -> str:
@@ -367,12 +372,14 @@ def copy(
     source: str | os.PathLike[str] | Endpoint,
     destination: str | os.PathLike[str] | Endpoint,
     *,
+    extra_sources: Sequence[str | os.PathLike[str] | Endpoint] = (),
     options: ScpOptions = ScpOptions(),
     report: Report | None = None,
 ) -> None:
-    """Copy one file with scp. Raises CommandFailed when scp fails, TransferFailed when it cannot be attempted."""
+    """Copy one file (and extra_sources, in order, into destination as a directory) with scp. Raises CommandFailed when scp fails, TransferFailed when it cannot be attempted."""
     src, dst = _endpoint(source), _endpoint(destination)
-    argv = scp_argv(src, dst, options, openssh_version(_ssh_beside(options.scp_command[0])))
+    extra = [_endpoint(item) for item in extra_sources]
+    argv = scp_argv(src, dst, options, openssh_version(_ssh_beside(options.scp_command[0])), extra_sources=extra)
     limit = options.timeout
     if options.deadline is not None:
         left = options.deadline - time.time()
@@ -496,7 +503,7 @@ def push(
     options: ScpOptions = ScpOptions(),
     report: Report | None = None,
 ) -> str:
-    """Upload a file into remote_dir, then (marker="sha256") NAME.sha256 in sha256sum format. Returns the remote path."""
+    """Upload a file into remote_dir followed (marker="sha256") by NAME.sha256 in sha256sum format, in one scp run. Returns the remote path."""
     local = Path(path)
     if not local.is_file():
         raise TransferFailed(f"{local} is not a file")
@@ -506,12 +513,14 @@ def push(
     if not directory.remote:
         raise ValueError(f"push needs a remote directory (user@host:dir), got {directory.scp_arg()!r}")
     target = directory.child(local.name)
-    copy(local, target, options=options, report=report)
-    if marker == "sha256":
-        with tempfile.TemporaryDirectory(prefix="keepwatch-marker-") as work:
-            marker_file = Path(work) / f"{local.name}.sha256"
-            marker_file.write_bytes(f"{sha256_file(local)}  {local.name}\n".encode())
-            copy(marker_file, directory.child(marker_file.name), options=options, report=report)
+    if marker == "none":
+        copy(local, target, options=options, report=report)
+        return target.scp_arg()
+    with tempfile.TemporaryDirectory(prefix="keepwatch-marker-") as work:
+        marker_file = Path(work) / f"{local.name}.sha256"
+        marker_file.write_bytes(f"{sha256_file(local)}  {local.name}\n".encode())
+        # One scp run (one login): scp sends its sources in order, so the data arrives before its marker.
+        copy(local, directory, extra_sources=[marker_file], options=options, report=report)
     return target.scp_arg()
 
 
