@@ -7,6 +7,7 @@ and works.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
@@ -87,7 +88,7 @@ def verify_command(argv: Sequence[str], env: Mapping[str, str]) -> str | None:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"cannot run {shown}: {exc}"
-    if completed.returncode == 0 and __version__ in completed.stdout:
+    if completed.returncode == 0 and re.search(rf"(?<![\w.]){re.escape(__version__)}(?![\w.])", completed.stdout):
         return None
     output = " | ".join((completed.stdout + completed.stderr).strip().splitlines()[-3:]) or "no output"
     return f"{shown} exited {completed.returncode} without reporting keepwatch {__version__}: {output}"

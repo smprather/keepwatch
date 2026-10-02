@@ -1,10 +1,12 @@
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from keepwatch.cli import cli
+from keepwatch.config import load_watch_config
 from keepwatch.reference import example_dirs, render_topic
 
 
@@ -77,9 +79,15 @@ def test_relay_examples_validate(xdg):
 @needs_openssh
 def test_relay_push_example_waits_when_linux2_is_away(xdg):
     install(xdg, "relay-push")
-    staging = xdg.default_watches_dir / "relay-push" / "staging"
+    staging = Path.home() / "relay" / "staging"
     staging.mkdir(parents=True)
     data = json.loads(run("poll", "relay-push", "--json").output)
     poll = data["polls"][0]
     assert poll["outcome"] == "unknown" and poll["failed"] is False
     assert "linux2.example" in poll["reason"]
+
+
+def test_relay_examples_share_the_staging_folder(xdg):
+    pulled = load_watch_config(install(xdg, "relay-pull")).settings["local_dir"]
+    pushed = load_watch_config(install(xdg, "relay-push")).settings["local_dir"]
+    assert pulled == pushed == str(Path.home() / "relay" / "staging")

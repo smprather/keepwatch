@@ -59,3 +59,20 @@ def test_install_refuses_a_broken_service_command(xdg, monkeypatch):
     result = run("install", "--dry-run", "--force")
     assert result.exit_code == 1
     assert "the login service would run" in result.output and "exited 9009" in result.output
+
+
+def test_the_version_must_match_as_a_whole_word():
+    import os
+
+    longer = [sys.executable, "-c", f"print('keepwatch, version {__version__}1')"]
+    assert installcheck.verify_command(longer, os.environ) is not None
+
+
+def test_install_checks_the_registered_program_too(xdg, monkeypatch, tmp_path):
+    cache = tmp_path / "cache"
+    program = cache / "env" / "bin" / "keepwatch"
+    program.parent.mkdir(parents=True)
+    monkeypatch.setattr(installcheck, "uv_cache_dirs", lambda env: [cache])
+    monkeypatch.setattr(installcheck, "service_check_argv", lambda: [str(program), "--version"])
+    result = run("install", "--dry-run")
+    assert result.exit_code == 1 and "uv's cache" in result.output

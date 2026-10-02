@@ -7,7 +7,7 @@ interval = "5m"            # retry this often while linux2 is away (new files wa
 action_timeout = "2h"
 
 [settings]
-local_dir = "staging"      # relative to this watch's directory: point both watches at one folder
+local_dir = "~/relay/staging"   # the staging folder: the SAME path in relay-pull and relay-push
 dest = "me@linux2.example:incoming/"
 password_env = "RELAY_PASSWORD"   # Windows: setx RELAY_PASSWORD "...", then restart keepwatch
 pattern = "*.tar.gz"

@@ -50,7 +50,12 @@ def on_true(ctx: Ctx) -> None:
             continue
         sha256 = item["sha256"] if settings["checksum"] else None
         final = ctx.transfer.pull(
-            f"{settings['remote']}:{item['path']}", settings["local_dir"], size=item["size"], sha256=sha256, **options
+            f"{settings['remote']}:{item['path']}",
+            settings["local_dir"],
+            size=item["size"],
+            sha256=sha256,
+            on_conflict=settings["on_conflict"],
+            **options,
         )
         pulled.add(item["key"])
         ctx.log.info("pulled %s", item["name"], extra={"local": str(final), "size": item["size"]})

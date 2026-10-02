@@ -93,3 +93,15 @@ def test_validate_a_recipe_watch(make_watch, server, tmp_path, xdg):
     pull_watch(make_watch, server, tmp_path)
     result = CliRunner().invoke(cli, ["validate", "relay-pull"])
     assert result.exit_code == 0, result.output
+
+
+def test_pull_recipe_renames_on_a_name_clash(make_watch, server, tmp_path, xdg):
+    (server.root / "a.tar.gz").write_bytes(b"new data")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "a.tar.gz").write_bytes(b"old, not pushed yet")
+    watch = load_watch_config(pull_watch(make_watch, server, tmp_path))
+    report = engine(xdg, []).poll(watch, WatchState(False), events=[file_event("a.tar.gz", b"new data")])
+    assert not report.failed
+    assert (stage / "a-1.tar.gz").read_bytes() == b"new data"
+    assert (stage / "a.tar.gz").read_bytes() == b"old, not pushed yet"

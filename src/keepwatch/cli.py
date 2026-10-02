@@ -755,9 +755,11 @@ def _install_windows(app: App, dry_run: bool) -> None:
 def _install_problem(force: bool) -> str | None:
     """Why the login service would break, or None (see keepwatch.installcheck)."""
     if not force:
-        reason = installcheck.transient_reason(
-            Path(sys.prefix), cache_dirs=installcheck.uv_cache_dirs(os.environ), temp_dir=Path(tempfile.gettempdir())
-        )
+        caches, temp = installcheck.uv_cache_dirs(os.environ), Path(tempfile.gettempdir())
+        program = Path(installcheck.service_check_argv()[0])
+        reason = None
+        for candidate in (Path(sys.prefix), program):  # the program the service will run may live elsewhere
+            reason = reason or installcheck.transient_reason(candidate, cache_dirs=caches, temp_dir=temp)
         if reason is not None:
             return (
                 f"{reason}, and the login service would stop working when it disappears. Install keepwatch for good "

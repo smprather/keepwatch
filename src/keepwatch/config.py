@@ -16,10 +16,11 @@ from types import MappingProxyType
 from typing import Any
 
 from keepwatch import platform
+from keepwatch.ctx import LEDGER_NAME
 from keepwatch.durations import DurationError, format_duration, parse_duration
 from keepwatch.hooks import HOOK_NAMES, WATCH_PY
 from keepwatch.paths import Paths
-from keepwatch.transfer import MARKERS, PROTOCOLS, parse_endpoint
+from keepwatch.transfer import CONFLICTS, MARKERS, PROTOCOLS, known_hosts_option, parse_endpoint
 
 CONFIG_NAME = "config.toml"
 
@@ -252,7 +253,7 @@ _OBSERVER_KIND_KEYS = {
 _OBSERVER_REQUIRED = {"command": ("command",), "files": ("path",), "remote_files": ("remote", "dir")}
 _OBSERVER_NON_EMPTY = ("path", "remote", "dir", "remote_python")
 _OBSERVER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
-_LEDGER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+_LEDGER = LEDGER_NAME
 
 
 @dataclass(frozen=True)
@@ -312,6 +313,13 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
         Key("ignore", "str_list", DEFAULT_IGNORE, "Never pull file names matching any of these globs."),
         Key("settle", "duration", 10.0, "A remote file must be unchanged this long before it is pulled."),
         Key("checksum", "bool", True, "Compute sha256 on the source host and verify every pull against it."),
+        Key(
+            "on_conflict",
+            "str",
+            "rename",
+            "When local_dir already holds a different file of that name (a newer version arrived before the old "
+            "one was pushed): `rename` the new one to NAME-1.ext, `overwrite` the old one, or `skip-identical` (fail).",
+        ),
         Key("remote_python", "str", "auto", "The source host's Python 3.6+ (see `keepwatch docs observers`)."),
         *_SSH_SETTINGS,
         Key("ssh_command", "argv", None, 'The ssh program for the observer. Default: ["ssh"].'),
@@ -342,7 +350,7 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
 }
 _RECIPE_REQUIRED = {"pull": ("remote", "remote_dir", "local_dir"), "push": ("local_dir", "dest")}
 _RECIPE_PATHS = ("local_dir", "identity", "known_hosts", "archive_dir")
-_RECIPE_CHOICES = {"protocol": PROTOCOLS, "marker": MARKERS, "after": RECIPE_AFTER}
+_RECIPE_CHOICES = {"protocol": PROTOCOLS, "marker": MARKERS, "after": RECIPE_AFTER, "on_conflict": CONFLICTS}
 
 
 def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any], watch_dir: Path) -> dict[str, Any]:
@@ -367,8 +375,16 @@ def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any],
     for name in _RECIPE_REQUIRED[recipe]:
         if values.get(name) in (None, ""):
             collector.add(f"recipe = \"{recipe}\" needs '{name}' in [settings]", table="settings", topic="recipes")
+    for name in _RECIPE_PATHS:
+        if isinstance(values.get(name), str) and values[name]:
+            values[name] = str(_observed_path(values[name], watch_dir))
     if recipe == "push":
-        if values["dest"] and not parse_endpoint(values["dest"]).remote:
+        try:
+            dest_remote = not values["dest"] or parse_endpoint(values["dest"]).remote
+        except ValueError as exc:
+            collector.add(f"'dest': {exc}", key="dest", table="settings", topic="recipes")
+            dest_remote = True
+        if not dest_remote:
             collector.add(
                 f"'dest' must be a remote directory (user@host:dir or scp://user@host/dir), got {values['dest']!r}",
                 key="dest",
@@ -377,9 +393,13 @@ def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any],
             )
         if values["after"] == "archive" and not values["archive_dir"]:
             collector.add("after = \"archive\" needs 'archive_dir' in [settings]", key="after", table="settings", topic="recipes")
-    for name in _RECIPE_PATHS:
-        if isinstance(values.get(name), str) and values[name]:
-            values[name] = str(_observed_path(values[name], watch_dir))
+        elif values["after"] == "archive" and values["local_dir"] and Path(values["archive_dir"]) == Path(values["local_dir"]):
+            collector.add(
+                "'archive_dir' must not be 'local_dir': archived files would be pushed again and again",
+                key="archive_dir",
+                table="settings",
+                topic="recipes",
+            )
     return {name: list(value) if isinstance(value, tuple) else value for name, value in values.items()}
 
 
@@ -397,7 +417,7 @@ def _recipe_observers(recipe: str, settings: Mapping[str, Any]) -> dict[str, Obs
         }
     ssh_options = list(settings["ssh_options"])
     if settings["known_hosts"]:
-        ssh_options += ["-o", f'UserKnownHostsFile="{Path(settings["known_hosts"]).as_posix()}"']
+        ssh_options += known_hosts_option(settings["known_hosts"])
     return {
         "remote": ObserverConfig(
             name="remote",

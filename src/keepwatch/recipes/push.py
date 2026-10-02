@@ -63,7 +63,13 @@ def check(ctx: Ctx) -> tuple[bool, list[str]]:
     if not ctx.transfer.tcp_open(host, port, settings["reachable_timeout"]):
         raise Unknown(f"{host}:{port} is not reachable; files wait in {settings['local_dir']}")
     pushed = ctx.ledger(LEDGER) if settings["after"] == "keep" else None
-    files = [str(path) for path in settled_files(settings) if pushed is None or ctx.file_key(path) not in pushed]
+    files = []
+    for path in settled_files(settings):
+        try:
+            if pushed is None or ctx.file_key(path) not in pushed:
+                files.append(str(path))
+        except OSError:
+            continue  # removed since the scan
     return bool(files), files
 
 

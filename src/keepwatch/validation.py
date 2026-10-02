@@ -64,7 +64,8 @@ def check_watch(watch_dir: Path, global_config: GlobalConfig, runner: Runner, pa
         return report
     if watch.recipe is not None:
         search = {**os.environ, **global_config.environment, **watch.environment}.get("PATH", "")
-        for program in ("ssh", "scp") if watch.recipe == "pull" else ("scp",):
+        needs_ssh = watch.recipe == "pull" and not watch.settings.get("ssh_command")
+        for program in ("ssh", "scp") if needs_ssh else ("scp",):
             if not shutil.which(program, path=search):
                 report.problems.append(
                     f"{watch.config_file}: recipe = \"{watch.recipe}\" needs OpenSSH '{program}' on PATH; "

@@ -103,3 +103,22 @@ def test_recipe_watches_have_no_hooks_of_their_own(make_watch):
 def test_watches_without_a_recipe_are_unchanged(make_watch):
     config = load(make_watch, "[settings]\nanything = 1\n")
     assert config.recipe is None and config.settings == {"anything": 1}
+
+
+def test_a_malformed_dest_is_a_config_error(make_watch):
+    [problem] = problems(make_watch, 'recipe = "push"\n[settings]\nlocal_dir = "s"\ndest = "scp://host"\n')
+    assert "'dest':" in problem and "scp://[user@]host[:port]/path" in problem
+
+
+def test_archive_dir_must_differ_from_local_dir(make_watch):
+    [problem] = problems(make_watch, PUSH + 'after = "archive"\narchive_dir = "staging"\n')
+    assert "'archive_dir' must not be 'local_dir'" in problem
+
+
+def test_pull_on_conflict_default_and_choices(make_watch):
+    assert load(make_watch, PULL).settings["on_conflict"] == "rename"
+
+
+def test_pull_on_conflict_must_be_a_choice(make_watch):
+    [problem] = problems(make_watch, PULL + 'on_conflict = "keep"\n')
+    assert "'on_conflict' must be one of skip-identical, rename, overwrite" in problem

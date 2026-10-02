@@ -31,7 +31,7 @@ from watchdog.observers import Observer as NativeObserver
 
 from keepwatch import platform
 from keepwatch.config import Command, ObserverConfig, WatchConfig
-from keepwatch.ctx import Ledger, LedgerCorrupt
+from keepwatch.ctx import Ledger, LedgerCorrupt, ledger_file
 from keepwatch.durations import format_duration
 from keepwatch.logstore import Sink, make_record
 from keepwatch.offline import iso_time
@@ -651,7 +651,7 @@ class RemoteFilesObserver(CommandObserver):
         timeout = config.heartbeat_timeout if config.heartbeat_timeout is not None else 3 * config.heartbeat
         self._options = watcher_options(config)
         self._skip_ledger = (
-            None if config.skip_ledger is None or data_dir is None else data_dir / "ledgers" / f"{config.skip_ledger}.json"
+            None if config.skip_ledger is None or data_dir is None else ledger_file(data_dir, config.skip_ledger)
         )
         command_config = replace(
             config,

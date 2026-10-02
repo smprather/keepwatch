@@ -9,6 +9,6 @@ retry_after = "15m"        # if it goes offline (linux1 down for a while), try a
 [settings]
 remote = "me@linux1.example"
 remote_dir = "/data/exports"
-local_dir = "staging"      # relative to this watch's directory; relay-push reads the same folder
+local_dir = "~/relay/staging"   # the staging folder: the SAME path in relay-pull and relay-push
 pattern = "*.tar.gz"
 settle = "30s"             # unchanged this long on linux1 before it counts as finished
