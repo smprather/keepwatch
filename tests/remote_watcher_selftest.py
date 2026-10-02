@@ -55,6 +55,8 @@ class Running(object):
         else:
             argv = [sys.executable, "-u", watcher(), json.dumps(options)]
             data = b""
+        self.stopped = False
+        self.stderr_text = b""
         self.process = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
         )
@@ -95,10 +97,14 @@ class Running(object):
         return names
 
     def stop(self):
+        if self.stopped:
+            return
+        self.stopped = True
         if self.process.poll() is None:
             self.process.kill()
         self.process.wait(10)
         self.reader.join(5)
+        self.stderr_text = self.process.stderr.read()
         self.process.stdout.close()
         self.process.stderr.close()
 
@@ -244,6 +250,38 @@ class WatcherTests(unittest.TestCase):
         env.pop("PYTHONIOENCODING", None)
         event = self.start(env=env).next_file()
         self.assertEqual(event["name"], name)
+
+    @unittest.skipIf(os.name == "nt" or sys.platform == "darwin", "needs a filesystem that accepts any name bytes")
+    def test_non_utf8_names_are_skipped_with_a_note(self):
+        path = os.path.join(self.dir.encode("utf-8"), b"caf\xe9.gz")
+        with open(path, "wb") as handle:
+            handle.write(b"x")
+        age(path)
+        self.write("good.gz")
+        running = self.start(heartbeat=0.5)
+        self.assertEqual(running.file_names_for(3.0), ["good.gz"])
+        running.stop()
+        self.assertEqual(running.stderr_text.count(b"not UTF-8"), 1)
+
+    @unittest.skipIf(
+        os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0), "needs a POSIX user that is not root"
+    )
+    def test_unreadable_file_is_noted_once(self):
+        locked = self.write("locked.gz")
+        os.chmod(locked, 0)
+        self.write("ok.gz")
+        running = self.start(heartbeat=0.5)
+        try:
+            names = running.file_names_for(3.0)
+        finally:
+            os.chmod(locked, 0o600)
+        self.assertEqual(names, ["ok.gz"])
+        running.stop()
+        self.assertEqual(running.stderr_text.count(b"cannot read locked.gz"), 1)
+
+    def test_rescan_option_is_accepted(self):
+        self.write("a.gz")
+        self.assertEqual(self.start(rescan=60).next_file()["name"], "a.gz")
 
 
 if __name__ == "__main__":

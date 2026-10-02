@@ -1,4 +1,5 @@
 import ast
+import importlib.util
 from pathlib import Path
 
 from remote_watcher_selftest import WatcherTests  # noqa: F401  (pytest collects it from this module)
@@ -46,3 +47,21 @@ def test_the_watcher_and_its_tests_avoid_newer_features():
     for path in (SOURCE, SELFTEST):
         text = path.read_text(encoding="utf-8")
         assert [word for word in FORBIDDEN if word in text] == [], path.name
+
+
+def test_the_watchers_defaults_match_keepwatch():
+    from keepwatch import observers
+    from keepwatch.config import ObserverConfig
+
+    spec = importlib.util.spec_from_file_location("keepwatch_remote_watcher_copy", SOURCE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    defaults = ObserverConfig(name="r", kind="remote_files")
+    assert module.DEFAULTS["ignore"] == list(defaults.ignore)
+    assert (module.DEFAULTS["settle"], module.DEFAULTS["interval"], module.DEFAULTS["heartbeat"]) == (
+        defaults.settle,
+        defaults.interval,
+        defaults.heartbeat,
+    )
+    assert module.DEFAULTS["rescan"] == observers.FILES_RESCAN
+    assert (module.SETTLE_STEP, module.MIN_RESCAN) == (observers.FILES_SETTLE_STEP, observers.FILES_MIN_RESCAN)

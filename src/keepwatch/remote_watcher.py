@@ -6,7 +6,8 @@ features to avoid is in tests/test_remote_watcher.py).
 
 Options are one JSON object: the first command-line argument, or KEEPWATCH_REMOTE_ARGS when keepwatch
 prepends that assignment to the source it sends on stdin (so nothing passes through the remote login
-shell's quoting rules).
+shell's quoting rules). With inotify the directory is rescanned on every notification and every
+"rescan" seconds; without it every "interval" seconds.
 
 Output, one JSON object per line, flushed at once:
   {"event": "hello", "version", "python", "inotify", "dir"}     once, at start
@@ -38,6 +39,7 @@ DEFAULTS = {
     "interval": 2.0,
     "checksum": True,
     "heartbeat": 30.0,
+    "rescan": 30.0,
 }
 SETTLE_STEP = 1.0  # rescan this often while a file is settling
 MIN_RESCAN = 0.5  # at most two scans a second, however many notifications arrive
@@ -132,6 +134,16 @@ class Watcher(object):
         self.directory = directory.encode("utf-8", "surrogateescape")
         self.candidates = {}  # path -> ((size, mtime_ns), when that state was first seen)
         self.reported = set()  # (path, size, mtime_ns)
+        self.unreadable = {}  # (path, size, mtime_ns) -> when reading it last failed
+        self.noted = set()
+
+    def note(self, message):
+        """Tell keepwatch about a problem once (stderr lines become observer.output records)."""
+        if message in self.noted:
+            return
+        self.noted.add(message)
+        sys.stderr.write("keepwatch remote watcher: " + message + "\n")
+        sys.stderr.flush()
 
     def scan(self):
         """Report settled files. Returns True while some file is still settling. Raises OSError if the directory is gone."""
@@ -142,7 +154,12 @@ class Watcher(object):
         present = set()
         current = set()
         for raw in sorted(names):
-            name = decode(raw)
+            try:
+                name = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                # keepwatch could not name it to scp, log it or hand it to a hook as text.
+                self.note("skipping a file whose name is not UTF-8: %r" % raw)
+                continue
             if not wanted(name, self.options):
                 continue
             path = os.path.join(self.directory, raw)
@@ -157,6 +174,9 @@ class Watcher(object):
             current.add((path,) + key)
             if (path,) + key in self.reported:
                 continue
+            failed_at = self.unreadable.get((path,) + key)
+            if failed_at is not None and now - failed_at < self.options["rescan"]:
+                continue
             first = self.candidates.get(path)
             if first is None or first[0] != key:
                 first = (key, now)
@@ -168,7 +188,10 @@ class Watcher(object):
                 try:
                     event["sha256"] = sha256_of(path, self.output, self.options["heartbeat"])
                     after = os.stat(path)
-                except OSError:
+                except OSError as exc:
+                    del self.candidates[path]
+                    self.unreadable[(path,) + key] = now
+                    self.note("cannot read %s: %s" % (name, exc.strerror or exc))
                     continue
                 if (after.st_size, after.st_mtime_ns) != key:
                     del self.candidates[path]  # changed while it was hashed: let it settle again
@@ -180,6 +203,8 @@ class Watcher(object):
             if path not in present:
                 del self.candidates[path]
         self.reported &= current
+        for stale in set(self.unreadable) - current:
+            del self.unreadable[stale]
         return bool(self.candidates)
 
     def run(self):
@@ -193,7 +218,8 @@ class Watcher(object):
                 "dir": decode(self.directory),
             }
         )
-        interval = self.options["interval"]
+        # With inotify, changes wake the loop at once; full rescans are only a safety net.
+        interval = self.options["interval"] if inotify is None else max(self.options["interval"], self.options["rescan"])
         heartbeat = self.options["heartbeat"]
         last_scan = 0.0
         while True:
