@@ -54,7 +54,7 @@ def test_help_points_agents_at_the_docs(xdg):
 KEY_FACTS = {
     "python": ["keepwatch.Unknown", "(True, payload)", "1 MiB", "keepwatch_watch", "top-level"],
     "config": ["single-quoted"],
-    "executables": ["KEEPWATCH_PAYLOAD_OUT", "KEEPWATCH_PAYLOAD_FILE", "KEEPWATCH_SETTINGS_FILE", "KEEPWATCH_EVENTS_FILE", "[check_exit_codes]", "/bin/sh -c", "Windows PowerShell", ".ps1", "UTF8Encoding"],
+    "executables": ["KEEPWATCH_PAYLOAD_OUT", "KEEPWATCH_PAYLOAD_FILE", "KEEPWATCH_SETTINGS_FILE", "KEEPWATCH_EVENTS_FILE", "[check_exit_codes]", "/bin/sh -c", "Windows PowerShell", ".ps1", "UTF8Encoding", "keepwatch kit"],
     "states": ["| `true` |", "initial_condition", "stop at the first failure", "never overlap"],
     "failures": ["max_failures", "retry_after", "alert_command", "KEEPWATCH_ALERT_EVENT", "offline.json"],
     "storage": ["ctx.data_dir", "ctx.run_dir", "file_key", "LedgerCorrupt", "keepwatch rename", "%LOCALAPPDATA%"],
@@ -63,6 +63,7 @@ KEY_FACTS = {
     "dependencies": ["python_dependencies", "uv run", "--offline", "keepwatch validate"],
     "reload": ["reload_interval", "last valid", "watch.removed", "offline.json"],
     "observers": ["[observe.", "./feed.py", "uv\", \"run\", \"--script", "ctx.events", "KEEPWATCH_EVENTS_FILE", "at-least-once", "heartbeat_timeout", "keepwatch observe", "--events", "wake", "settle", "flush", "ledger", "FileNotFoundError", "64 MiB", "1 second after", "do not restart", "remote_files", "remote_python", "BatchMode", "known_hosts", "observer.connected", "Python 3.6", "ssh-agent", "not valid UTF-8", "IdentitiesOnly"],
+    "transfers": ["ctx.transfer", "keepwatch kit", "password_env", "SSH_ASKPASS", "setx", "known_hosts", "-O", "scp -3", "protocol = \"sftp\"", ".part", ".sha256", "sha256sum -c", "tcp_open", "TransferFailed", "CommandFailed", "NumberOfPasswordPrompts"],
 }
 
 

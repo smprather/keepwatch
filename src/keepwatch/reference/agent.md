@@ -52,6 +52,7 @@ keepwatch logs --poll <id> -v                         # everything a poll did, w
 - Storing data in the watch directory. Use `ctx.data_dir`.
 - Writing Windows paths in double-quoted TOML strings: `\` starts an escape there. Use single-quoted strings (`'C:\data\in'`) or forward slashes (`"C:/data/in"`).
 - Assuming each observer event arrives exactly once. Delivery is at-least-once (events come again after a failed or unknown poll); record handled items in a ledger. See `keepwatch docs observers`.
+- Calling `scp` or `sftp` yourself, or putting a password in a hook. Use `ctx.transfer` / `keepwatch kit` with `password_env`: host keys are checked, nothing can prompt, partial pulls never appear under the real name, and the password stays in the environment. See `keepwatch docs transfers`.
 
 ## Reference topics
 

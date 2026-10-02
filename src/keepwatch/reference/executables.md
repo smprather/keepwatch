@@ -56,6 +56,8 @@ An **action** succeeds with exit status 0 and fails otherwise.
 
 Python hooks get the same variables, so programs they start can use them too.
 
+Command hooks transfer files with `keepwatch kit` (`copy`, `pull`, `push`, `tcp-open`): the same scp transfers Python hooks get as `ctx.transfer`, with the same checks and logging. See `keepwatch docs transfers`.
+
 ## Passing a payload from a command check
 
 ```sh

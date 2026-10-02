@@ -17,6 +17,7 @@ TOPICS: tuple[tuple[str, str], ...] = (
     ("ctx", "Every Ctx and Ledger member, from the code"),
     ("executables", "Command hooks: exit codes, environment variables, payload files"),
     ("observers", "Event sources the service keeps running: [observe.*], ctx.events, delivery, keepwatch observe"),
+    ("transfers", "scp transfers for hooks: ctx.transfer, keepwatch kit, passwords, host keys, markers"),
     ("states", "Outcomes, the state table, startup, retries and ordering"),
     ("failures", "Failed polls, backoff, offline, enable, retry_after and alert_command"),
     ("storage", "Directories, persistent and run-only data, ledgers, renaming"),
