@@ -2445,7 +2445,7 @@ git commit -m "keepwatch observe, poll --events, console lines for observer reco
 - [ ] **Step 1: Write the failing test** — in `tests/test_docs.py`, `KEY_FACTS`: add the entry
 
 ```python
-    "observers": ["[observe.", "ctx.events", "KEEPWATCH_EVENTS_FILE", "at-least-once", "heartbeat_timeout", "keepwatch observe", "--events", "wake", "settle", "flush", "ledger"],
+    "observers": ["[observe.", "./feed.py", "uv\", \"run\", \"--script", "ctx.events", "KEEPWATCH_EVENTS_FILE", "at-least-once", "heartbeat_timeout", "keepwatch observe", "--events", "wake", "settle", "flush", "ledger"],
 ```
 
 append `"KEEPWATCH_EVENTS_FILE"` to the `"executables"` list and `"observer.stopped"` to the `"logging"` list.
@@ -2485,10 +2485,14 @@ settle = "10s"
 
 [observe.feed]
 kind = "command"            # a long-running program
-command = ["python", "feed.py"]
+command = ["./feed.py"]     # see "Python programs" below
 heartbeat_timeout = "2m"
 wake = true                 # the default: poll as soon as an event arrives
 ```
+
+### Python programs
+
+Write `command = ["./feed.py"]`, not `["python", "feed.py"]`. A relative `.py` program runs with the Python that runs keepwatch: on Windows keepwatch starts it with that interpreter, and on POSIX the script's `#!` line does (make it executable). A bare `python` is unreliable: on Windows it may be the Microsoft Store placeholder, and elsewhere it may be missing or a different version. If the program needs third-party packages, declare them in the script itself (PEP 723 inline metadata) and run it with `command = ["uv", "run", "--script", "./feed.py"]`. uv then picks an interpreter and builds a cached environment on every OS.
 
 ### kind = "command"
 
