@@ -96,3 +96,11 @@ def test_observer_records_are_formatted():
     assert "observer feed restarting in 10s" in format_record(restarting)
     started = {"event": "observer.started", "observer": "in", "kind": "files", "path": "/x", "native": True}
     assert "observer in started (files): /x" in format_record(started)
+
+
+def test_observe_prints_each_event_once(make_watch):
+    observed(make_watch, FEED)
+    result = run("observe", "w", "--count", "2", "--for", "30s")
+    assert result.exit_code == 0, result.output
+    assert "event:" not in result.stderr
+    assert result.output.count('"n": 1') == 1

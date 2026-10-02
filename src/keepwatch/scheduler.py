@@ -13,16 +13,14 @@ from typing import Any
 from keepwatch.config import WatchConfig
 from keepwatch.locks import hold_lock
 from keepwatch.logstore import Sink, make_record
-from keepwatch.observers import EventQueue, Observer, build_observer
+from keepwatch.observers import EventQueue, Observer, build_observer, stop_all
 from keepwatch.offline import OfflineMarker, clear_offline, iso_time, read_offline, write_offline
 from keepwatch.paths import Paths
 from keepwatch.pollengine import PollEngine, PollReport
-from keepwatch.runner import DRAIN_GRACE, KILL_GRACE
 from keepwatch.state import ANSWERS, initial_state, next_delay, should_go_offline
 
 Alert = Callable[[str, str, str], None]
 CRASH_RETRY = 60.0
-OBSERVER_JOIN = KILL_GRACE + DRAIN_GRACE + 1.0
 DROP_REPORT_EVERY = 1000
 WAKE_GAP = 1.0  # a woken poll starts at least this long after the previous poll ended: busy sources are batched
 
@@ -152,10 +150,7 @@ class WatchRunner:
     def _stop_observers(self) -> None:
         with self._observers_lock:
             running, self._observers = list(self._observers.values()), {}
-        for observer in running:
-            observer.stop()
-        for observer in running:
-            observer.join(OBSERVER_JOIN)
+        stop_all(running)
 
     def _apply_pending(self) -> None:
         with self._lock:

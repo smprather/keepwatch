@@ -18,7 +18,7 @@ import threading
 import time
 import traceback
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import IO, Any
 
@@ -46,6 +46,7 @@ MAX_LINE = 1024 * 1024
 OUTPUT_RECORDS_PER_MINUTE = 20
 STDERR_TAIL = 5
 _SUPERVISE_STEP = 0.2
+OBSERVER_JOIN = KILL_GRACE + DRAIN_GRACE + 1.0  # how long stopping observers may take
 
 FILES_RESCAN = 30.0  # rescan this often even without notifications (network shares can miss them)
 FILES_POLL = 2.0  # rescan this often when native notifications are unavailable
@@ -236,6 +237,16 @@ class Observer:
     def run_once(self) -> None:
         """Run the source until it ends or stop() is called, logging observer.started and observer.stopped."""
         raise NotImplementedError
+
+
+def stop_all(running: Iterable[Observer], timeout: float = OBSERVER_JOIN) -> None:
+    """Ask every observer to stop, then wait for all of them (they stop in parallel) up to `timeout`."""
+    observers = list(running)
+    for observer in observers:
+        observer.stop()
+    deadline = time.monotonic() + timeout
+    for observer in observers:
+        observer.join(max(deadline - time.monotonic(), 0.0))
 
 
 class _OutputLimiter:

@@ -41,13 +41,13 @@ from keepwatch.durations import DurationError, parse_duration
 from keepwatch.locks import LockBusy, hold_lock
 from keepwatch.logquery import LogFilter, follow_log, parse_when, select_records
 from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter, make_record
-from keepwatch.observers import build_observer
+from keepwatch.observers import build_observer, stop_all
 from keepwatch.offline import iso_time
 from keepwatch.output import ConsolePrinter, make_console, plain_output
 from keepwatch.paths import PathError, Paths, ensure_private_dir, remove_stale_process_dirs, resolve_paths
 from keepwatch.pollengine import Fake, PollEngine, PollReport, parse_fakes
 from keepwatch.reference import UnknownTopic, render_all, render_topic, topic_index
-from keepwatch.runner import DRAIN_GRACE, KILL_GRACE, Runner
+from keepwatch.runner import Runner
 from keepwatch.service import Service
 from keepwatch.state import initial_state
 from keepwatch.statusview import collect_status, format_status, service_running
@@ -318,7 +318,7 @@ def observe(app: App, name: str, observer: str | None, duration: str | None, cou
             if count is not None and seen >= count:
                 done.set()
 
-    printer = ConsolePrinter(make_console(stderr=True))
+    printer = level_filter(ConsolePrinter(make_console(stderr=True)), "INFO")
     running = [
         build_observer(
             watch,
@@ -340,10 +340,7 @@ def observe(app: App, name: str, observer: str | None, duration: str | None, cou
     except KeyboardInterrupt:
         pass
     finally:
-        for item in running:
-            item.stop()
-        for item in running:
-            item.join(KILL_GRACE + DRAIN_GRACE + 1.0)
+        stop_all(running)
 
 
 @cli.command()
