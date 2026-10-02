@@ -176,3 +176,20 @@ def test_missing_directory_is_retried(tmp_path, make_watch, xdg):
     assert "does not exist" in first["reason"] and first["level"] == "WARNING"
     assert events[0]["name"] == "a.gz"
     assert kinds(records, "observer.stopped")[-1]["reason"] == "stopped"
+
+
+def test_recursive_skips_ignored_directories(tmp_path, make_watch, xdg):
+    inbox = tmp_path / "inbox"
+    for directory in ("sub", ".git/objects/3f", ".stversions", "partial.tmp"):
+        (inbox / directory).mkdir(parents=True)
+    for relative in ("sub/a.gz", ".git/objects/3f/a1b2c3", ".stversions/old.gz", "partial.tmp/b.gz"):
+        (inbox / relative).write_text("x")
+        age(inbox / relative)
+    observer, events, records = files_observer(make_watch, xdg, inbox, "recursive = true\n")
+    observer.start()
+    try:
+        assert wait_for(lambda: events)
+        time.sleep(2.0)
+    finally:
+        stop(observer)
+    assert [event["name"] for event in events] == ["a.gz"]

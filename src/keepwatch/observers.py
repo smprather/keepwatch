@@ -8,6 +8,7 @@ its source with backoff when it stops, and hands events to a `deliver` callback.
 from __future__ import annotations
 
 import contextlib
+import errno
 import fnmatch
 import json
 import os
@@ -446,20 +447,25 @@ class FilesObserver(Observer):
         super().__init__(watch, config, deliver=deliver, sink=sink)
         self._reported: set[tuple[str, int, int]] = set()
 
+    def _ignored(self, name: str) -> bool:
+        return any(fnmatch.fnmatch(name, pattern) for pattern in self.config.ignore)
+
     def _wanted(self, name: str) -> bool:
-        if not fnmatch.fnmatch(name, self.config.pattern):
-            return False
-        return not any(fnmatch.fnmatch(name, pattern) for pattern in self.config.ignore)
+        return fnmatch.fnmatch(name, self.config.pattern) and not self._ignored(name)
 
     def _scan(self) -> dict[str, os.stat_result]:
         """Regular files to consider, by absolute path. Raises OSError if the directory is gone."""
         root = self.config.path
         assert root is not None
-        names = os.listdir(root)
-        if self.config.recursive:
-            listing = [(Path(directory), files) for directory, _, files in os.walk(root)]
+        if not self.config.recursive:
+            listing = [(root, os.listdir(root))]
         else:
-            listing = [(root, names)]
+            if not root.is_dir():
+                raise FileNotFoundError(errno.ENOENT, "directory does not exist", str(root))
+            listing = []
+            for directory, subdirectories, files in os.walk(root):
+                subdirectories[:] = [name for name in subdirectories if not self._ignored(name)]
+                listing.append((Path(directory), files))
         found = {}
         for directory, entries in listing:
             for name in entries:
