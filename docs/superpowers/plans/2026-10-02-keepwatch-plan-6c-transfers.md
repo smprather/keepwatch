@@ -104,7 +104,7 @@ def test_endpoint_name_and_child():
     assert parse_endpoint("me@h:/data/a.tar.gz").name == "a.tar.gz"
     assert parse_endpoint("h:in/").child("a.gz").scp_arg() == "h:in/a.gz"
     assert parse_endpoint("h:").child("a.gz").scp_arg() == "h:a.gz"
-    assert parse_endpoint("h:/").child("a.gz").scp_arg() == "h:/a.gz"
+    assert parse_endpoint("host:/").child("a.gz").scp_arg() == "host:/a.gz"  # "h:/" would be drive H:
     assert parse_endpoint("scp://h:2222/in").child("a.gz").scp_arg() == "scp://h:2222/in/a.gz"
     assert parse_endpoint("out").child("a.gz").path == str(Path("out") / "a.gz")
 
@@ -1564,7 +1564,7 @@ keepwatch kit push "$FILE" me@linux2:incoming/ --password-env RELAY_PASSWORD
 
 ## Endpoints
 
-- A local path (`C:\data\out\a.gz` and `C:/data/out/a.gz` are local: a drive letter is never a host). In `ctx.transfer`, relative paths start at the watch directory.
+- A local path (`C:\data\out\a.gz` and `C:/data/out/a.gz` are local: a drive letter is never a host, so write a one-letter host name as `user@h:/path` or `scp://h/path`). In `ctx.transfer`, relative paths start at the watch directory.
 - `[user@]host:path` (a colon before any slash): `path` is relative to the remote home unless it starts with `/`. `host` may be a Host alias from `~/.ssh/config`.
 - `scp://[user@]host[:port]/path` when you need a port inside the endpoint.
 
