@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import difflib
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -177,6 +177,19 @@ def ctx_topic() -> str:
     return "\n".join(lines).rstrip()
 
 
+def walk_commands(group: Any, parent: Any, prefix: str) -> Iterator[tuple[str, Any, Any]]:
+    """(full name, command, context) for every command under `group`, depth first (subcommands of groups too)."""
+    import click
+
+    for name in group.list_commands(parent):
+        command = group.get_command(parent, name)
+        context = click.Context(command, info_name=name, parent=parent)
+        full = f"{prefix} {name}"
+        yield full, command, context
+        if isinstance(command, click.Group):
+            yield from walk_commands(command, context, full)
+
+
 def cli_topic() -> str:
     import click
 
@@ -185,18 +198,9 @@ def cli_topic() -> str:
     root = click.Context(cli, info_name="keepwatch")
     lines = [narrative("cli"), "", "## keepwatch (global options)", ""]
     lines += _options(cli)
-    for name in cli.list_commands(root):
-        command = cli.get_command(root, name)
-        sub = click.Context(command, info_name=name, parent=root)
-        usage = " ".join(command.collect_usage_pieces(sub))
-        lines += [
-            f"## keepwatch {name}",
-            "",
-            f"`keepwatch {name} {usage}`",
-            "",
-            inspect.cleandoc(command.help or ""),
-            "",
-        ]
+    for name, command, context in walk_commands(cli, root, "keepwatch"):
+        usage = " ".join(command.collect_usage_pieces(context))
+        lines += [f"## {name}", "", f"`{name} {usage}`", "", inspect.cleandoc(command.help or ""), ""]
         lines += _options(command)
     return "\n".join(lines).rstrip()
 

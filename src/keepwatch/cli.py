@@ -23,7 +23,7 @@ from typing import NoReturn
 import rich_click as click
 from rich.markdown import Markdown
 
-from keepwatch import __version__, platform, systemd, winsched
+from keepwatch import __version__, platform, systemd, transfer, winsched
 from keepwatch.config import (
     ConfigError,
     Discovery,
@@ -37,6 +37,7 @@ from keepwatch.config import (
     load_watch_config,
 )
 from keepwatch.control import ControlError, disable_watch, enable_watch, rename_watch, require_known
+from keepwatch.ctx import CommandFailed
 from keepwatch.durations import DurationError, parse_duration
 from keepwatch.locks import LockBusy, hold_lock
 from keepwatch.logquery import LogFilter, follow_log, parse_when, select_records
@@ -61,6 +62,7 @@ COMMAND_GROUPS = {
         {"name": "Inspect", "commands": ["status", "logs"]},
         {"name": "Control", "commands": ["enable", "disable", "rename"]},
         {"name": "Setup", "commands": ["init", "install", "uninstall"]},
+        {"name": "Hook tools", "commands": ["kit"]},
         {"name": "Reference", "commands": ["docs"]},
     ]
 }
@@ -867,6 +869,135 @@ def stop(app: App, timeout: float) -> None:
         click.echo("keepwatch service stopped")
     else:
         _fail(f"the service did not stop within {timeout:g}s; see: keepwatch logs --since 5m")
+
+
+def _scp_options(function):
+    """The scp options every `keepwatch kit` transfer accepts."""
+    decorators = [
+        click.option("--protocol", type=click.Choice(transfer.PROTOCOLS), default="scp", show_default=True,
+                     help="scp: the classic protocol, which scp-only servers accept (adds -O on OpenSSH 9+). "
+                     "sftp: needs OpenSSH 9+, and is required for two remote endpoints."),
+        click.option("--password-env", metavar="VAR",
+                     help="Name of the environment variable holding the password (given to scp through SSH_ASKPASS; "
+                     "never pass the password itself). Default: key authentication only (BatchMode)."),
+        click.option("--identity", type=click.Path(dir_okay=False), help="Private key file for ssh -i (only this key is offered)."),
+        click.option("--known-hosts", type=click.Path(dir_okay=False),
+                     help="known_hosts file to check the host key against. Unknown host keys are always refused."),
+        click.option("--port", type=click.IntRange(1, 65535), help="ssh port for user@host:path endpoints (scp -P)."),
+        click.option("--ssh-option", "ssh_options", multiple=True, metavar="OPTION",
+                     help='An ssh option passed as -o OPTION, e.g. "ProxyJump=bastion" (repeatable).'),
+        click.option("--timeout", "timeout_text", metavar="DURATION", help='Give up after this long, e.g. "10m". Default: no limit.'),
+    ]
+    for decorator in reversed(decorators):
+        function = decorator(function)
+    return function
+
+
+def _scp(protocol, password_env, identity, known_hosts, port, ssh_options, timeout_text) -> transfer.ScpOptions:
+    timeout = None
+    if timeout_text is not None:
+        try:
+            timeout = parse_duration(timeout_text)
+        except DurationError as exc:
+            raise click.BadParameter(str(exc), param_hint="--timeout") from None
+    extra = tuple(item for option in ssh_options for item in ("-o", option))
+    try:
+        return transfer.ScpOptions(
+            protocol=protocol,
+            password_env=password_env,
+            identity=identity,
+            known_hosts=known_hosts,
+            port=port,
+            ssh_options=extra,
+            timeout=timeout,
+        )
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from None
+
+
+def _kit_run(action) -> None:
+    try:
+        result = action()
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from None
+    except (CommandFailed, transfer.TransferFailed) as exc:
+        _fail(str(exc))
+    if result is not None:
+        click.echo(str(result))
+
+
+@cli.group()
+def kit() -> None:
+    """Tools for command hooks: scp transfers and reachability checks (what Python hooks get as ctx.transfer).
+
+    Each subcommand prints its result on stdout and, on failure, the reason on stderr. Endpoints are local
+    paths, user@host:path or scp://user@host:port/path; host keys must already be known. Exit status: 0 on
+    success, 1 on failure, 2 for bad usage. See: keepwatch docs transfers.
+    """
+
+
+@kit.command(name="copy")
+@click.argument("source")
+@click.argument("destination")
+@_scp_options
+def kit_copy(source: str, destination: str, **scp) -> None:
+    """Copy one file from SOURCE to DESTINATION with scp (at least one of them remote). Prints nothing.
+
+    Exit status: 0, 1 if scp failed, 2 for bad usage.
+    """
+    options = _scp(**scp)
+    _kit_run(lambda: transfer.copy(source, destination, options=options))
+
+
+@kit.command(name="pull")
+@click.argument("remote")
+@click.argument("local_dir", type=click.Path(file_okay=False))
+@click.option("--size", type=click.IntRange(0), help="Fail unless the pulled file has exactly this many bytes.")
+@click.option("--sha256", metavar="HEX", help="Fail unless the pulled file has this sha256; also lets an identical existing file count as done.")
+@click.option("--on-conflict", type=click.Choice(transfer.CONFLICTS), default="skip-identical", show_default=True,
+              help="When LOCAL_DIR already has the name: skip-identical (no-op if --sha256 matches, else fail), "
+              "rename (NAME-1.ext), overwrite.")
+@_scp_options
+def kit_pull(remote: str, local_dir: str, size: int | None, sha256: str | None, on_conflict: str, **scp) -> None:
+    """Copy REMOTE into LOCAL_DIR through a hidden .NAME.part file, verify it, then rename it. Prints the final path.
+
+    Exit status: 0, 1 if the copy or a check failed (nothing is left behind), 2 for bad usage.
+    """
+    options = _scp(**scp)
+    _kit_run(lambda: transfer.pull(remote, local_dir, size=size, sha256=sha256, on_conflict=on_conflict, options=options))
+
+
+@kit.command(name="push")
+@click.argument("path", type=click.Path(dir_okay=False))
+@click.argument("remote_dir")
+@click.option("--marker", type=click.Choice(transfer.MARKERS), default="sha256", show_default=True,
+              help="After the file, upload NAME.sha256 (sha256sum format) as a completion marker, or none.")
+@_scp_options
+def kit_push(path: str, remote_dir: str, marker: str, **scp) -> None:
+    """Upload PATH into REMOTE_DIR (user@host:dir), then its .sha256 marker. Prints the remote path.
+
+    Exit status: 0, 1 if scp failed, 2 for bad usage.
+    """
+    options = _scp(**scp)
+    _kit_run(lambda: transfer.push(path, remote_dir, marker=marker, options=options))
+
+
+@kit.command(name="tcp-open")
+@click.argument("host")
+@click.option("--port", type=click.IntRange(1, 65535), default=22, show_default=True, help="TCP port to try.")
+@click.option("--timeout", "timeout_text", default="5s", show_default=True, metavar="DURATION", help="How long to wait for the connection.")
+def kit_tcp_open(host: str, port: int, timeout_text: str) -> None:
+    """Check whether HOST accepts TCP connections on --port. Prints open or closed.
+
+    Exit status: 0 if open, 1 if closed or unreachable, 2 for bad usage.
+    """
+    try:
+        timeout = parse_duration(timeout_text)
+    except DurationError as exc:
+        raise click.BadParameter(str(exc), param_hint="--timeout") from None
+    opened = transfer.tcp_open(host, port, timeout)
+    click.echo("open" if opened else "closed")
+    raise SystemExit(0 if opened else 1)
 
 
 def main() -> None:

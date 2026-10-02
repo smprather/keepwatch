@@ -96,15 +96,18 @@ def test_every_public_ctx_and_ledger_member_is_documented():
 
 def test_every_command_and_option_is_documented():
     from keepwatch.cli import cli
+    from keepwatch.reference import walk_commands
 
     text = render_topic("cli")
-    ctx = click.Context(cli, info_name="keepwatch")
-    for name in cli.list_commands(ctx):
-        command = cli.get_command(ctx, name)
+    root = click.Context(cli, info_name="keepwatch")
+    names = []
+    for name, command, _ in walk_commands(cli, root, "keepwatch"):
+        names.append(name)
         assert command.help and command.help.strip(), name
-        assert f"## keepwatch {name}" in text
+        assert f"## {name}" in text
         for param in command.params:
             if isinstance(param, click.Option):
                 assert param.help, f"{name} {param.opts}"
                 assert param.opts[-1] in text
+    assert "keepwatch kit pull" in names and "keepwatch run" in names
     assert "UNSET" not in text and "Sentinel" not in text
