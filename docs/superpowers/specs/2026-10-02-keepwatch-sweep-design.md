@@ -108,7 +108,7 @@ A watch there declares `[observe.arrivals] kind = "files"`, `path = "~/incoming"
 in a ledger. Deleting the file and its marker afterwards is the hook's choice. A new example, `relay-receive`,
 shows it.
 
-## 4. Push: one scp per file
+## 4. Push: one scp per file (revised in section 8: two runs)
 
 `transfer.push` uploads the file and its marker in **one scp run** (`scp FILE NAME.sha256 user@host:dir/`), so
 there is one connection and, for linux2, one password login per file. scp sends its sources in order, so the
@@ -146,3 +146,30 @@ this. With `marker = "none"` nothing changes.
 - End-to-end: linux1 → hub → linux2 through the service with `delete_remote = true`, and a receiving watch with
   `marker = "sha256"` sees the file once, verified; the source file is gone.
 - By hand before release: the real sshd lab container (tcsh login, Python 3.6) for the delete helper.
+
+## 8. Revisions after the code review (2026-10-02)
+
+- **Content check before deleting.** `to_delete` entries carry the sha256 the pull was verified with
+  (`"<path>|<size>|<mtime!r>|<sha256>"`; `-` when unknown). The helper re-hashes the file and keeps it
+  ("changed") on a mismatch, so a rewrite with the same size and preserved mtime (`cp -p`, `touch -r`) is never
+  deleted. (A replacement in the instant between the hash and the unlink cannot be excluded; the docs say so.)
+- **Results by position.** The helper's result lines carry `"index"` (position in `files`), so two queued
+  versions of one name cannot get each other's result.
+- **Backfill and bounded ledgers.** With `delete_remote`, every key in `pulled` that is neither queued nor in
+  the ledger `kept` counts as due, so files pulled before the option was switched on (or before a crash between
+  recording and queueing) are deleted too. After `deleted`, `gone` or `changed` the key leaves `pulled` (so the
+  skip list stays small) and goes to the ledger `skipped` (entries expire after 7 days), which `check` uses to
+  ignore stale events for files that are gone. After `refused` the key goes to `kept`: the file stays and is not
+  retried.
+- **Stale events never fail the poll.** A pull whose size or sha256 differs from the report (`TransferMismatch`)
+  means the file changed after it was reported: a WARNING, and the poll goes on; the new version is reported
+  under its own key. (Before, such an event failed every poll until the watch went offline.)
+- **Deletes and pull failures.** After a failed pull, deletes run only for files pulled in that action, and a
+  delete problem never replaces the pull's error.
+- **Push reverts to two scp runs.** scp carries on to its next source after a failed one, so one run could put
+  `NAME.sha256` beside a truncated `NAME`. The marker is sent only after the data succeeded; the extra login per
+  file is irrelevant for a few large files. `copy(..., extra_sources=...)` remains as a general tool.
+- **Marker waits.** A file waiting for its marker is re-checked every second (it stays a candidate); only a
+  mismatched one waits for a filesystem event or the 30s rescan.
+- **Retry timing.** A due delete is attempted at the watch's next poll; without new files that poll comes from
+  `interval`, so a retry happens after `delete_retry` or `interval`, whichever is later.
