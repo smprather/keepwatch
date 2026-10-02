@@ -7,9 +7,9 @@ library and keepwatch's stdlib-only modules.
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import itertools
-import math
 import os
 import re
 import shlex
@@ -60,6 +60,48 @@ def escape_remote_path(path: str) -> str:
     rest = path[len(prefix) :]
     return prefix + "".join(char if _SAFE.fullmatch(char) else "\\" + char for char in rest)
 
+
+def remote_path_arg(path: str, *, classic: bool, source: bool, windows: bool = platform.IS_WINDOWS) -> str:
+    """A remote path as scp needs it on the command line.
+
+    SFTP takes the plain path. The classic protocol hands it to the remote shell: on POSIX backslash escapes
+    work both ways; Windows' scp turns backslashes into slashes, so a pull uses `?` for each special character
+    (scp's own name check accepts glob matches; size and sha256 checks catch a wrong match) and a push quotes.
+    """
+    if not classic:
+        return path
+    if not windows:
+        return escape_remote_path(path)
+    prefix = "~/" if path.startswith("~/") else ""
+    rest = path[len(prefix) :]
+    if all(_SAFE.fullmatch(char) for char in rest):
+        return path
+    if source:
+        return prefix + "".join(char if _SAFE.fullmatch(char) else "?" for char in rest)
+    if "'" not in rest:
+        return f"{prefix}'{rest}'"
+    if not any(char in rest for char in '"$`\\'):
+        return f'{prefix}"{rest}"'
+    raise TransferFailed(
+        f"cannot name {path!r} for scp's classic protocol on Windows (it holds both kinds of quotes or $ ` \\); "
+        'rename the file or use protocol = "sftp"'
+    )
+
+
+def _local_arg(path: str) -> str:
+    head = re.split(r"[\\/]", path, maxsplit=1)[0]
+    if ":" in head and not _DRIVE.match(path):
+        return "./" + path  # scp would read "name:with:colons" as host "name"
+    return path
+
+
+def _operand(end: Endpoint, *, classic: bool, source: bool) -> str:
+    if not end.remote:
+        return _local_arg(end.path)
+    who = f"{end.user}@{end.host}" if end.user else str(end.host)
+    return f"{who}:{remote_path_arg(end.path, classic=classic, source=source)}"
+
+
 Report = Callable[[list[str], int | None, bool, float, str, str], None]
 
 
@@ -86,16 +128,14 @@ class Endpoint:
         return self.path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
 
     def scp_arg(self) -> str:
+        """The endpoint as people write it (in messages and results). scp_argv builds scp's own operands."""
         if not self.remote:
-            head = re.split(r"[\\/]", self.path, maxsplit=1)[0]
-            if ":" in head and not _DRIVE.match(self.path):
-                return "./" + self.path  # scp would read "name:with:colons" as host "name"
             return self.path
         who = f"{self.user}@{self.host}" if self.user else str(self.host)
         if self.uri:
             port = f":{self.port}" if self.port else ""
-            return f"scp://{who}{port}/{escape_remote_path(self.path)}"
-        return f"{who}:{escape_remote_path(self.path)}"
+            return f"scp://{who}{port}/{self.path}"
+        return f"{who}:{self.path}"
 
     def child(self, name: str) -> Endpoint:
         """This endpoint taken as a directory, with `name` inside it."""
@@ -232,14 +272,18 @@ def scp_argv(
         argv += ["-i", str(options.identity), "-o", "IdentitiesOnly=yes"]
     port = options.port
     if port is None:
-        port = next((end.port for end in (source, destination) if end.remote and not end.uri and end.port), None)
+        ports = {end.port for end in (source, destination) if end.remote and end.port}
+        if len(ports) > 1:
+            raise TransferFailed(f"the two hosts use different ports ({', '.join(map(str, sorted(ports)))}); scp takes one -P")
+        port = ports.pop() if ports else None
     if port is not None:
         argv += ["-P", str(port)]
     if options.protocol == "scp" and version is not None and version >= (9, 0):
         argv.append("-O")
     if both:
         argv.append("-3")
-    return [*argv, "--", source.scp_arg(), destination.scp_arg()]
+    classic = options.protocol == "scp"
+    return [*argv, "--", _operand(source, classic=classic, source=True), _operand(destination, classic=classic, source=False)]
 
 
 def _askpass_python() -> str:
@@ -278,11 +322,11 @@ def _run(argv: list[str], env: dict[str, str], timeout: float | None) -> tuple[i
             process = platform.start_process(
                 argv, cwd=None, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
-            popen, stop, close = process.popen, process.kill, process.close
+            popen, terminate, stop, close = process.popen, process.kill, process.kill, process.close
         else:
             # The caller's process group: a hook killed at its deadline takes scp (and its ssh) with it.
             popen = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stop, close = popen.kill, (lambda: None)
+            terminate, stop, close = popen.terminate, popen.kill, (lambda: None)
     except OSError as exc:
         raise TransferFailed(f"cannot run {argv[0]}: {exc.strerror or exc} (is OpenSSH's scp installed?)") from exc
     timed_out = False
@@ -291,8 +335,15 @@ def _run(argv: list[str], env: dict[str, str], timeout: float | None) -> tuple[i
             out, err = popen.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            stop()
-            out, err = popen.communicate()
+            terminate()  # scp stops its ssh child on SIGTERM; a SIGKILL would leave ssh holding our pipes
+            try:
+                out, err = popen.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                stop()
+                try:
+                    out, err = popen.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    out, err = b"", b""
     finally:
         close()
     return popen.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"), timed_out
@@ -345,7 +396,7 @@ def copy(
     if report is not None:
         report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
     if timed_out:
-        shown = format_duration(limit if limit is not None and not math.isinf(limit) else 0)
+        shown = format_duration(limit or 0)
         raise TransferFailed(f"scp timed out after {shown}: {src.scp_arg()} -> {dst.scp_arg()}")
     if returncode != 0:
         raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
@@ -359,14 +410,26 @@ def sha256_file(path: str | os.PathLike[str]) -> str:
     return digest.hexdigest()
 
 
-def _free_name(directory: Path, name: str) -> Path:
-    """name-1.ext, name-2.ext, …: the first one not taken (a.tar.gz -> a-1.tar.gz)."""
+def _free_name(directory: Path, name: str, same: Callable[[Path], bool]) -> Path:
+    """name-1.ext, name-2.ext, …: an existing one for which same() holds, else the first free one (a.tar.gz -> a-1.tar.gz)."""
     head, dot, tail = name.partition(".") if not name.startswith(".") else (name, "", "")
     for number in itertools.count(1):
         candidate = directory / (f"{head}-{number}.{tail}" if dot else f"{head}-{number}")
-        if not candidate.exists():
+        if not candidate.exists() or same(candidate):
             return candidate
     raise AssertionError("unreachable")
+
+
+def _identical(path: Path, size: int | None, sha256: str | None) -> bool:
+    """Whether path already holds the file with this size and sha256 (sizes first: no hashing when they differ)."""
+    if sha256 is None:
+        return False
+    try:
+        if size is not None and path.stat().st_size != size:
+            return False
+        return sha256_file(path) == sha256.lower()
+    except OSError:
+        return False
 
 
 def pull(
@@ -395,8 +458,9 @@ def pull(
     directory = Path(local_dir)
     directory.mkdir(parents=True, exist_ok=True)
     final = directory / name
+    same = functools.partial(_identical, size=size, sha256=sha256)
     if final.exists():
-        if sha256 is not None and sha256_file(final) == sha256.lower():
+        if same(final):
             return final  # an earlier pull of this exact file finished
         if on_conflict == "skip-identical":
             raise TransferFailed(
@@ -404,7 +468,9 @@ def pull(
                 "on_conflict='rename' or 'overwrite'"
             )
         if on_conflict == "rename":
-            final = _free_name(directory, name)
+            final = _free_name(directory, name, same)
+            if final.exists():
+                return final  # a numbered copy of this exact file is already there
     part = directory / f".{name}.part"
     part.unlink(missing_ok=True)
     try:

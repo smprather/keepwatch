@@ -186,6 +186,18 @@ def test_pull_a_name_with_a_space(tmp_path, server, ssh_config):
 def test_push_a_name_with_a_space(tmp_path, server, ssh_config):
     local = tmp_path / "c d.txt"
     local.write_bytes(b"up")
-    assert push(local, REMOTE, options=key_options(server, ssh_config)) == "u@127.0.0.1:c\\ d.txt"
+    assert push(local, REMOTE, options=key_options(server, ssh_config)) == "u@127.0.0.1:c d.txt"
     assert (server.root / "c d.txt").read_bytes() == b"up"
     assert (server.root / "c d.txt.sha256").exists()
+
+
+def test_a_retried_rename_reuses_the_identical_copy(tmp_path, server, ssh_config):
+    (server.root / "b.tar.gz").write_bytes(b"new")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "b.tar.gz").write_bytes(b"old")
+    options = key_options(server, ssh_config)
+    first = pull(REMOTE + "b.tar.gz", stage, size=3, sha256=sha(b"new"), on_conflict="rename", options=options)
+    again = pull(REMOTE + "b.tar.gz", stage, size=3, sha256=sha(b"new"), on_conflict="rename", options=options)
+    assert first == again == stage / "b-1.tar.gz"
+    assert sorted(path.name for path in stage.iterdir()) == ["b-1.tar.gz", "b.tar.gz"]

@@ -18,6 +18,7 @@ from keepwatch.transfer import (
     parse_endpoint,
     parse_openssh_version,
     pull,
+    remote_path_arg,
     scp_argv,
     write_askpass,
 )
@@ -181,20 +182,60 @@ def test_escape_remote_path():
     assert escape_remote_path("dir/~x") == "dir/\\~x"
 
 
-def test_remote_paths_are_escaped_in_scp_arguments():
-    assert parse_endpoint("me@h:/out/a b.gz").scp_arg() == "me@h:/out/a\\ b.gz"
+def test_scp_arg_is_the_plain_form():
+    assert parse_endpoint("me@h:/out/a b.gz").scp_arg() == "me@h:/out/a b.gz"
     assert parse_endpoint("/local/a b.gz").scp_arg() == "/local/a b.gz"
-    assert parse_endpoint("me@h:in/").child("a b.gz").scp_arg() == "me@h:in/a\\ b.gz"
+    assert parse_endpoint("me@h:in/").child("a b.gz").scp_arg() == "me@h:in/a b.gz"
+    assert parse_endpoint("scp://h:2222/in/a b.gz").scp_arg() == "scp://h:2222/in/a b.gz"
 
 
-def test_uri_paths_are_escaped():
-    assert parse_endpoint("scp://h:2222/in/a b.gz").scp_arg() == "scp://h:2222/in/a\\ b.gz"
+def test_remote_path_arg():
+    # SFTP: the plain name, on every OS.
+    assert remote_path_arg("/out/a b.gz", classic=False, source=True, windows=False) == "/out/a b.gz"
+    assert remote_path_arg("/out/a b.gz", classic=False, source=False, windows=True) == "/out/a b.gz"
+    # Classic protocol on POSIX: backslash escapes, both directions.
+    assert remote_path_arg("/out/a b.gz", classic=True, source=True, windows=False) == "/out/a\\ b.gz"
+    assert remote_path_arg("~/in/c d.txt", classic=True, source=False, windows=False) == "~/in/c\\ d.txt"
+    # Classic protocol on Windows: '?' for a pull, quotes for a push.
+    assert remote_path_arg("/out/a b.gz", classic=True, source=True, windows=True) == "/out/a?b.gz"
+    assert remote_path_arg("~/in/c d.txt", classic=True, source=False, windows=True) == "~/'in/c d.txt'"
+    assert remote_path_arg("in/it's.txt", classic=True, source=False, windows=True) == '"in/it\'s.txt"'
+    assert remote_path_arg("in/plain.txt", classic=True, source=False, windows=True) == "in/plain.txt"
+    with pytest.raises(TransferFailed, match="Windows"):
+        remote_path_arg("in/it's \"x\".txt", classic=True, source=False, windows=True)
+
+
+def test_uri_endpoints_become_dash_p():
+    argv = argv_for("scp://me@h:2222/in/a.gz", "a.gz")
+    assert argv[-2:] == ["me@h:in/a.gz", "a.gz"] and argv[argv.index("-P") + 1] == "2222"
+    with pytest.raises(TransferFailed, match="different ports"):
+        argv_for("scp://a:2222/x", "scp://b:2223/y", protocol="sftp")
+
+
+@pytest.mark.posix_only
+def test_a_timeout_stops_scp_and_its_ssh_child(tmp_path):
+    fake = tmp_path / "scp"
+    fake.write_text(
+        f"#!{sys.executable}\n"
+        "import signal, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])  # holds our stderr\n"
+        "signal.signal(signal.SIGTERM, lambda *args: (child.kill(), sys.exit(1)))  # what scp does for its ssh\n"
+        "time.sleep(60)\n"
+    )
+    fake.chmod(0o755)
+    started = time.monotonic()
+    with pytest.raises(TransferFailed, match="timed out"):
+        copy(tmp_path / "a.gz", "me@h:", options=ScpOptions(scp_command=[str(fake)], timeout=1))
+    assert time.monotonic() - started < 20
 
 
 def test_local_names_with_a_colon_get_dot_slash():
-    assert Endpoint(path=".run-12:00.txt.part").scp_arg() == "./.run-12:00.txt.part"
-    assert Endpoint(path="C:/x/a.gz").scp_arg() == "C:/x/a.gz"
-    assert Endpoint(path="/abs/a:b").scp_arg() == "/abs/a:b"
+    def last(local):
+        return scp_argv(parse_endpoint("me@h:a.gz"), Endpoint(path=local), ScpOptions(), (10, 5))[-1]
+
+    assert last(".run-12:00.txt.part") == "./.run-12:00.txt.part"
+    assert last("C:/x/a.gz") == "C:/x/a.gz"
+    assert last("/abs/a:b") == "/abs/a:b"
 
 
 def test_domain_users():
