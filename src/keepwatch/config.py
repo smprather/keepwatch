@@ -17,8 +17,9 @@ from typing import Any
 
 from keepwatch import platform
 from keepwatch.durations import DurationError, format_duration, parse_duration
-from keepwatch.hooks import HOOK_NAMES
+from keepwatch.hooks import HOOK_NAMES, WATCH_PY
 from keepwatch.paths import Paths
+from keepwatch.transfer import MARKERS, PROTOCOLS, parse_endpoint
 
 CONFIG_NAME = "config.toml"
 
@@ -112,6 +113,13 @@ WATCH_KEYS = (
         "Program and leading arguments that run string hooks, e.g. [\"pwsh\", \"-NoProfile\", \"-Command\"]. "
         "Default: /bin/sh -c on POSIX, Windows PowerShell on Windows.",
         True,
+    ),
+    Key(
+        "recipe",
+        "str",
+        None,
+        "Use a built-in recipe (`pull` or `push`) instead of hooks of your own; it is configured in [settings]. "
+        "See `keepwatch docs recipes`.",
     ),
 )
 
@@ -275,6 +283,141 @@ class ObserverConfig:
     skip_ledger: str | None = None
 
 
+RECIPES = ("pull", "push")
+RECIPE_AFTER = ("delete", "archive", "keep")
+_SSH_SETTINGS = (
+    Key("port", "int", None, "ssh port (default: ssh's own, normally 22)."),
+    Key("identity", "str", None, "Private key file (ssh -i; only this key is offered). Relative to the watch directory."),
+    Key("known_hosts", "str", None, "known_hosts file for host keys (default: ~/.ssh/known_hosts). Relative to the watch directory."),
+    Key("ssh_options", "str_list", (), 'Extra ssh/scp arguments, e.g. ["-o", "ProxyJump=bastion"].'),
+)
+RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
+    "pull": (
+        Key("remote", "str", None, "Required. The source host: `user@host` or a Host alias from ~/.ssh/config."),
+        Key(
+            "remote_dir",
+            "str",
+            None,
+            "Required. The directory to watch on the source host (not recursive; `~` and relative paths start at "
+            "the remote home).",
+        ),
+        Key(
+            "local_dir",
+            "str",
+            None,
+            "Required. Where pulled files go (the staging folder). Relative to the watch directory; `~` and "
+            "environment variables are expanded.",
+        ),
+        Key("pattern", "str", "*", "Pull only file names matching this glob."),
+        Key("ignore", "str_list", DEFAULT_IGNORE, "Never pull file names matching any of these globs."),
+        Key("settle", "duration", 10.0, "A remote file must be unchanged this long before it is pulled."),
+        Key("checksum", "bool", True, "Compute sha256 on the source host and verify every pull against it."),
+        Key("remote_python", "str", "auto", "The source host's Python 3.6+ (see `keepwatch docs observers`)."),
+        *_SSH_SETTINGS,
+        Key("ssh_command", "argv", None, 'The ssh program for the observer. Default: ["ssh"].'),
+    ),
+    "push": (
+        Key(
+            "local_dir",
+            "str",
+            None,
+            "Required. The folder whose files are pushed. Relative to the watch directory; `~` and environment "
+            "variables are expanded.",
+        ),
+        Key("dest", "str", None, "Required. The destination directory: `user@host:dir` or `scp://user@host:port/dir`."),
+        Key("pattern", "str", "*", "Push only file names matching this glob."),
+        Key("ignore", "str_list", DEFAULT_IGNORE, "Never push file names matching any of these globs."),
+        Key("settle", "duration", 10.0, "A file must be unchanged this long before it is pushed."),
+        Key("protocol", "str", "scp", "`scp` (classic; scp-only servers accept it) or `sftp`."),
+        Key("password_env", "str", None, "Name of the environment variable holding the destination password."),
+        *_SSH_SETTINGS,
+        Key("marker", "str", "sha256", "`sha256`: upload NAME.sha256 after each file as a completion marker; `none`."),
+        Key("after", "str", "delete", "After a push: `delete` the local file, `archive` it, or `keep` it (a ledger remembers it)."),
+        Key("archive_dir", "str", None, "With after = \"archive\": where pushed files go. Relative to the watch directory."),
+        Key("keep_for", "duration", 7 * 86400.0, "With after = \"archive\": delete archived files after this long."),
+        Key("reachable_host", "str", None, "Host to probe before pushing (default: the host in `dest`; set it when `dest` uses a Host alias)."),
+        Key("reachable_port", "int", None, "Port to probe (default: `port`, else 22)."),
+        Key("reachable_timeout", "duration", 5.0, "How long the probe waits. No answer means unknown: files wait, nothing fails."),
+    ),
+}
+_RECIPE_REQUIRED = {"pull": ("remote", "remote_dir", "local_dir"), "push": ("local_dir", "dest")}
+_RECIPE_PATHS = ("local_dir", "identity", "known_hosts", "archive_dir")
+_RECIPE_CHOICES = {"protocol": PROTOCOLS, "marker": MARKERS, "after": RECIPE_AFTER}
+
+
+def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any], watch_dir: Path) -> dict[str, Any]:
+    """[settings] of a recipe watch: validated, with every default filled in (JSON-safe)."""
+    keys = {key.name: key for key in RECIPE_SETTINGS[recipe]}
+    values: dict[str, Any] = {name: key.default for name, key in keys.items()}
+    for name, item in raw.items():
+        if name not in keys:
+            _unknown_key(collector, name, keys, table="settings")
+            continue
+        converted = _convert(collector, keys[name], item, table="settings")
+        if converted is _INVALID:
+            continue
+        choices = _RECIPE_CHOICES.get(name)
+        if choices is not None and converted not in choices:
+            collector.add(f"'{name}' must be one of {', '.join(choices)}, got {converted!r}", key=name, table="settings", topic="recipes")
+            continue
+        if name in ("port", "reachable_port") and not 1 <= converted <= 65535:
+            collector.add(f"'{name}' must be between 1 and 65535, got {converted}", key=name, table="settings", topic="recipes")
+            continue
+        values[name] = converted
+    for name in _RECIPE_REQUIRED[recipe]:
+        if values.get(name) in (None, ""):
+            collector.add(f"recipe = \"{recipe}\" needs '{name}' in [settings]", table="settings", topic="recipes")
+    if recipe == "push":
+        if values["dest"] and not parse_endpoint(values["dest"]).remote:
+            collector.add(
+                f"'dest' must be a remote directory (user@host:dir or scp://user@host/dir), got {values['dest']!r}",
+                key="dest",
+                table="settings",
+                topic="recipes",
+            )
+        if values["after"] == "archive" and not values["archive_dir"]:
+            collector.add("after = \"archive\" needs 'archive_dir' in [settings]", key="after", table="settings", topic="recipes")
+    for name in _RECIPE_PATHS:
+        if isinstance(values.get(name), str) and values[name]:
+            values[name] = str(_observed_path(values[name], watch_dir))
+    return {name: list(value) if isinstance(value, tuple) else value for name, value in values.items()}
+
+
+def _recipe_observers(recipe: str, settings: Mapping[str, Any]) -> dict[str, ObserverConfig]:
+    if recipe == "push":
+        return {
+            "local": ObserverConfig(
+                name="local",
+                kind="files",
+                path=Path(settings["local_dir"]),
+                pattern=settings["pattern"],
+                ignore=tuple(settings["ignore"]),
+                settle=settings["settle"],
+            )
+        }
+    ssh_options = list(settings["ssh_options"])
+    if settings["known_hosts"]:
+        ssh_options += ["-o", f'UserKnownHostsFile="{Path(settings["known_hosts"]).as_posix()}"']
+    return {
+        "remote": ObserverConfig(
+            name="remote",
+            kind="remote_files",
+            remote=settings["remote"],
+            dir=settings["remote_dir"],
+            pattern=settings["pattern"],
+            ignore=tuple(settings["ignore"]),
+            settle=settings["settle"],
+            checksum=settings["checksum"],
+            remote_python=settings["remote_python"],
+            port=settings["port"],
+            identity=Path(settings["identity"]) if settings["identity"] else None,
+            ssh_options=tuple(ssh_options),
+            ssh_command=tuple(settings["ssh_command"]) if settings["ssh_command"] else None,
+            skip_ledger="pulled",
+        )
+    }
+
+
 @dataclass(frozen=True)
 class WatchConfig:
     name: str
@@ -289,6 +432,7 @@ class WatchConfig:
     retry_after: float | None = None
     python_dependencies: tuple[str, ...] = ()
     shell: tuple[str, ...] | None = None
+    recipe: str | None = None
     hooks: Mapping[str, Command] = field(default_factory=dict)
     exit_codes: ExitCodes = ExitCodes()
     environment: Mapping[str, str] = field(default_factory=dict)
@@ -626,6 +770,21 @@ def load_watch_config(watch_dir: Path, defaults: Mapping[str, Any] | None = None
             observers = _observe_table(collector, value, watch_dir)
         else:
             _unknown_key(collector, name, [*by_name, *WATCH_TABLES])
+    recipe = values.get("recipe")
+    if recipe is not None:
+        if recipe not in RECIPES:
+            collector.add(f"'recipe' must be one of {', '.join(RECIPES)}, got {recipe!r}", key="recipe", topic="recipes")
+        else:
+            provides = f"a watch with recipe = \"{recipe}\" must not have"
+            if "hooks" in data:
+                collector.add(f"{provides} [hooks]: the recipe provides its hooks", key="hooks", topic="recipes")
+            if "observe" in data:
+                collector.add(f"{provides} [observe.*] tables: the recipe provides its observers", topic="recipes")
+            if (watch_dir / WATCH_PY).exists():
+                collector.add(f"{provides} watch.py: the recipe provides its hooks (remove or rename {WATCH_PY})", topic="recipes")
+            settings = _recipe_settings(collector, recipe, settings, watch_dir)
+            if not collector.problems:
+                observers = _recipe_observers(recipe, settings)
     if collector.problems:
         raise ConfigError(collector.problems)
     return WatchConfig(
