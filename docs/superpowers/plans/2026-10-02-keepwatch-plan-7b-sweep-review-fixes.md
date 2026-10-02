@@ -595,13 +595,14 @@ def test_a_marker_that_arrives_late_is_noticed_within_seconds(tmp_path, make_wat
     inbox.mkdir()
     (inbox / "a.tar.gz").write_bytes(b"payload")
     age(inbox / "a.tar.gz")
-    marker = inbox / "a.tar.gz.sha256"
-    marker.write_text(f"{hashlib.sha256(b'payload').hexdigest()}  a.tar.gz\n", encoding="utf-8")
-    # The marker is fresh: when the data settles the marker has not, and no later filesystem event comes.
-    observer, events, records = files_observer(make_watch, xdg, inbox, "marker = 'sha256'\n")
+    observer, events, records = files_observer(make_watch, xdg, inbox, "marker = 'sha256'\n", settle="3s")
     observer.start()
     try:
-        assert wait_for(lambda: events, timeout=8.0)
+        time.sleep(1.5)  # the data is now a candidate; its settle check comes at about 3s
+        marker = inbox / "a.tar.gz.sha256"
+        marker.write_text(f"{hashlib.sha256(b'payload').hexdigest()}  a.tar.gz\n", encoding="utf-8")
+        # Fresh: still unsettled when the data's check comes, and no filesystem event follows it.
+        assert wait_for(lambda: events, timeout=10.0)
     finally:
         stop(observer)
 ```
