@@ -1,10 +1,10 @@
 import time
 
 import pytest
-from keepwatch.observers import EventQueue, build_observer, parse_event
 
 from keepwatch import observers
 from keepwatch.config import load_watch_config
+from keepwatch.observers import EventQueue, build_observer, parse_event
 from portable import PY, literal
 
 EMITTER = """
