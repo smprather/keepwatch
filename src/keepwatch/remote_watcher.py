@@ -261,7 +261,7 @@ class Watcher(object):
 
 
 def delete_one(item, directory):
-    """Delete one pulled file if it is still exactly what was pulled (size, mtime and, when given, sha256)."""
+    """Delete one pulled file if it is still exactly what was pulled: size, mtime and sha256 (required)."""
     raw = str(item.get("path", "")).encode("utf-8", "surrogateescape")
     if os.path.realpath(os.path.dirname(raw)) != directory:
         return {"event": "refused", "reason": "not directly in " + decode(directory)}
@@ -276,12 +276,13 @@ def delete_one(item, directory):
     if info.st_size != item.get("size") or info.st_mtime != float(item.get("mtime", -1)):
         return {"event": "changed"}
     expected = item.get("sha256")
-    if expected:
-        try:
-            if sha256_of(raw) != expected:
-                return {"event": "changed", "reason": "its content differs from the pulled copy"}
-        except OSError as exc:
-            return {"event": "failed", "reason": exc.strerror or str(exc)}
+    if not expected:
+        return {"event": "refused", "reason": "no sha256 given: the content cannot be checked"}
+    try:
+        if sha256_of(raw) != expected:
+            return {"event": "changed", "reason": "its content differs from the pulled copy"}
+    except OSError as exc:
+        return {"event": "failed", "reason": exc.strerror or str(exc)}
     try:
         os.unlink(raw)
     except FileNotFoundError:

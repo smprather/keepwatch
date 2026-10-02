@@ -24,7 +24,8 @@ def on_true(ctx):
         try:
             info = Path(item["path"]).stat()
         except OSError:
-            continue  # moved or deleted since it was reported
+            ctx.log.warning("%s is gone since it was reported", Path(item["path"]).name)
+            continue
         if (info.st_size, info.st_mtime) != (item["size"], item["mtime"]):
             ctx.log.warning("%s changed since it was reported; left for its next report", Path(item["path"]).name)
             continue

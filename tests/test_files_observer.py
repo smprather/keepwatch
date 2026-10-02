@@ -274,7 +274,7 @@ def test_a_file_without_a_marker_costs_no_rescans(tmp_path, make_watch, xdg, mon
     observer, events, records = files_observer(make_watch, xdg, inbox, "marker = 'sha256'\n")
     observer.start()
     try:
-        time.sleep(2.5)  # settled (settle is 1s) with no marker
+        assert wait_for(lambda: observer._held, timeout=8.0)  # settled with no marker: held
         before = len(scans)
         time.sleep(3.0)
         assert len(scans) == before  # held until the file or its marker changes, not re-checked every second

@@ -618,7 +618,8 @@ class FilesObserver(Observer):
                 try:
                     extra = self._verified(path, marker)
                 except OSError:
-                    continue  # unreadable for now: a candidate again at the next scan
+                    candidates[path] = (version, now)  # unreadable for now (locked on Windows): again after settle
+                    continue
                 if extra is None:
                     self._held.add((path, version))
                     continue

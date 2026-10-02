@@ -131,7 +131,7 @@ def test_relay_receive_example_leaves_a_file_that_changed_since_its_report(xdg):
         "path": str(incoming / "a.tar.gz"),
         "name": "a.tar.gz",
         "size": len(b"payload"),
-        "mtime": 1.5,
+        "mtime": (incoming / "a.tar.gz").stat().st_mtime,  # the same mtime: only the size gives it away
         "sha256": digest,
         "marker": str(incoming / "a.tar.gz.sha256"),
     }

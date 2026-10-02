@@ -300,7 +300,9 @@ class WatcherTests(unittest.TestCase):
 
     def item(self, path):
         info = os.stat(path)
-        return {"path": os.path.abspath(path), "size": info.st_size, "mtime": info.st_mtime}
+        with open(path, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()
+        return {"path": os.path.abspath(path), "size": info.st_size, "mtime": info.st_mtime, "sha256": digest}
 
     def test_delete_removes_an_unchanged_file(self):
         path = self.write("a.gz")
@@ -370,6 +372,15 @@ class WatcherTests(unittest.TestCase):
         item = self.item(path)
         item["sha256"] = hashlib.sha256(b"one").hexdigest()
         self.assertEqual(self.delete([item])[item["path"]]["event"], "deleted")
+
+    def test_delete_refuses_without_a_sha256(self):
+        path = self.write("a.gz")
+        item = self.item(path)
+        del item["sha256"]
+        result = self.delete([item])[item["path"]]
+        self.assertEqual(result["event"], "refused")
+        self.assertIn("sha256", result["reason"])
+        self.assertTrue(os.path.exists(path))
 
     def test_delete_results_carry_their_index(self):
         first = self.write("a.gz")

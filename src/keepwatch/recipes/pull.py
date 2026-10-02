@@ -71,14 +71,15 @@ def delete_remote(ctx: Ctx, entries: list[str]) -> None:
     pending, pulled, kept = ctx.ledger(TO_DELETE), ctx.ledger(LEDGER), ctx.ledger(KEPT)
     skipped = ctx.ledger(SKIPPED, expire=SKIP_FOR)
     remote = settings["remote"]
-    for entry in [entry for entry in entries if entry.endswith(f"|{UNKNOWN_SHA}")]:
-        key, item = split_queue_key(entry)
-        pending.discard(entry)
-        kept.add(key)
-        name = item["path"].rsplit("/", 1)[-1]
-        ctx.log.warning("not deleting %s on %s: no verified sha256 was recorded for it (delete it by hand)", name, remote)
-    entries = [entry for entry in entries if not entry.endswith(f"|{UNKNOWN_SHA}")]
-    if not entries:
+    queued = [(entry, *split_queue_key(entry)) for entry in entries]
+    for entry, key, item in queued:
+        if "sha256" not in item:
+            pending.discard(entry)
+            kept.add(key)
+            name = item["path"].rsplit("/", 1)[-1]
+            ctx.log.warning("not deleting %s on %s: no verified sha256 was recorded for it (delete it by hand)", name, remote)
+    queued = [(entry, key, item) for entry, key, item in queued if "sha256" in item]
+    if not queued:
         return
     argv = ssh_argv(
         remote,
@@ -88,8 +89,7 @@ def delete_remote(ctx: Ctx, entries: list[str]) -> None:
         ssh_command=settings["ssh_command"],
         remote_python=settings["remote_python"],
     )
-    pairs = [split_queue_key(entry) for entry in entries]
-    options = {"mode": "delete", "dir": settings["remote_dir"], "files": [item for _, item in pairs]}
+    options = {"mode": "delete", "dir": settings["remote_dir"], "files": [item for _, _, item in queued]}
     try:
         completed = ctx.run(argv, input=watcher_source(options), check=False)
         stdout, stderr = completed.stdout, completed.stderr
@@ -107,7 +107,7 @@ def delete_remote(ctx: Ctx, entries: list[str]) -> None:
             continue
         if isinstance(message, dict) and isinstance(message.get("index"), int):
             results[message["index"]] = message
-    for index, (entry, (key, item)) in enumerate(zip(entries, pairs)):
+    for index, (entry, key, item) in enumerate(queued):
         name = item["path"].rsplit("/", 1)[-1]
         result = results.get(index)
         event = result["event"] if result else None
