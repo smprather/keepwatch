@@ -115,10 +115,15 @@ Behaviour:
 OpenSSH `scp`.
 
 - Endpoints: local paths, `user@host:path`, or `scp://user@host[:port]/path`. Two remote endpoints
-  use `scp -3` (data flows through this machine).
+  use `scp -3` (data flows through this machine) **in SFTP mode only**: in classic mode (`-3 -O`) scp
+  exits 0 when the second host fails (login refused, unknown host key, host down; spike on OpenSSH
+  10.5p1, 2026-10-02), so success could not be told from failure. keepwatch therefore refuses
+  `protocol = "scp"` with two remote endpoints, and refuses a password for them (keys only).
 - Options always set: `-o StrictHostKeyChecking=yes` (host keys must already be known: `known_hosts`
   or a `known_hosts` setting), `-o ConnectTimeout=15`, `-o ServerAliveInterval=15`,
-  `-o ServerAliveCountMax=3`; `-o BatchMode=yes` unless a password is used.
+  `-o ServerAliveCountMax=3`; `-o BatchMode=yes` unless a password is used, and then
+  `-o NumberOfPasswordPrompts=1` (a wrong password fails once instead of three times, which could
+  trip lockouts such as fail2ban).
 - `protocol = "scp"` (default) uses the classic scp protocol, which scp-only servers accept: `-O` is
   added when the local OpenSSH is 9.0 or newer (version from `ssh -V`, cached). `protocol = "sftp"`
   requires OpenSSH ≥ 9.0.
@@ -126,8 +131,8 @@ OpenSSH `scp`.
   writes a small askpass launcher into the run directory (`sh` script on POSIX, `.cmd` on Windows) that
   runs `python -m keepwatch.askpass` with the variable's name; the Python helper prints the value (no
   shell quoting of the secret), and scp gets `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE=force` (verified on
-  Windows OpenSSH 9.5 on 2026-10-01). With `-3`, classic scp puts the second host in batch mode, so a
-  password for the second host is rejected early with an explanation.
+  Windows OpenSSH 9.5 on 2026-10-01; on OpenSSH 10.5p1 on 2026-10-02 with a password containing spaces,
+  quotes and `$`, and for keyboard-interactive logins too).
 - Success is exit status 0, one file per transfer; failures raise `CommandFailed` with scp's stderr.
 - `pull(remote, local_dir, *, size=None, sha256=None, on_conflict="skip-identical")` copies to
   `local_dir/.name.part`, verifies size and sha256 when given, then renames to the final name. If the
@@ -148,7 +153,8 @@ not allowed.
 
 Settings: `remote`, `remote_dir`, `pattern` (`*`), `ignore`, `settle` (`10s`), `checksum` (true),
 `remote_python` (`auto`), `port`, `identity`, `password_env`, and a destination: `local_dir` (staging)
-**or** `dest` (a remote endpoint, which switches to direct `scp -3`).
+**or** `dest` (a remote endpoint, which switches to direct `scp -3`; it needs `protocol = "sftp"` and
+key authentication on both hosts, so it does not suit an scp-only destination such as linux2).
 
 - Observer: a `remote_files` observer named `remote`, built from the settings.
 - check: file events not in the ledger `pulled` (key `path|size|mtime`) → TRUE with them as payload;
@@ -175,7 +181,8 @@ Settings: `local_dir`, `pattern` (`*`), `dest` (remote endpoint), `password_env`
 `examples/relay-pull` and `examples/relay-push` (placeholders `linux1.example`, `linux2.example`) and a
 docs topic `relay`, covering the topology, key setup for linux1, the password variable for linux2
 (`setx RELAY_PASSWORD …` on Windows), the staging folder as the queue, the `.sha256` marker, and the
-`scp -3` alternative with its limits.
+`scp -3` alternative with its limits (SFTP on both hosts, keys only; classic `-3` cannot report a
+failed destination).
 
 ## 7. Decisions
 
@@ -197,8 +204,11 @@ docs topic `relay`, covering the topology, key setup for linux1, the password va
   tests under Python 3.6 (`python:3.6-slim` container) and the suite compiles it with Python 3.6.
 - `remote_files` observer: `ssh_command` points at a test helper that drops ssh options and the host and
   runs the rest locally, so the full observer path runs without an ssh server, on Linux and Windows.
-- Transfers: an `asyncssh` SFTP/scp server on localhost (test dependency) with password auth and a
-  pinned host key; the system `scp` is exercised for push, pull, askpass and wrong-password cases.
+- Transfers: an `asyncssh` scp server on localhost (test dependency) with password and key auth and a
+  pinned host key; the system `scp` is exercised for push, pull, askpass and wrong-password cases in
+  classic mode. asyncssh's SFTP server sends no exit status (scp then exits 1 after a complete copy),
+  so SFTP mode and `-3` are tested at the command-line level only; the hand test uses a real sshd in a
+  container.
 - Observers: command observers built from Python one-liners (events, garbage lines, exit and restart,
   heartbeat timeout); files observer on temporary directories.
 - Recipes and an end-to-end relay test combine the fake ssh, the asyncssh server and temporary
