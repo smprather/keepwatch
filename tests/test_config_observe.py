@@ -65,7 +65,7 @@ def test_files_observer_keys(make_watch):
 
 def test_missing_kind(make_watch):
     [problem] = problems(make_watch, "[observe.x]\npath = 'in'\n")
-    assert "[observe.x] needs kind = one of command, files; got missing" in problem
+    assert "[observe.x] needs kind = one of command, files, remote_files; got missing" in problem
     assert "config.toml:1:" in problem
     assert "keepwatch docs observers" in problem
 
@@ -77,7 +77,7 @@ def test_unknown_kind(make_watch):
 
 def test_key_of_the_other_kind(make_watch):
     [problem] = problems(make_watch, "[observe.x]\nkind = 'command'\ncommand = ['a']\npattern = '*.gz'\n")
-    assert "'pattern' only applies to kind = \"files\"; this observer is kind = \"command\"" in problem
+    assert "'pattern' only applies to kind = \"files\" or \"remote_files\"; this observer is kind = \"command\"" in problem
     assert "config.toml:4:" in problem
 
 
@@ -115,3 +115,60 @@ def test_observe_must_be_a_table(make_watch):
 def test_each_observer_must_be_a_table(make_watch):
     [problem] = problems(make_watch, "[observe]\nx = 3\n")
     assert "'observe.x' must be a table ([observe.x])" in problem
+
+
+REMOTE = "[observe.r]\nkind = 'remote_files'\nremote = 'me@linux1'\ndir = '/data/out'\n"
+
+
+def test_remote_files_observer(make_watch):
+    config = load(
+        make_watch,
+        REMOTE + "pattern = '*.tar.gz'\nport = 2222\nidentity = '~/.ssh/id_relay'\n"
+        "ssh_options = ['-o', 'ProxyJump=bastion']\n",
+    )
+    observer = config.observers["r"]
+    assert (observer.kind, observer.remote, observer.dir, observer.pattern, observer.port) == (
+        "remote_files",
+        "me@linux1",
+        "/data/out",
+        "*.tar.gz",
+        2222,
+    )
+    assert observer.identity == Path.home() / ".ssh" / "id_relay"
+    assert observer.ssh_options == ("-o", "ProxyJump=bastion")
+    assert (observer.interval, observer.checksum, observer.heartbeat) == (2.0, True, 30.0)
+    assert (observer.remote_python, observer.ssh_command, observer.heartbeat_timeout) == ("auto", None, None)
+    assert (observer.settle, observer.ignore) == (10.0, DEFAULT_IGNORE)
+
+
+def test_remote_dir_is_not_expanded_locally(make_watch):
+    config = load(make_watch, "[observe.r]\nkind = 'remote_files'\nremote = 'h'\ndir = '~/out'\n")
+    assert config.observers["r"].dir == "~/out"
+
+
+def test_remote_files_needs_remote_and_dir(make_watch):
+    found = problems(make_watch, "[observe.r]\nkind = 'remote_files'\n")
+    assert len(found) == 2
+    assert any("needs 'remote'" in problem for problem in found)
+    assert any("needs 'dir'" in problem for problem in found)
+
+
+def test_remote_files_rejects_local_keys(make_watch):
+    [problem] = problems(make_watch, REMOTE + "path = 'x'\n")
+    assert "'path' only applies to kind = \"files\"; this observer is kind = \"remote_files\"" in problem
+
+
+def test_remote_files_port_range(make_watch):
+    [problem] = problems(make_watch, REMOTE + "port = 70000\n")
+    assert "'port' must be between 1 and 65535, got 70000" in problem
+
+
+def test_remote_files_empty_values(make_watch):
+    found = problems(make_watch, "[observe.r]\nkind = 'remote_files'\nremote = ''\ndir = ''\nremote_python = ''\n")
+    assert len(found) == 3 and all("must not be empty" in problem for problem in found)
+
+
+def test_remote_files_ssh_command(make_watch):
+    config = load(make_watch, REMOTE + f"ssh_command = [{literal(PY)}, 'fake_ssh.py']\nheartbeat_timeout = '5m'\n")
+    observer = config.observers["r"]
+    assert observer.ssh_command == (PY, "fake_ssh.py") and observer.heartbeat_timeout == 300.0

@@ -124,7 +124,7 @@ WATCH_TABLES = {
     "see `keepwatch docs observers`.",
 }
 
-OBSERVER_KINDS = ("command", "files")
+OBSERVER_KINDS = ("command", "files", "remote_files")
 DEFAULT_IGNORE = (".*", "*.tmp", "*.part", "*~")
 
 OBSERVER_KEYS = (
@@ -133,7 +133,8 @@ OBSERVER_KEYS = (
         "str",
         None,
         "Required. `command`: a long-running program; each line it prints is an event. "
-        "`files`: a local directory; each settled file is an event.",
+        "`files`: a local directory; each settled file is an event. "
+        "`remote_files`: a directory on another host, watched over one ssh connection.",
     ),
     Key("wake", "bool", True, "Poll the watch as soon as an event arrives (unless it is backing off or offline)."),
     Key(
@@ -148,7 +149,8 @@ OBSERVER_KEYS = (
         "heartbeat_timeout",
         "interval",
         None,
-        "kind = command: restart the program when it prints no line (heartbeats included) for this long.",
+        "kind = command or remote_files: restart when no line (heartbeats included) arrives for this long. "
+        "Default: none for command, 3 × `heartbeat` for remote_files.",
     ),
     Key(
         "path",
@@ -157,22 +159,81 @@ OBSERVER_KEYS = (
         "kind = files, required: the directory to observe. Relative to the watch directory; `~` and environment "
         "variables are expanded.",
     ),
-    Key("pattern", "str", "*", "kind = files: report only file names matching this glob."),
-    Key("ignore", "str_list", DEFAULT_IGNORE, "kind = files: never report file names matching any of these globs."),
+    Key("pattern", "str", "*", "kind = files or remote_files: report only file names matching this glob."),
+    Key(
+        "ignore",
+        "str_list",
+        DEFAULT_IGNORE,
+        "kind = files or remote_files: never report file names matching any of these globs.",
+    ),
     Key("recursive", "bool", False, "kind = files: also observe subdirectories."),
     Key(
         "settle",
         "duration",
         10.0,
-        "kind = files: report a file once its size and modification time have not changed for this long and it "
-        "was last modified at least this long ago.",
+        "kind = files or remote_files: report a file once its size and modification time have not changed for "
+        "this long and it was last modified at least this long ago.",
+    ),
+    Key("remote", "str", None, "kind = remote_files, required: `user@host`, or a Host alias from ~/.ssh/config."),
+    Key(
+        "dir",
+        "str",
+        None,
+        "kind = remote_files, required: the remote directory (not recursive). `~` and relative paths are "
+        "relative to the remote home directory.",
+    ),
+    Key("interval", "interval", 2.0, "kind = remote_files: rescan this often (at once on inotify, where the host has it)."),
+    Key("checksum", "bool", True, "kind = remote_files: compute each file's sha256 on the remote host (event key `sha256`)."),
+    Key("heartbeat", "interval", 30.0, "kind = remote_files: the remote watcher prints a heartbeat after this long without output."),
+    Key(
+        "remote_python",
+        "str",
+        "auto",
+        "kind = remote_files: the remote Python 3.6+ that runs the watcher. `auto`: /usr/bin/python3 if it exists, "
+        "else python3 from the remote PATH.",
+    ),
+    Key("port", "int", None, "kind = remote_files: the ssh port (default: ssh's own, normally 22)."),
+    Key(
+        "identity",
+        "str",
+        None,
+        "kind = remote_files: a private key file for ssh -i. Relative to the watch directory; `~` is expanded.",
+    ),
+    Key(
+        "ssh_options",
+        "str_list",
+        (),
+        'kind = remote_files: extra ssh arguments, placed before keepwatch\'s own, e.g. ["-o", "ProxyJump=bastion"].',
+    ),
+    Key(
+        "ssh_command",
+        "argv",
+        None,
+        'kind = remote_files: the ssh program and leading arguments. Default: ["ssh"].',
     ),
 )
 _OBSERVER_KIND_KEYS = {
     "command": ("command", "stdin", "heartbeat_timeout"),
     "files": ("path", "pattern", "ignore", "recursive", "settle"),
+    "remote_files": (
+        "remote",
+        "dir",
+        "pattern",
+        "ignore",
+        "settle",
+        "interval",
+        "checksum",
+        "heartbeat",
+        "heartbeat_timeout",
+        "remote_python",
+        "port",
+        "identity",
+        "ssh_options",
+        "ssh_command",
+    ),
 }
-_OBSERVER_REQUIRED = {"command": "command", "files": "path"}
+_OBSERVER_REQUIRED = {"command": ("command",), "files": ("path",), "remote_files": ("remote", "dir")}
+_OBSERVER_NON_EMPTY = ("path", "remote", "dir", "remote_python")
 _OBSERVER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 
@@ -191,6 +252,16 @@ class ObserverConfig:
     ignore: tuple[str, ...] = DEFAULT_IGNORE
     recursive: bool = False
     settle: float = 10.0
+    remote: str | None = None
+    dir: str | None = None
+    interval: float = 2.0
+    checksum: bool = True
+    heartbeat: float = 30.0
+    remote_python: str = "auto"
+    port: int | None = None
+    identity: Path | None = None
+    ssh_options: tuple[str, ...] = ()
+    ssh_command: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -428,9 +499,9 @@ def _observer(collector: _Collector, name: str, raw: dict[str, Any], watch_dir: 
             _unknown_key(collector, key_name, allowed, table=table)
             continue
         if key_name not in allowed:
-            other = next(owner for owner, names in _OBSERVER_KIND_KEYS.items() if key_name in names)
+            owners = " or ".join(f'"{owner}"' for owner, names in _OBSERVER_KIND_KEYS.items() if key_name in names)
             collector.add(
-                f"'{key_name}' only applies to kind = \"{other}\"; this observer is kind = \"{kind}\"",
+                f"'{key_name}' only applies to kind = {owners}; this observer is kind = \"{kind}\"",
                 key=key_name,
                 table=table,
                 topic="observers",
@@ -444,17 +515,23 @@ def _observer(collector: _Collector, name: str, raw: dict[str, Any], watch_dir: 
         converted = _convert(collector, by_name[key_name], item, table=table)
         if converted is _INVALID:
             continue
-        if key_name == "path" and converted == "":
-            collector.add("'path' must not be empty", key="path", table=table, topic="observers")
+        if key_name in _OBSERVER_NON_EMPTY and converted == "":
+            collector.add(f"'{key_name}' must not be empty", key=key_name, table=table, topic="observers")
+            continue
+        if key_name == "port" and not 1 <= converted <= 65535:
+            collector.add(
+                f"'port' must be between 1 and 65535, got {converted}", key="port", table=table, topic="observers"
+            )
             continue
         values[key_name] = converted
-    required = _OBSERVER_REQUIRED[kind]
-    if required not in raw:
-        collector.add(f"[{table}] (kind = \"{kind}\") needs '{required}'", table=table, topic="observers")
+    for required in _OBSERVER_REQUIRED[kind]:
+        if required not in raw:
+            collector.add(f"[{table}] (kind = \"{kind}\") needs '{required}'", table=table, topic="observers")
     if len(collector.problems) > before:
         return None
-    if "path" in values:
-        values["path"] = _observed_path(values["path"], watch_dir)
+    for key_name in ("path", "identity"):
+        if key_name in values:
+            values[key_name] = _observed_path(values[key_name], watch_dir)
     return ObserverConfig(name=name, kind=kind, **values)
 
 
