@@ -50,7 +50,7 @@ def test_endpoint_name_and_child():
     assert parse_endpoint("me@h:/data/a.tar.gz").name == "a.tar.gz"
     assert parse_endpoint("h:in/").child("a.gz").scp_arg() == "h:in/a.gz"
     assert parse_endpoint("h:").child("a.gz").scp_arg() == "h:a.gz"
-    assert parse_endpoint("h:/").child("a.gz").scp_arg() == "h:/a.gz"
+    assert parse_endpoint("host:/").child("a.gz").scp_arg() == "host:/a.gz"  # "h:/" would be drive H:
     assert parse_endpoint("scp://h:2222/in").child("a.gz").scp_arg() == "scp://h:2222/in/a.gz"
     assert parse_endpoint("out").child("a.gz").path == str(Path("out") / "a.gz")
 
@@ -159,3 +159,8 @@ def test_askpass_launcher_runs_the_helper(tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.decode("utf-8").rstrip("\r\n") == "pa ss'\"$"
     assert "pa ss" not in launcher.read_text(encoding="utf-8")
+
+
+def test_a_one_letter_host_with_a_slash_is_a_drive():
+    assert parse_endpoint("h:/a.gz") == Endpoint(path="h:/a.gz")
+    assert parse_endpoint("me@h:/a.gz").remote and parse_endpoint("scp://h/a.gz").remote
