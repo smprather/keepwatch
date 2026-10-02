@@ -1,18 +1,23 @@
 import os
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
 
-from keepwatch import askpass
+from keepwatch import askpass, transfer
 from keepwatch.transfer import (
     SCP_DEFAULTS,
     Endpoint,
     ScpOptions,
     TransferFailed,
+    copy,
     escape_remote_path,
+    known_hosts_option,
     parse_endpoint,
     parse_openssh_version,
+    pull,
     scp_argv,
     write_askpass,
 )
@@ -180,3 +185,78 @@ def test_remote_paths_are_escaped_in_scp_arguments():
     assert parse_endpoint("me@h:/out/a b.gz").scp_arg() == "me@h:/out/a\\ b.gz"
     assert parse_endpoint("/local/a b.gz").scp_arg() == "/local/a b.gz"
     assert parse_endpoint("me@h:in/").child("a b.gz").scp_arg() == "me@h:in/a\\ b.gz"
+
+
+def test_uri_paths_are_escaped():
+    assert parse_endpoint("scp://h:2222/in/a b.gz").scp_arg() == "scp://h:2222/in/a\\ b.gz"
+
+
+def test_local_names_with_a_colon_get_dot_slash():
+    assert Endpoint(path=".run-12:00.txt.part").scp_arg() == "./.run-12:00.txt.part"
+    assert Endpoint(path="C:/x/a.gz").scp_arg() == "C:/x/a.gz"
+    assert Endpoint(path="/abs/a:b").scp_arg() == "/abs/a:b"
+
+
+def test_domain_users():
+    assert parse_endpoint("CORP\\me@winhost:C:/data/a.gz") == Endpoint(path="C:/data/a.gz", host="winhost", user="CORP\\me")
+    assert parse_endpoint("a\\b:c") == Endpoint(path="a\\b:c")
+
+
+def test_an_endpoint_port_becomes_dash_p():
+    argv = scp_argv(Endpoint(path="in/a.gz", host="h", port=2222), parse_endpoint("a.gz"), ScpOptions(), (10, 5))
+    assert argv[argv.index("-P") + 1] == "2222"
+
+
+def test_known_hosts_option():
+    assert known_hosts_option("C:/my keys/kh") == ["-o", 'UserKnownHostsFile="C:/my keys/kh"']
+
+
+def test_ssh_options_must_be_a_list_of_arguments():
+    with pytest.raises(ValueError, match="not a string"):
+        ScpOptions(ssh_options="-oProxyJump=b")
+    with pytest.raises(ValueError, match="must start with an option"):
+        ScpOptions(ssh_options=["ProxyJump=b"])
+
+
+def test_unknown_versions_are_not_cached(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if len(calls) == 1:
+            raise OSError("busy")
+        return subprocess.CompletedProcess(argv, 0, "", "OpenSSH_10.5p1, OpenSSL 3")
+
+    monkeypatch.setattr(transfer.subprocess, "run", fake_run)
+    assert transfer.openssh_version("fake-ssh-for-test") is None
+    assert transfer.openssh_version("fake-ssh-for-test") == (10, 5)
+    assert transfer.openssh_version("fake-ssh-for-test") == (10, 5)
+    assert len(calls) == 2
+
+
+def test_pull_rejects_a_malformed_sha256(tmp_path):
+    with pytest.raises(ValueError, match="64 hex"):
+        pull("me@h:a.gz", tmp_path, sha256="abc123")
+
+
+def test_a_past_deadline_stops_a_transfer_before_scp(tmp_path):
+    reports = []
+    with pytest.raises(TransferFailed, match="no time left"):
+        copy(tmp_path / "a.gz", "me@h:", options=ScpOptions(deadline=time.time() - 1), report=lambda *a: reports.append(a))
+    assert reports == []
+
+
+@pytest.mark.posix_only
+def test_scp_runs_in_the_callers_process_group(tmp_path):
+    probe = tmp_path / "scp"
+    probe.write_text(f"#!{sys.executable}\nimport os, sys\nsys.stderr.write(str(os.getpgid(0)))\nsys.exit(1)\n")
+    probe.chmod(0o755)
+    with pytest.raises(transfer.CommandFailed) as info:
+        copy(tmp_path / "a.gz", "me@h:", options=ScpOptions(scp_command=[str(probe)]))
+    assert info.value.stderr.strip() == str(os.getpgid(0))
+
+
+@pytest.mark.windows_only
+def test_pull_refuses_names_windows_cannot_store(tmp_path):
+    with pytest.raises(TransferFailed, match="Windows"):
+        pull("me@h:/x/a:b.gz", tmp_path)

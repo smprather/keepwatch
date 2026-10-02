@@ -6,9 +6,10 @@ library and keepwatch's stdlib-only modules.
 
 from __future__ import annotations
 
-import functools
+import contextlib
 import hashlib
 import itertools
+import math
 import os
 import re
 import shlex
@@ -86,11 +87,14 @@ class Endpoint:
 
     def scp_arg(self) -> str:
         if not self.remote:
+            head = re.split(r"[\\/]", self.path, maxsplit=1)[0]
+            if ":" in head and not _DRIVE.match(self.path):
+                return "./" + self.path  # scp would read "name:with:colons" as host "name"
             return self.path
         who = f"{self.user}@{self.host}" if self.user else str(self.host)
         if self.uri:
             port = f":{self.port}" if self.port else ""
-            return f"scp://{who}{port}/{self.path}"
+            return f"scp://{who}{port}/{escape_remote_path(self.path)}"
         return f"{who}:{escape_remote_path(self.path)}"
 
     def child(self, name: str) -> Endpoint:
@@ -115,8 +119,8 @@ def parse_endpoint(text: str) -> Endpoint:
     if _DRIVE.match(text):
         return Endpoint(path=text)  # C:\data or C:/data: a Windows drive, not host "C"
     before, colon, after = text.partition(":")
-    if colon and before and "/" not in before and "\\" not in before:
-        user, _, host = before.rpartition("@")
+    user, _, host = before.rpartition("@")
+    if colon and host and "/" not in before and "\\" not in host:  # DOMAIN\user@host:path is remote
         return Endpoint(path=after, host=host, user=user or None)
     return Endpoint(path=text)
 
@@ -126,9 +130,13 @@ def parse_openssh_version(text: str) -> tuple[int, int] | None:
     return (int(match.group(1)), int(match.group(2))) if match else None
 
 
-@functools.lru_cache(maxsize=8)
+_VERSIONS: dict[str, tuple[int, int]] = {}
+
+
 def openssh_version(ssh: str = "ssh") -> tuple[int, int] | None:
-    """The local OpenSSH version from `ssh -V` (cached per program), or None if it cannot be told."""
+    """The local OpenSSH version from `ssh -V` (cached per program once known), or None if it cannot be told."""
+    if ssh in _VERSIONS:
+        return _VERSIONS[ssh]
     try:
         completed = subprocess.run(
             [ssh, "-V"],
@@ -140,8 +148,11 @@ def openssh_version(ssh: str = "ssh") -> tuple[int, int] | None:
             creationflags=platform.NO_WINDOW,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None
-    return parse_openssh_version(completed.stderr + completed.stdout)
+        return None  # not cached: a busy or briefly missing ssh is asked again next time
+    version = parse_openssh_version(completed.stderr + completed.stdout)
+    if version is not None:
+        _VERSIONS[ssh] = version
+    return version
 
 
 def _ssh_beside(scp: str) -> str:
@@ -163,6 +174,7 @@ class ScpOptions:
     port: int | None = None
     ssh_options: Sequence[str] = ()
     timeout: float | None = None
+    deadline: float | None = None
     scp_command: Sequence[str] = ("scp",)
 
     def __post_init__(self) -> None:
@@ -174,12 +186,23 @@ class ScpOptions:
             raise ValueError(f"port must be between 1 and 65535, got {self.port}")
         if self.timeout is not None and self.timeout <= 0:
             raise ValueError(f"timeout must be positive, got {self.timeout}")
+        if isinstance(self.ssh_options, str):
+            raise ValueError("ssh_options must be a list of scp arguments, e.g. ['-o', 'ProxyJump=bastion'], not a string")
+        if self.ssh_options and not str(self.ssh_options[0]).startswith("-"):
+            raise ValueError(
+                f"ssh_options are scp arguments and must start with an option, e.g. ['-o', {self.ssh_options[0]!r}]"
+            )
         object.__setattr__(self, "ssh_options", tuple(self.ssh_options))
         object.__setattr__(self, "scp_command", tuple(self.scp_command))
 
 
 def _shown(version: tuple[int, int] | None) -> str:
     return "of unknown version" if version is None else f"OpenSSH {version[0]}.{version[1]}"
+
+
+def known_hosts_option(path: str | os.PathLike[str]) -> list[str]:
+    """The ssh option that checks host keys against `path` (quoted: ssh splits option values at spaces)."""
+    return ["-o", f'UserKnownHostsFile="{Path(path).as_posix()}"']
 
 
 def scp_argv(
@@ -204,11 +227,14 @@ def scp_argv(
     argv = [*options.scp_command, *options.ssh_options, *SCP_DEFAULTS]
     argv += ["-o", "NumberOfPasswordPrompts=1"] if options.password_env else ["-o", "BatchMode=yes"]
     if options.known_hosts is not None:
-        argv += ["-o", f'UserKnownHostsFile="{Path(options.known_hosts).as_posix()}"']
+        argv += known_hosts_option(options.known_hosts)
     if options.identity is not None:
         argv += ["-i", str(options.identity), "-o", "IdentitiesOnly=yes"]
-    if options.port is not None:
-        argv += ["-P", str(options.port)]
+    port = options.port
+    if port is None:
+        port = next((end.port for end in (source, destination) if end.remote and not end.uri and end.port), None)
+    if port is not None:
+        argv += ["-P", str(port)]
     if options.protocol == "scp" and version is not None and version >= (9, 0):
         argv.append("-O")
     if both:
@@ -230,7 +256,13 @@ def write_askpass(directory: Path, variable: str) -> Path:
         raise ValueError(f"not an environment variable name: {variable!r}")
     if platform.IS_WINDOWS:
         path = directory / "askpass.cmd"
-        path.write_text(f'@echo off\r\n"{_askpass_python()}" -m keepwatch.askpass {variable} %*\r\n', encoding="utf-8")
+        python = _askpass_python().replace("%", "%%")
+        text = f'@echo off\r\n"{python}" -m keepwatch.askpass {variable} %*\r\n'
+        try:
+            data = text.encode("oem")  # cmd.exe reads batch files in the OEM code page (C:\Users\José\...)
+        except (LookupError, UnicodeEncodeError):
+            data = text.encode("utf-8")
+        path.write_bytes(data)
         return path
     path = directory / "askpass.sh"
     path.write_text(
@@ -242,22 +274,28 @@ def write_askpass(directory: Path, variable: str) -> Path:
 
 def _run(argv: list[str], env: dict[str, str], timeout: float | None) -> tuple[int | None, str, str, bool]:
     try:
-        process = platform.start_process(
-            argv, cwd=None, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
+        if platform.IS_WINDOWS:
+            process = platform.start_process(
+                argv, cwd=None, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            popen, stop, close = process.popen, process.kill, process.close
+        else:
+            # The caller's process group: a hook killed at its deadline takes scp (and its ssh) with it.
+            popen = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stop, close = popen.kill, (lambda: None)
     except OSError as exc:
         raise TransferFailed(f"cannot run {argv[0]}: {exc.strerror or exc} (is OpenSSH's scp installed?)") from exc
     timed_out = False
     try:
         try:
-            out, err = process.popen.communicate(timeout=timeout)
+            out, err = popen.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            process.kill()
-            out, err = process.popen.communicate()
+            stop()
+            out, err = popen.communicate()
     finally:
-        process.close()
-    return process.popen.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"), timed_out
+        close()
+    return popen.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"), timed_out
 
 
 def _endpoint(value: str | os.PathLike[str] | Endpoint) -> Endpoint:
@@ -266,6 +304,12 @@ def _endpoint(value: str | os.PathLike[str] | Endpoint) -> Endpoint:
     if isinstance(value, os.PathLike):
         return Endpoint(path=os.fspath(value))
     return parse_endpoint(value)
+
+
+def _askpass_dir() -> str | None:
+    """Where the askpass launcher goes: the hook's run dir (often not noexec, unlike /tmp), else the temp dir."""
+    run_dir = os.environ.get("KEEPWATCH_RUN_DIR")
+    return run_dir if run_dir and os.path.isdir(run_dir) else None
 
 
 def copy(
@@ -278,23 +322,31 @@ def copy(
     """Copy one file with scp. Raises CommandFailed when scp fails, TransferFailed when it cannot be attempted."""
     src, dst = _endpoint(source), _endpoint(destination)
     argv = scp_argv(src, dst, options, openssh_version(_ssh_beside(options.scp_command[0])))
+    limit = options.timeout
+    if options.deadline is not None:
+        left = options.deadline - time.time()
+        if left <= 0:
+            raise TransferFailed(f"no time left for scp {src.scp_arg()} -> {dst.scp_arg()} (the hook's deadline has passed)")
+        limit = left if limit is None else min(limit, left)
     env = dict(os.environ)
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="keepwatch-scp-") as work:
+    with contextlib.ExitStack() as stack:
         if options.password_env:
             if options.password_env not in os.environ:
                 raise TransferFailed(
                     f"password_env names {options.password_env}, which is not set in keepwatch's environment "
                     "(on Windows: setx; for the service, restart it after setting the variable)"
                 )
+            work = stack.enter_context(tempfile.TemporaryDirectory(prefix="keepwatch-scp-", dir=_askpass_dir()))
             env["SSH_ASKPASS"] = str(write_askpass(Path(work), options.password_env))
             env["SSH_ASKPASS_REQUIRE"] = "force"
-        returncode, stdout, stderr, timed_out = _run(argv, env, options.timeout)
+            env.setdefault("DISPLAY", ":0")  # OpenSSH before 8.4 uses SSH_ASKPASS only when DISPLAY is set
+        returncode, stdout, stderr, timed_out = _run(argv, env, limit)
     if report is not None:
         report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
     if timed_out:
-        limit = format_duration(options.timeout or 0)
-        raise TransferFailed(f"scp timed out after {limit}: {src.scp_arg()} -> {dst.scp_arg()}")
+        shown = format_duration(limit if limit is not None and not math.isinf(limit) else 0)
+        raise TransferFailed(f"scp timed out after {shown}: {src.scp_arg()} -> {dst.scp_arg()}")
     if returncode != 0:
         raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
 
@@ -327,22 +379,26 @@ def pull(
     options: ScpOptions = ScpOptions(),
     report: Report | None = None,
 ) -> Path:
-    """Copy a remote file into local_dir through `.NAME.part`, verify size and sha256 when given, rename it."""
+    """Copy a remote file into local_dir through .NAME.part, verify size and sha256 when given, rename it (an identical existing file is a no-op)."""
     src = _endpoint(remote)
     if not src.remote:
         raise ValueError(f"pull needs a remote source (user@host:path), got {src.scp_arg()!r}")
     if on_conflict not in CONFLICTS:
         raise ValueError(f"on_conflict must be one of {', '.join(CONFLICTS)}, got {on_conflict!r}")
+    if sha256 is not None and not re.fullmatch(r"[0-9A-Fa-f]{64}", sha256):
+        raise ValueError(f"sha256 must be 64 hex characters, got {sha256!r}")
     name = src.name
     if not name or name in (".", ".."):
         raise ValueError(f"{src.scp_arg()!r} does not name a file")
+    if platform.IS_WINDOWS and any(char in name for char in '<>:"|?*'):
+        raise TransferFailed(f"{name!r} cannot be stored as a Windows file name (it holds one of < > : \" | ? *)")
     directory = Path(local_dir)
     directory.mkdir(parents=True, exist_ok=True)
     final = directory / name
     if final.exists():
+        if sha256 is not None and sha256_file(final) == sha256.lower():
+            return final  # an earlier pull of this exact file finished
         if on_conflict == "skip-identical":
-            if sha256 is not None and sha256_file(final) == sha256.lower():
-                return final
             raise TransferFailed(
                 f"{final} already exists with other or unknown content; pass sha256 to skip identical files, or "
                 "on_conflict='rename' or 'overwrite'"
@@ -428,13 +484,13 @@ class Transfer:
     def _options(self, options: dict[str, Any]) -> ScpOptions:
         if not self._writable:
             raise TransferFailed("a check must not transfer files; do it in an action (ctx.transfer.tcp_open is fine)")
-        timeout = options.pop("timeout", None)
+        deadline = None
         if self._remaining is not None:
             left = self._remaining()
             if left <= 0:
                 raise TransferFailed("no time left in this hook for a transfer (raise action_timeout)")
-            timeout = left if timeout is None else min(timeout, left)
-        return ScpOptions(timeout=timeout, **options)
+            deadline = time.time() + left  # each scp run (the file, then its marker) gets only what is left
+        return ScpOptions(deadline=deadline, **options)
 
     def _local(self, value: str | os.PathLike[str] | Endpoint) -> Endpoint:
         endpoint = _endpoint(value)
@@ -478,4 +534,6 @@ class Transfer:
 
     def tcp_open(self, host: str, port: int = 22, timeout: float = 5.0) -> bool:
         """True when host:port accepts a TCP connection within `timeout` seconds (allowed in a check)."""
+        if self._remaining is not None:
+            timeout = max(min(timeout, self._remaining()), 0.1)
         return tcp_open(host, port, timeout)

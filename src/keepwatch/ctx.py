@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 Emit = Callable[[dict[str, Any]], None]
 _LEDGER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+LEDGER_NAME = _LEDGER_NAME  # public: config.py validates ledger names with it
 
 
 class Unknown(Exception):
@@ -57,6 +58,11 @@ class LedgerReadOnly(Exception):
 
 class LedgerCorrupt(Exception):
     """A ledger file exists but cannot be read. The message names the file to fix or delete."""
+
+
+def ledger_file(data_dir: Path, name: str) -> Path:
+    """Where ledger `name` of a watch is stored (data_dir is the watch's persistent data directory)."""
+    return data_dir / "ledgers" / f"{name}.json"
 
 
 def _as_text(value: str | bytes | None) -> str:
@@ -315,7 +321,7 @@ class Ctx:
         if not _LEDGER_NAME.fullmatch(name):
             raise ValueError(f"invalid ledger name {name!r}: use letters, digits, '_', '.', '-'")
         seconds = None if expire is None else parse_duration(expire)
-        return Ledger(self._data_dir / "ledgers" / f"{name}.json", expire=seconds, writable=self.hook != "check")
+        return Ledger(ledger_file(self._data_dir, name), expire=seconds, writable=self.hook != "check")
 
     def file_key(self, path: str | os.PathLike[str]) -> str:
         """"<absolute path>|<size>|<mtime_ns>": a new file reusing a name gets a new key."""
