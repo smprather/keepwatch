@@ -1,7 +1,6 @@
 import hashlib
 import shutil
 import socket
-from pathlib import Path
 
 import pytest
 
@@ -173,7 +172,7 @@ def test_reports_each_scp_run(tmp_path, server, ssh_config):
     local.write_bytes(b"x")
     calls = []
     push(local, REMOTE, options=key_options(server, ssh_config), report=lambda *call: calls.append(call))
-    assert len(calls) == 1  # file and marker in one scp run
+    assert len(calls) == 2  # the file, then its marker
     argv, returncode, timed_out, duration, stdout, stderr = calls[0]
     assert argv[0] == "scp" and returncode == 0 and timed_out is False and duration >= 0
 
@@ -204,13 +203,21 @@ def test_a_retried_rename_reuses_the_identical_copy(tmp_path, server, ssh_config
     assert sorted(path.name for path in stage.iterdir()) == ["b-1.tar.gz", "b.tar.gz"]
 
 
-def test_push_sends_file_and_marker_in_one_scp(tmp_path, server, ssh_config):
+def test_a_failed_upload_sends_no_marker(tmp_path, server, ssh_config):
     local = tmp_path / "a.tar.gz"
     local.write_bytes(b"payload")
     calls = []
-    push(local, REMOTE, options=key_options(server, ssh_config), report=lambda *call: calls.append(call))
-    [call] = calls
-    argv = call[0]
-    assert argv[-3:-1] == [str(local), str(Path(argv[-2]))] and argv[-2].endswith("a.tar.gz.sha256")
-    assert (server.root / "a.tar.gz").read_bytes() == b"payload"
-    assert (server.root / "a.tar.gz.sha256").exists()
+    with pytest.raises(CommandFailed):
+        push(local, REMOTE + "no/such/dir/", options=key_options(server, ssh_config), report=lambda *call: calls.append(call))
+    assert len(calls) == 1  # the data failed, so its marker was never sent
+    assert not list(server.root.rglob("*.sha256"))
+
+
+def test_pull_mismatches_raise_transfer_mismatch(tmp_path, server, ssh_config):
+    from keepwatch.transfer import TransferMismatch
+
+    (server.root / "b.gz").write_bytes(b"remote data")
+    with pytest.raises(TransferMismatch):
+        pull(REMOTE + "b.gz", tmp_path / "stage", size=99, options=key_options(server, ssh_config))
+    with pytest.raises(TransferMismatch):
+        pull(REMOTE + "b.gz", tmp_path / "stage", sha256="0" * 64, options=key_options(server, ssh_config))

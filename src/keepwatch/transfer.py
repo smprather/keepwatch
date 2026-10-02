@@ -109,6 +109,10 @@ class TransferFailed(Exception):
     """A transfer could not be attempted or verified. (scp itself failing raises keepwatch.CommandFailed.)"""
 
 
+class TransferMismatch(TransferFailed):
+    """A pulled file's size or sha256 differs from what was expected (usually: it changed after it was reported)."""
+
+
 @dataclass(frozen=True)
 class Endpoint:
     """One side of a transfer: a local path, or a path on `host` (`user@host:path` or `scp://user@host:port/path`)."""
@@ -484,11 +488,11 @@ def pull(
         copy(src, Endpoint(path=str(part)), options=options, report=report)
         actual_size = part.stat().st_size
         if size is not None and actual_size != size:
-            raise TransferFailed(f"pulled {actual_size} bytes of {src.scp_arg()}, expected {size}")
+            raise TransferMismatch(f"pulled {actual_size} bytes of {src.scp_arg()}, expected {size}")
         if sha256 is not None:
             actual = sha256_file(part)
             if actual != sha256.lower():
-                raise TransferFailed(f"sha256 of the pulled {src.scp_arg()} is {actual}, expected {sha256.lower()}")
+                raise TransferMismatch(f"sha256 of the pulled {src.scp_arg()} is {actual}, expected {sha256.lower()}")
         platform.replace(part, final)
     finally:
         part.unlink(missing_ok=True)
@@ -503,7 +507,7 @@ def push(
     options: ScpOptions = ScpOptions(),
     report: Report | None = None,
 ) -> str:
-    """Upload a file into remote_dir followed (marker="sha256") by NAME.sha256 in sha256sum format, in one scp run. Returns the remote path."""
+    """Upload a file into remote_dir, then (marker="sha256") NAME.sha256 in sha256sum format once the data succeeded. Returns the remote path."""
     local = Path(path)
     if not local.is_file():
         raise TransferFailed(f"{local} is not a file")
@@ -516,11 +520,13 @@ def push(
     if marker == "none":
         copy(local, target, options=options, report=report)
         return target.scp_arg()
+    copy(local, target, options=options, report=report)
     with tempfile.TemporaryDirectory(prefix="keepwatch-marker-") as work:
         marker_file = Path(work) / f"{local.name}.sha256"
         marker_file.write_bytes(f"{sha256_file(local)}  {local.name}\n".encode())
-        # One scp run (one login): scp sends its sources in order, so the data arrives before its marker.
-        copy(local, directory, extra_sources=[marker_file], options=options, report=report)
+        # A second run, only after the data succeeded: one scp run carries on past a failed source, which
+        # could put the marker beside a truncated file.
+        copy(marker_file, directory.child(marker_file.name), options=options, report=report)
     return target.scp_arg()
 
 
