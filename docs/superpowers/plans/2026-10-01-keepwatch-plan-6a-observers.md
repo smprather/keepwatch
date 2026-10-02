@@ -1348,8 +1348,8 @@ def age(path, seconds=60):
     os.utime(path, (old, old))
 
 
-def files_observer(make_watch, xdg, inbox, extra=""):
-    config = f"[observe.src]\nkind = 'files'\npath = {toml_path(inbox)}\nsettle = '1s'\n{extra}"
+def files_observer(make_watch, xdg, inbox, extra="", settle="1s"):
+    config = f"[observe.src]\nkind = 'files'\npath = {toml_path(inbox)}\nsettle = '{settle}'\n{extra}"
     watch = load_watch_config(make_watch("w", config=config))
     events, records = [], []
     observer = build_observer(
@@ -1431,7 +1431,7 @@ def test_a_file_still_growing_is_not_reported_early(tmp_path, make_watch, xdg):
     target = inbox / "copy.gz"
     target.write_text("x")
     age(target)  # like cp -p: the copy carries an old modification time
-    observer, events, records = files_observer(make_watch, xdg, inbox, "settle = '2s'\n")
+    observer, events, records = files_observer(make_watch, xdg, inbox, settle="2s")
     observer.start()
     try:
         time.sleep(0.5)
