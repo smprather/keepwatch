@@ -23,3 +23,11 @@ jobs:
       - run: uv run pytest -q -ra
       - if: runner.os == 'Linux' && matrix.python == '3.12'
         run: uv run ruff check src tests
+
+  remote-watcher-python-3-6:
+    runs-on: ubuntu-latest
+    container: python:3.6-slim
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m py_compile src/keepwatch/remote_watcher.py tests/remote_watcher_selftest.py
+      - run: python tests/remote_watcher_selftest.py -v
