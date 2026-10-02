@@ -50,6 +50,7 @@ CI runs this file directly under Python 3.6 (`python tests/remote_watcher_selfte
 imports WatcherTests (tests/test_remote_watcher.py), so it also runs on every supported Python and OS.
 """
 
+import atexit
 import hashlib
 import json
 import os
@@ -63,8 +64,23 @@ import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WATCHER = os.path.normpath(os.path.join(HERE, os.pardir, "src", "keepwatch", "remote_watcher.py"))
+SOURCE = os.path.normpath(os.path.join(HERE, os.pardir, "src", "keepwatch", "remote_watcher.py"))
 FAST = {"settle": 1, "interval": 0.2, "heartbeat": 30}
+_COPY = []
+
+
+def watcher():
+    """The watcher copied into a directory of its own, as it runs in production (from stdin, away from keepwatch).
+
+    Run in place, src/keepwatch/ would be first on sys.path and keepwatch's modules could shadow the stdlib.
+    """
+    if not _COPY:
+        directory = tempfile.mkdtemp(prefix="keepwatch-watcher-")
+        atexit.register(shutil.rmtree, directory, True)
+        target = os.path.join(directory, "remote_watcher.py")
+        shutil.copyfile(SOURCE, target)
+        _COPY.append(target)
+    return _COPY[0]
 
 
 def age(path, seconds=60):
@@ -77,13 +93,13 @@ class Running(object):
 
     def __init__(self, options, stdin_mode=False, env=None):
         if stdin_mode:
-            with open(WATCHER, "rb") as handle:
+            with open(SOURCE, "rb") as handle:
                 source = handle.read()
             prefix = "KEEPWATCH_REMOTE_ARGS = " + json.dumps(json.dumps(options)) + "\n"
             argv = [sys.executable, "-u", "-"]
             data = prefix.encode("ascii") + source
         else:
-            argv = [sys.executable, "-u", WATCHER, json.dumps(options)]
+            argv = [sys.executable, "-u", watcher(), json.dumps(options)]
             data = b""
         self.process = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
@@ -160,7 +176,7 @@ class WatcherTests(unittest.TestCase):
 
     def run_once(self, options):
         process = subprocess.Popen(
-            [sys.executable, WATCHER, json.dumps(options)], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            [sys.executable, watcher(), json.dumps(options)], stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
         out, err = process.communicate(timeout=15)
         return process.returncode, out, err
@@ -241,7 +257,7 @@ class WatcherTests(unittest.TestCase):
     def test_exits_quietly_when_stdout_closes(self):
         options = dict(FAST, dir=self.dir, heartbeat=0.2)
         process = subprocess.Popen(
-            [sys.executable, "-u", WATCHER, json.dumps(options)],
+            [sys.executable, "-u", watcher(), json.dumps(options)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -313,6 +329,14 @@ def test_the_watcher_is_ascii():
     SOURCE.read_text(encoding="ascii")
 
 
+def test_the_watcher_imports_nothing_keepwatch_could_shadow():
+    tree = ast.parse(SOURCE.read_text(encoding="ascii"))
+    imported = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+    imported |= {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
+    ours = {path.stem for path in SOURCE.parent.iterdir() if path.suffix == ".py" or path.is_dir()}
+    assert imported & ours == set()
+
+
 def test_the_watcher_and_its_tests_parse_as_old_python():
     # (3, 7) is the oldest grammar newer Pythons can check; 3.7 added no syntax over 3.6. CI also runs 3.6 itself.
     for path in (SOURCE, SELFTEST):
@@ -356,12 +380,14 @@ import fnmatch
 import hashlib
 import json
 import os
-import platform
 import select
+import socket
 import stat
 import sys
 import time
 
+# Do not import `platform` (or any name keepwatch uses for a module): run as a script from src/keepwatch/,
+# keepwatch's own platform.py would shadow the standard library's.
 WATCHER_VERSION = 1
 DEFAULTS = {
     "dir": None,
@@ -521,7 +547,7 @@ class Watcher(object):
             {
                 "event": "hello",
                 "version": WATCHER_VERSION,
-                "python": platform.python_version(),
+                "python": "%d.%d.%d" % sys.version_info[:3],
                 "inotify": inotify is not None,
                 "dir": decode(self.directory),
             }
@@ -577,7 +603,7 @@ def silence_stdout():
 
 
 def fail(message):
-    sys.stderr.write("keepwatch remote watcher on " + platform.node() + ": " + message + "\n")
+    sys.stderr.write("keepwatch remote watcher on " + socket.gethostname() + ": " + message + "\n")
     sys.stderr.flush()
     return 2
 
