@@ -290,6 +290,69 @@ class WatcherTests(unittest.TestCase):
         running = self.start(skip=[key], heartbeat=0.5)
         self.assertEqual(running.file_names_for(3.0), ["new.gz"])
 
+    def delete(self, files, directory=None):
+        options = {"mode": "delete", "dir": directory or self.dir, "files": files}
+        code, out, err = self.run_once(options)
+        lines = [json.loads(line) for line in out.decode("ascii").splitlines()]
+        self.assertEqual(code, 0, err)
+        self.assertEqual(lines[-1], {"event": "done"})
+        return {line["path"]: line for line in lines[:-1]}
+
+    def item(self, path):
+        info = os.stat(path)
+        return {"path": os.path.abspath(path), "size": info.st_size, "mtime": info.st_mtime}
+
+    def test_delete_removes_an_unchanged_file(self):
+        path = self.write("a.gz")
+        results = self.delete([self.item(path)])
+        self.assertEqual(results[os.path.abspath(path)]["event"], "deleted")
+        self.assertFalse(os.path.exists(path))
+
+    def test_delete_keeps_a_changed_file(self):
+        path = self.write("a.gz")
+        pulled = self.item(path)
+        with open(path, "ab") as handle:
+            handle.write(b"more")
+        self.assertEqual(self.delete([pulled])[pulled["path"]]["event"], "changed")
+        self.assertTrue(os.path.exists(path))
+
+    def test_delete_reports_a_missing_file_as_gone(self):
+        path = os.path.join(self.dir, "never.gz")
+        results = self.delete([{"path": path, "size": 1, "mtime": 1.5}])
+        self.assertEqual(results[path]["event"], "gone")
+
+    def test_delete_refuses_outside_dir_and_symlinks(self):
+        outside_dir = tempfile.mkdtemp()
+        try:
+            outside = os.path.join(outside_dir, "x.gz")
+            with open(outside, "wb") as handle:
+                handle.write(b"x")
+            results = self.delete([self.item(outside)])
+            self.assertEqual(results[os.path.abspath(outside)]["event"], "refused")
+            self.assertTrue(os.path.exists(outside))
+            if hasattr(os, "symlink") and os.name != "nt":
+                link = os.path.join(self.dir, "link.gz")
+                os.symlink(outside, link)
+                info = os.lstat(link)
+                item = {"path": os.path.abspath(link), "size": info.st_size, "mtime": info.st_mtime}
+                self.assertEqual(self.delete([item])[item["path"]]["event"], "refused")
+                self.assertTrue(os.path.exists(outside))
+        finally:
+            shutil.rmtree(outside_dir, ignore_errors=True)
+
+    @unittest.skipIf(
+        os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0), "needs a POSIX user that is not root"
+    )
+    def test_delete_reports_a_failure(self):
+        path = self.write("a.gz")
+        os.chmod(self.dir, 0o500)
+        try:
+            results = self.delete([self.item(path)])
+        finally:
+            os.chmod(self.dir, 0o700)
+        self.assertEqual(results[os.path.abspath(path)]["event"], "failed")
+        self.assertIn("ermission", results[os.path.abspath(path)]["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

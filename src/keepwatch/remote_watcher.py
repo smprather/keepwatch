@@ -13,6 +13,11 @@ Output, one JSON object per line, flushed at once:
   {"event": "hello", "version", "python", "inotify", "dir"}     once, at start
   {"event": "file", "path", "name", "size", "mtime", "sha256"}  once per settled file (sha256 with checksum)
   {"event": "heartbeat"}                                         after `heartbeat` seconds without output
+
+Delete mode ({"mode": "delete", "dir", "files": [{"path", "size", "mtime"}]}): deletes each file only if it is
+a regular file directly in `dir` (resolved, never through a symlink) whose size and mtime still match; prints
+{"event": "deleted" | "gone" | "changed" | "refused" | "failed", "path", "reason"?} per file, then
+{"event": "done"}.
 Exit status: 0 when stdout is closed (keepwatch went away), 2 for bad options, a missing directory or an
 error while scanning (the message goes to stderr).
 """
@@ -41,6 +46,8 @@ DEFAULTS = {
     "heartbeat": 30.0,
     "rescan": 30.0,
     "skip": [],
+    "mode": "watch",
+    "files": [],
 }
 SETTLE_STEP = 1.0  # rescan this often while a file is settling
 MIN_RESCAN = 0.5  # at most two scans a second, however many notifications arrive
@@ -251,6 +258,43 @@ class Watcher(object):
                 pass
 
 
+def delete_one(item, directory):
+    """Delete one pulled file if it is still exactly what was pulled. Returns the result line (without path)."""
+    raw = str(item.get("path", "")).encode("utf-8", "surrogateescape")
+    if os.path.realpath(os.path.dirname(raw)) != directory:
+        return {"event": "refused", "reason": "not directly in " + decode(directory)}
+    try:
+        info = os.lstat(raw)
+    except FileNotFoundError:
+        return {"event": "gone"}
+    except OSError as exc:
+        return {"event": "failed", "reason": exc.strerror or str(exc)}
+    if not stat.S_ISREG(info.st_mode):
+        return {"event": "refused", "reason": "not a regular file"}
+    if info.st_size != item.get("size") or info.st_mtime != float(item.get("mtime", -1)):
+        return {"event": "changed"}
+    try:
+        os.unlink(raw)
+    except FileNotFoundError:
+        return {"event": "gone"}
+    except OSError as exc:
+        return {"event": "failed", "reason": exc.strerror or str(exc)}
+    return {"event": "deleted"}
+
+
+def delete_files(options, output):
+    directory = os.path.realpath(os.path.expanduser(options["dir"]).encode("utf-8", "surrogateescape"))
+    for item in options["files"]:
+        try:
+            result = delete_one(item, directory)
+        except Exception as exc:  # keep going: one odd entry must not stop the others
+            result = {"event": "failed", "reason": str(exc)}
+        result["path"] = item.get("path")
+        output.send(result)
+    output.send({"event": "done"})
+    return 0
+
+
 def parse_options(text):
     given = json.loads(text)
     if not isinstance(given, dict):
@@ -260,6 +304,8 @@ def parse_options(text):
         raise ValueError("unknown option(s): " + ", ".join(unknown))
     options = dict(DEFAULTS)
     options.update(given)
+    if options["mode"] not in ("watch", "delete"):
+        raise ValueError("option 'mode' must be watch or delete")
     if not options["dir"]:
         raise ValueError("option 'dir' is required")
     return options
@@ -286,6 +332,12 @@ def main(argv):
         options = parse_options(raw)
     except ValueError as exc:
         return fail(str(exc))
+    if options["mode"] == "delete":
+        try:
+            return delete_files(options, Output(sys.stdout))
+        except Closed:
+            silence_stdout()
+            return 0
     watcher = Watcher(options, Output(sys.stdout))
     if not os.path.isdir(watcher.directory):
         return fail("directory " + decode(watcher.directory) + " does not exist")
