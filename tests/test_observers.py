@@ -110,9 +110,9 @@ def test_event_queue_ack_keeps_later_events():
 
 def test_event_queue_drops_the_oldest():
     queue = EventQueue(cap=2)
-    assert queue.put({"n": 1}) is False
+    assert queue.put({"n": 1}) == 0
     queue.put({"n": 2})
-    assert queue.put({"n": 3}) is True
+    assert queue.put({"n": 3}) == 1
     assert queue.pending()[1] == [{"n": 2}, {"n": 3}] and queue.dropped == 1
 
 
@@ -239,3 +239,43 @@ def test_overlong_stdout_lines_are_dropped(make_watch, xdg, monkeypatch):
         stop(observer)
     assert events[0]["line"] == "ok" and len(events) == 1
     assert any("longer than 100 bytes" in record["text"] for record in kinds(records, "observer.output"))
+
+
+def test_event_queue_is_capped_by_bytes():
+    queue = EventQueue(cap=100, max_bytes=250)
+    big = {"line": "x" * 100}
+    assert [queue.put(dict(big, n=n)) for n in range(4)] == [0, 0, 1, 1]
+    assert [event["n"] for event in queue.pending()[1]] == [2, 3]
+    assert queue.dropped == 2 and queue.bytes <= 250
+    mark, _ = queue.pending()
+    queue.ack(mark)
+    assert len(queue) == 0 and queue.bytes == 0
+
+
+def test_event_queue_keeps_an_oversized_newest_event():
+    queue = EventQueue(cap=100, max_bytes=10)
+    queue.put({"n": 1})
+    assert queue.put({"line": "x" * 100}) == 1
+    assert queue.pending()[1] == [{"line": "x" * 100}]
+
+
+def test_large_events_are_logged_clipped(make_watch, xdg, monkeypatch):
+    monkeypatch.setattr(observers, "EVENT_LOG_BYTES", 50)
+    script = 'import json, time\nprint(json.dumps({"n": 1}))\nprint(json.dumps({"line2": "y" * 200}), flush=True)\ntime.sleep(60)\n'
+    observer, events, records = command_observer(make_watch, xdg, script)
+    observer.start()
+    try:
+        assert wait_for(lambda: len(events) == 2)
+    finally:
+        stop(observer)
+    small, large = kinds(records, "observer.event")
+    assert small["data"] == {"n": 1} and "data_clipped" not in small
+    assert "data" not in large and len(large["data_clipped"]) < 120
+    assert events[1]["line2"] == "y" * 200
+
+
+def test_a_stopped_observer_delivers_nothing(make_watch, xdg):
+    observer, events, records = command_observer(make_watch, xdg, SILENT)
+    observer.stop()
+    observer.emit({"n": 1})
+    assert events == [] and not kinds(records, "observer.event")

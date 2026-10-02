@@ -30,6 +30,7 @@ from keepwatch.durations import format_duration
 from keepwatch.logstore import Sink, make_record
 from keepwatch.offline import iso_time
 from keepwatch.platform import HookProcess
+from keepwatch.protocol import clip
 from keepwatch.runner import DRAIN_GRACE, KILL_GRACE, base_environment
 
 Deliver = Callable[[dict[str, Any]], None]
@@ -38,6 +39,8 @@ BACKOFF_START = 5.0
 BACKOFF_CAP = 300.0
 RESET_AFTER = 300.0
 QUEUE_CAP = 10_000
+QUEUE_BYTES = 64 * 1024 * 1024
+EVENT_LOG_BYTES = 4096  # observer.event records keep larger events only as clipped JSON text
 MAX_LINE = 1024 * 1024
 OUTPUT_RECORDS_PER_MINUTE = 20
 STDERR_TAIL = 5
@@ -68,39 +71,51 @@ def parse_event(text: str) -> dict[str, Any] | None:
     return value
 
 
-class EventQueue:
-    """Pending events for one watch, oldest first, at most `cap` (the oldest are dropped).
+def _event_size(event: dict[str, Any]) -> int:
+    return len(json.dumps(event, ensure_ascii=False, default=str).encode("utf-8"))
 
-    Not thread-safe: the WatchRunner guards it with its lock.
+
+class EventQueue:
+    """Pending events for one watch, oldest first: at most `cap` events and `max_bytes` of JSON.
+
+    The oldest are dropped to make room; the newest event is always kept. Not thread-safe: the
+    WatchRunner guards it with its lock.
     """
 
-    def __init__(self, cap: int = QUEUE_CAP) -> None:
+    def __init__(self, cap: int = QUEUE_CAP, max_bytes: int = QUEUE_BYTES) -> None:
         self.cap = cap
+        self.max_bytes = max_bytes
+        self.bytes = 0
         self.dropped = 0
-        self._items: deque[tuple[int, dict[str, Any]]] = deque()
+        self._items: deque[tuple[int, int, dict[str, Any]]] = deque()
         self._next = 1
 
     def __len__(self) -> int:
         return len(self._items)
 
-    def put(self, event: dict[str, Any]) -> bool:
-        """Add an event; True if the oldest one was dropped to make room."""
-        self._items.append((self._next, event))
+    def put(self, event: dict[str, Any]) -> int:
+        """Add an event; returns how many of the oldest were dropped to make room."""
+        size = _event_size(event)
+        self._items.append((self._next, size, event))
         self._next += 1
-        if len(self._items) > self.cap:
-            self._items.popleft()
-            self.dropped += 1
-            return True
-        return False
+        self.bytes += size
+        dropped = 0
+        while len(self._items) > 1 and (len(self._items) > self.cap or self.bytes > self.max_bytes):
+            _, old_size, _ = self._items.popleft()
+            self.bytes -= old_size
+            dropped += 1
+        self.dropped += dropped
+        return dropped
 
     def pending(self) -> tuple[int, list[dict[str, Any]]]:
         """(a mark for ack(), the pending events oldest first)."""
-        return self._next - 1, [event for _, event in self._items]
+        return self._next - 1, [event for _, _, event in self._items]
 
     def ack(self, mark: int) -> None:
         """Remove the events up to `mark` (from pending()); later ones stay."""
         while self._items and self._items[0][0] <= mark:
-            self._items.popleft()
+            _, size, _ = self._items.popleft()
+            self.bytes -= size
 
 
 def observer_environment(
@@ -161,9 +176,16 @@ class Observer:
 
     def emit(self, event: dict[str, Any]) -> None:
         """Tag an event with this observer's name and arrival time, log it (DEBUG) and deliver it."""
+        if self._stop.is_set():
+            return  # a source being stopped: its last lines are not delivered
         now = time.time()
         self.last_event = now
-        self._sink(make_record("observer.event", level="DEBUG", **self._tag(), data=event))
+        text = json.dumps(event, ensure_ascii=False, default=str)
+        if len(text.encode("utf-8")) <= EVENT_LOG_BYTES:
+            fields: dict[str, Any] = {"data": event}
+        else:
+            fields = {"data_clipped": clip(text, EVENT_LOG_BYTES)[0]}
+        self._sink(make_record("observer.event", level="DEBUG", **self._tag(), **fields))
         try:
             self._deliver({**event, "observer": self.name, "received": iso_time(now)})
         except Exception as exc:

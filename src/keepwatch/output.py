@@ -219,7 +219,7 @@ def _observer_output(record: dict[str, Any], verbose: bool) -> str:
 
 
 def _observer_event(record: dict[str, Any], verbose: bool) -> str:
-    data = json.dumps(record.get("data"), ensure_ascii=False, default=str)
+    data = record.get("data_clipped") or json.dumps(record.get("data"), ensure_ascii=False, default=str)
     return f"observer {record.get('observer')} event: {data[:2000]}"
 
 

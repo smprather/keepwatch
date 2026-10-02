@@ -101,7 +101,7 @@ class WatchRunner:
             total = self.events.dropped
             if wake:
                 self._wake_requested = True
-        if dropped and (total == 1 or total % DROP_REPORT_EVERY == 0):
+        if dropped and (total == dropped or total // DROP_REPORT_EVERY > (total - dropped) // DROP_REPORT_EVERY):
             self._sink(
                 make_record(
                     "observer.dropped",
@@ -110,6 +110,7 @@ class WatchRunner:
                     observer=event.get("observer"),
                     dropped=total,
                     cap=self.events.cap,
+                    max_bytes=self.events.max_bytes,
                 )
             )
         if wake:

@@ -162,6 +162,7 @@ def test_a_full_queue_drops_the_oldest_with_a_warning(make_watch, runner_for):
     assert runner.events.pending()[1] == [{"n": 3, "observer": "feed"}, {"n": 4, "observer": "feed"}]
     [dropped] = kinds(records, "observer.dropped")
     assert (dropped["level"], dropped["observer"], dropped["dropped"], dropped["cap"]) == ("WARNING", "feed", 1, 2)
+    assert dropped["max_bytes"] == runner.events.max_bytes
 
 
 def test_observer_events_wake_the_running_watch(make_watch, runner_for):
