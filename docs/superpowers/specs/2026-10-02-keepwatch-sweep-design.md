@@ -173,3 +173,22 @@ this. With `marker = "none"` nothing changes.
   mismatched one waits for a filesystem event or the 30s rescan.
 - **Retry timing.** A due delete is attempted at the watch's next poll; without new files that poll comes from
   `interval`, so a retry happens after `delete_retry` or `interval`, whichever is later.
+
+## 9. Second revisions (2026-10-02, after reviewing section 8)
+
+- **No backfill.** Only files pulled (and verified) while `delete_remote` is on are deleted, because only they
+  carry a recorded sha256 for the helper's content check. Keys in `pulled` that were never queued are logged
+  once and left alone (delete them by hand). To close the crash window, a file's `to_delete` entry is written
+  *before* its key goes into `pulled`.
+- **`changed` keeps the new version moving.** After a `changed` result the key leaves `pulled` but does not go
+  to `skipped`, so the new content is pulled at its next report. `skipped` is only for `deleted` and `gone`.
+- **Timeouts keep partial results.** When the delete call times out, the lines it printed before the timeout
+  still count (files already deleted are not re-queued as failures).
+- **In-place rewrites that keep size and mtime** are invisible to the remote watcher (as to any mtime-based
+  watcher): a pull that then mismatches is skipped with a WARNING, and the docs say so.
+- **Waiting for a marker** re-checks every second for at most 60s after the file settled; after that only
+  filesystem events and the 30s rescan re-check it (a stray file without a marker costs nothing).
+- **Cleanups:** one hashing loop in the remote helper; `extra_sources` removed again (nothing uses it);
+  `with_known_hosts` lives in `transfer.py`, so `keepwatch.remote` is stdlib-only again; the receive example keys
+  arrivals by path, size, mtime and sha256.
+- Two scp runs per pushed file stay (section 8): the marker must follow a successful upload.
