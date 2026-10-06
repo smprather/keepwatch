@@ -225,19 +225,22 @@ def test_a_transfer_honours_an_explicit_deadline(tmp_path):
 
 
 def test_sftp_reget_batch_quotes_both_paths():
-    batch = transfer.sftp_reget_batch(parse_endpoint("u@host:/data/a b.gz"), Path("/stage/.a b.gz.part"))
-    assert batch == 'reget "/data/a b.gz" "/stage/.a b.gz.part"\n'
+    """Both paths go through sftp's batch parser, which splits on whitespace unless they are quoted."""
+    batch = transfer.sftp_reget_batch(parse_endpoint("u@host:/data/a b.gz"), Path('.a "b".part'))
+    assert batch == 'reget "/data/a b.gz" ".a \\"b\\".part"\n'
 
 
 def test_the_resume_command_is_the_sftp_beside_scp(tmp_path):
+    scp = str(tmp_path / "scp")
     options = ScpOptions(protocol="sftp", identity="/k/id", known_hosts="/k/hosts",
-                         ssh_options=["-F", "/k/config"], scp_command=["/usr/bin/scp"])
-    argv = transfer.sftp_reget_argv(parse_endpoint("scp://u@host:2222/a.gz"), options, Path("/tmp/b.batch"))
-    assert argv[0] == "/usr/bin/sftp"
+                         ssh_options=["-F", "/k/config"], scp_command=[scp])
+    batch = tmp_path / "b.batch"
+    argv = transfer.sftp_reget_argv(parse_endpoint("scp://u@host:2222/a.gz"), options, batch)
+    assert argv[0] == str(Path(scp).with_name("sftp"))  # the sftp next to the scp a watch configured
     assert argv[1:3] == ["-F", "/k/config"]
     assert ["-o", "BatchMode=yes"] == argv[3:5]
     assert "-i" in argv and "/k/id" in argv
-    assert "-P" in argv and "2222" in argv and "-b" in argv and "/tmp/b.batch" in argv
+    assert "-P" in argv and "2222" in argv and "-b" in argv and str(batch) in argv
     assert argv[-1] == "u@host"
 
 
