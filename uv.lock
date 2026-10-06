@@ -192,7 +192,7 @@ wheels = [
 
 [[package]]
 name = "keepwatch"
-version = "2026.10.9"
+version = "2026.10.10"
 source = { editable = "." }
 dependencies = [
     { name = "rich" },
