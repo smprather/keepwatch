@@ -62,6 +62,21 @@ Never put a password in config.toml, a hook or a command line. Put it in an envi
 
 keepwatch hands it to scp through `SSH_ASKPASS` (with `SSH_ASKPASS_REQUIRE=force`): a small launcher in a private temporary directory runs the helper's own file (`askpass.py`, standard library only, so even an interpreter that cannot import keepwatch can run it) with the variable's name, and the helper prints its value. The password is never written to a file, passed as an argument or logged; only the variable's name is. The helper refuses to answer host-key questions ("yes/no"). Password and keyboard-interactive logins both work.
 
+### Passwords a server refuses
+
+Some servers (mod_sftp is the known one) reject a password that arrives through `SSH_ASKPASS` while accepting
+the *same bytes typed at a console* — no askpass variant helps, because the refusal happens server-side. For
+those, set `password_mode = "conpty"`: keepwatch then runs scp under a Windows pseudo-console, waits for the
+password prompt, types the password itself, and scrubs it out of anything it captures (ssh turns the console's
+echo off, but a pty is not always polite; the value never reaches the log either way). It needs `password_env`,
+Windows, and the `keepwatch[conpty]` extra (`uv tool install 'keepwatch[conpty]'`), since pywinpty is a
+Windows-only package. On every other system the option is refused with a message rather than guessed at, and
+`password_mode = "askpass"` (the default) is exactly the behaviour above.
+
+A last trap for the same destination: **mod_sftp may ignore a server-side `authorized_keys`** unless the
+administrator sets `SFTPAuthorizedUserKeys` (or the equivalent for that build), so a key path that "should"
+work may still be refused — check the server's SFTP configuration before concluding the key is wrong.
+
 ## Errors
 
 - **Remote login scripts must print nothing** for non-interactive sessions: an `echo` in the remote `.cshrc`/`.bashrc` corrupts scp in both protocols ("Received message too long"). Guard it: `if ($?prompt) then … endif` in csh/tcsh, `case $- in *i*) … ;; esac` in sh/bash. (The remote watcher of `remote_files` tolerates such output; scp cannot.) File names with spaces or shell characters work: keepwatch writes remote paths the way each scp needs them (backslash escapes with the classic protocol on Linux; on Windows, where Windows' scp turns backslashes into slashes, `?` wildcards for pulls and quotes for pushes; plain names with SFTP). A name holding both kinds of quotes cannot be pushed with the classic protocol from Windows; use `protocol = "sftp"` or rename it.

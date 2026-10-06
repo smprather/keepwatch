@@ -388,6 +388,13 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
         ),
         Key("protocol", "str", "scp", "`scp` (classic; scp-only servers accept it) or `sftp`."),
         Key("password_env", "str", None, "Name of the environment variable holding the destination password."),
+        Key(
+            "password_mode",
+            "str",
+            "askpass",
+            "`askpass` (the password goes through SSH_ASKPASS) or `conpty` (type it at a Windows pseudo-console, "
+            "for servers that refuse askpass; needs `password_env` and the keepwatch[conpty] extra).",
+        ),
         *_SSH_SETTINGS,
         Key("marker", "str", "sha256", "`sha256`: upload NAME.sha256 after each file as a completion marker; `none`."),
         Key("after", "str", "delete", "After a push: `delete` the local file, `archive` it, or `keep` it (a ledger remembers it)."),
@@ -461,6 +468,13 @@ def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any],
                 topic="recipes",
             )
     if recipe == "push":
+        if values["password_mode"] == "conpty" and not values["password_env"]:
+            collector.add(
+                'password_mode = "conpty" needs password_env in [settings]: there is no password to type otherwise',
+                key="password_mode",
+                table="settings",
+                topic="recipes",
+            )
         try:
             dest_remote = not values["dest"] or parse_endpoint(values["dest"]).remote
         except ValueError as exc:

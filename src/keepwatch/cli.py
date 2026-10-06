@@ -947,6 +947,10 @@ def _scp_options(function):
         click.option("--password-env", metavar="VAR",
                      help="Name of the environment variable holding the password (given to scp through SSH_ASKPASS; "
                      "never pass the password itself). Default: key authentication only (BatchMode)."),
+        click.option("--password-mode", type=click.Choice(transfer.PASSWORD_MODES), default="askpass", show_default=True,
+                     help="askpass: the password goes through SSH_ASKPASS. conpty: type it at a Windows "
+                     "pseudo-console instead, for servers that refuse askpass (needs password_env, Windows, and "
+                     "the keepwatch[conpty] extra)."),
         click.option("--identity", type=click.Path(dir_okay=False), help="Private key file for ssh -i (only this key is offered)."),
         click.option("--known-hosts", type=click.Path(dir_okay=False),
                      help="known_hosts file to check the host key against. Unknown host keys are always refused."),
@@ -960,12 +964,13 @@ def _scp_options(function):
     return function
 
 
-def _scp(protocol, password_env, identity, known_hosts, port, ssh_options, timeout) -> transfer.ScpOptions:
+def _scp(protocol, password_env, password_mode, identity, known_hosts, port, ssh_options, timeout) -> transfer.ScpOptions:
     extra = tuple(item for option in ssh_options for item in ("-o", option))
     try:
         return transfer.ScpOptions(
             protocol=protocol,
             password_env=password_env,
+            password_mode=password_mode,
             identity=identity,
             known_hosts=known_hosts,
             port=port,

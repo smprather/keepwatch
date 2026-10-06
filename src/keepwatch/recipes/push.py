@@ -23,7 +23,7 @@ LEDGER = "pushed"
 
 
 def transfer_options(settings: Mapping[str, Any]) -> dict[str, Any]:
-    names = ("protocol", "password_env", "port", "identity", "known_hosts")
+    names = ("protocol", "password_env", "password_mode", "port", "identity", "known_hosts")
     options = {name: settings[name] for name in names if settings[name] is not None}
     return {**options, "ssh_options": list(settings["ssh_options"])}
 

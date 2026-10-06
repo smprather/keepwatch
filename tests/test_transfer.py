@@ -305,6 +305,46 @@ def test_transfer_progress_and_its_text():
     assert transfer.activity_text({"name": "a.bin", "size": 4096}) == "pushing a.bin (4 KiB)"
 
 
+def test_conpty_needs_windows_and_a_password_variable(monkeypatch):
+    """password_mode = "conpty" is refused where it cannot work, with a message that says why (issue 6)."""
+    monkeypatch.setattr(transfer.platform, "IS_WINDOWS", False)
+    with pytest.raises(ValueError, match="needs password_env"):
+        ScpOptions(password_mode="conpty")
+    with pytest.raises(ValueError, match="Windows-only"):
+        ScpOptions(password_mode="conpty", password_env="KW_PW")
+    monkeypatch.setattr(transfer.platform, "IS_WINDOWS", True)
+    assert ScpOptions(password_mode="conpty", password_env="KW_PW").password_mode == "conpty"
+    with pytest.raises(ValueError, match="must be one of"):
+        ScpOptions(password_mode="askpass2")
+    assert ScpOptions().password_mode == "askpass"  # the default is exactly what keepwatch did before
+
+
+def test_conpty_takes_the_askpass_launcher_out_of_the_environment(monkeypatch):
+    """A pty run must prompt, not find a launcher: ssh would take the askpass path and the mode would do nothing."""
+    monkeypatch.setattr(transfer.platform, "IS_WINDOWS", True)
+    monkeypatch.setenv("KW_PW", "s3cret")
+    monkeypatch.setenv("SSH_ASKPASS", "/elsewhere/askpass.cmd")
+    with transfer._transfer_env(ScpOptions(password_env="KW_PW")) as env:
+        assert env["SSH_ASKPASS"] != "/elsewhere/askpass.cmd" and env["SSH_ASKPASS_REQUIRE"] == "force"
+    with transfer._transfer_env(ScpOptions(password_env="KW_PW", password_mode="conpty")) as env:
+        assert "SSH_ASKPASS" not in env and "SSH_ASKPASS_REQUIRE" not in env
+
+
+def test_the_conpty_mode_hands_the_password_to_the_pty(monkeypatch):
+    monkeypatch.setattr(transfer.platform, "IS_WINDOWS", True)
+    calls = []
+
+    def fake_run(argv, password, *, limit=None, env=None):
+        calls.append((list(argv), password, limit))
+        return (0, "typed\n", "", False)
+
+    monkeypatch.setattr("keepwatch.conpty.run", fake_run)
+    options = ScpOptions(password_env="KW_PW", password_mode="conpty")
+    code, out, err, timed_out = transfer._run(["scp", "a", "b"], {"KW_PW": "s3cret"}, 30.0, options=options)
+    assert calls == [(["scp", "a", "b"], "s3cret", 30.0)]
+    assert (code, out, err, timed_out) == (0, "typed\n", "", False)
+
+
 def test_a_one_letter_host_with_a_slash_is_a_drive():
     assert parse_endpoint("h:/a.gz") == Endpoint(path="h:/a.gz")
     assert parse_endpoint("me@h:/a.gz").remote and parse_endpoint("scp://h/a.gz").remote

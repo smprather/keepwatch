@@ -31,6 +31,7 @@ from keepwatch.offline import iso_time
 from keepwatch.paths import write_json_atomic
 
 PROTOCOLS = ("scp", "sftp")
+PASSWORD_MODES = ("askpass", "conpty")
 CONFLICTS = ("skip-identical", "rename", "overwrite")
 MARKERS = ("sha256", "none")
 SCP_DEFAULTS = (
@@ -269,12 +270,20 @@ class ScpOptions:
     timeout: float | None = None
     deadline: float | None = None
     scp_command: Sequence[str] = ("scp",)
+    password_mode: str = "askpass"
 
     def __post_init__(self) -> None:
         if self.protocol not in PROTOCOLS:
             raise ValueError(f"protocol must be one of {', '.join(PROTOCOLS)}, got {self.protocol!r}")
         if self.password_env is not None and not _VARIABLE.fullmatch(self.password_env):
             raise ValueError(f"password_env must be an environment variable name, got {self.password_env!r}")
+        if self.password_mode not in PASSWORD_MODES:
+            raise ValueError(f"password_mode must be one of {', '.join(PASSWORD_MODES)}, got {self.password_mode!r}")
+        if self.password_mode == "conpty":
+            if self.password_env is None:
+                raise ValueError('password_mode = "conpty" needs password_env: there is no password to type otherwise')
+            if not platform.IS_WINDOWS:
+                raise ValueError('password_mode = "conpty" is Windows-only for now (a POSIX pty is untested)')
         if self.port is not None and not 1 <= self.port <= 65535:
             raise ValueError(f"port must be between 1 and 65535, got {self.port}")
         if self.timeout is not None and self.timeout <= 0:
@@ -390,19 +399,26 @@ def write_askpass(directory: Path, variable: str) -> Path:
 
 @contextlib.contextmanager
 def _transfer_env(options: ScpOptions) -> Iterator[dict[str, str]]:
-    """The environment for scp and sftp: the askpass launcher when a password variable is named."""
+    """The environment for scp and sftp: the askpass launcher when a password goes through askpass.
+
+    With `password_mode = "conpty"` the password is typed at the console instead, so ssh must not find an
+    askpass launcher (or it would take that path): both variables are removed from the child's environment.
+    """
     env = dict(os.environ)
+    if options.password_env and options.password_env not in os.environ:
+        raise TransferFailed(
+            f"password_env names {options.password_env}, which is not set in keepwatch's environment "
+            "(on Windows: setx; for the service, restart it after setting the variable)"
+        )
     with contextlib.ExitStack() as stack:
-        if options.password_env:
-            if options.password_env not in os.environ:
-                raise TransferFailed(
-                    f"password_env names {options.password_env}, which is not set in keepwatch's environment "
-                    "(on Windows: setx; for the service, restart it after setting the variable)"
-                )
+        if options.password_env and options.password_mode == "askpass":
             work = stack.enter_context(tempfile.TemporaryDirectory(prefix="keepwatch-scp-", dir=_askpass_dir()))
             env["SSH_ASKPASS"] = str(write_askpass(Path(work), options.password_env))
             env["SSH_ASKPASS_REQUIRE"] = "force"
             env.setdefault("DISPLAY", ":0")  # OpenSSH before 8.4 uses SSH_ASKPASS only when DISPLAY is set
+        if options.password_mode == "conpty":
+            env.pop("SSH_ASKPASS", None)
+            env.pop("SSH_ASKPASS_REQUIRE", None)
         yield env
 
 
@@ -448,7 +464,7 @@ def _sftp_reget(source: Endpoint, part: Path, options: ScpOptions, report: Repor
         argv = sftp_reget_argv(source, options, batch)
         started = time.monotonic()
         with _transfer_env(options) as env:
-            returncode, stdout, stderr, timed_out = _run(argv, env, limit)
+            returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options)
     if report is not None:
         report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
     if timed_out:
@@ -457,7 +473,13 @@ def _sftp_reget(source: Endpoint, part: Path, options: ScpOptions, report: Repor
         raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
 
 
-def _run(argv: list[str], env: dict[str, str], timeout: float | None) -> tuple[int | None, str, str, bool]:
+def _run(
+    argv: list[str], env: dict[str, str], timeout: float | None, *, options: ScpOptions
+) -> tuple[int | None, str, str, bool]:
+    if options.password_mode == "conpty":
+        from keepwatch.conpty import run as conpty_run  # imported only for this mode (an optional extra)
+
+        return conpty_run(argv, env.get(options.password_env or "", ""), limit=timeout, env=env)
     try:
         if platform.IS_WINDOWS:
             process = platform.start_process(
@@ -590,7 +612,7 @@ def copy(
         limit = left if limit is None else min(limit, left)
     started = time.monotonic()
     with _transfer_env(options) as env:
-        returncode, stdout, stderr, timed_out = _run(argv, env, limit)
+        returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options)
     if report is not None:
         report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
     if timed_out:
@@ -768,10 +790,12 @@ class Transfer:
     is logged as a `command` record (like ctx.run), and the hook's remaining time caps `timeout`.
 
     Options (keyword arguments of copy, pull and push): protocol ("scp" or "sftp"), password_env (the name
-    of an environment variable holding the password), identity (a private key file), known_hosts (a
-    known_hosts file), port, ssh_options (extra scp arguments), timeout (seconds, per scp run) and deadline
-    (the epoch after which this call's scp must not run; the hook's remaining time by default). A check may
-    only use tcp_open: transferring files changes things, which a check must not do.
+    of an environment variable holding the password), password_mode ("askpass", the default, or "conpty": type
+    the password at a Windows pseudo-console, for servers that refuse askpass — see `keepwatch docs transfers`),
+    identity (a private key file), known_hosts (a known_hosts file), port, ssh_options (extra scp arguments),
+    timeout (seconds, per scp run) and deadline (the epoch after which this call's scp must not run; the hook's
+    remaining time by default). A check may only use tcp_open: transferring files changes things, which a check
+    must not do.
 
     `pull` also takes `resume=True` (needs protocol="sftp" and a known size and sha256): an unfinished
     `.NAME.part` from an earlier attempt is continued with the sftp client instead of being discarded.
