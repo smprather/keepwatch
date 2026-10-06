@@ -114,3 +114,16 @@ def test_shell_argv(tmp_path):
         assert argv == ["/bin/sh", "-c", "exit 3"]
     assert platform.absolute_path("relative") is None
     assert platform.absolute_path(str(tmp_path)) == tmp_path
+
+
+def test_windows_script_hooks_never_go_through_cmd_autorun(monkeypatch, tmp_path):
+    r"""cmd.exe reads HKCU\...\Command Processor\AutoRun before every /c it runs; /d skips it (issue 7)."""
+    monkeypatch.setattr(platform, "IS_WINDOWS", True)
+    cmd = tmp_path / "check.cmd"
+    cmd.write_text("@echo off\r\n", encoding="utf-8")
+    assert platform.command_argv([str(cmd)], tmp_path) == ["cmd.exe", "/d", "/c", str(cmd)]
+    assert platform.command_argv([str(tmp_path / "check.bat")], tmp_path)[:3] == ["cmd.exe", "/d", "/c"]
+    assert platform.command_argv([str(tmp_path / "check.ps1")], tmp_path)[:1] == ["powershell.exe"]
+    # a string hook is PowerShell's -Command, so cmd.exe never runs it either
+    argv = platform.shell_argv("exit 3")
+    assert argv[0] == "powershell.exe" and "-Command" in argv and argv[-1].endswith("exit 3")
