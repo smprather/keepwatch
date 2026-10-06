@@ -1,6 +1,7 @@
 import hashlib
 import os
 import shutil
+import time
 
 import pytest
 from click.testing import CliRunner
@@ -26,7 +27,7 @@ def server(tmp_path):
     running.stop()
 
 
-def pull_watch(make_watch, server, tmp_path):
+def pull_watch(make_watch, server, tmp_path, extra=""):
     config = tmp_path / "ssh_config"
     config.write_text("", encoding="utf-8")
     return make_watch(
@@ -35,7 +36,7 @@ def pull_watch(make_watch, server, tmp_path):
             'recipe = "pull"\n[settings]\nremote = "u@127.0.0.1"\nremote_dir = "/"\n'
             f"local_dir = {toml_path(tmp_path / 'stage')}\nport = {server.port}\n"
             f"identity = {toml_path(server.client_key)}\nknown_hosts = {toml_path(server.known_hosts)}\n"
-            f"ssh_options = ['-F', {toml_path(config)}, '-o', 'IdentityAgent=none']\n"
+            f"ssh_options = ['-F', {toml_path(config)}, '-o', 'IdentityAgent=none']\n{extra}"
         ),
     )
 
@@ -85,6 +86,54 @@ def test_a_failing_file_does_not_stop_the_rest_of_the_queue(make_watch, server, 
     assert (tmp_path / "stage" / "good.tar.gz").read_bytes() == b"data"  # the queue carried on
     messages = [r.get("message", "") for r in records if r["event"] == "plugin.log"]
     assert any("the rest of the queue is still tried" in message for message in messages), messages
+
+
+def test_pull_recipe_resumes_a_partial_file(make_watch, server, tmp_path, xdg):
+    """With resume = true an unfinished .NAME.part is continued with sftp, not restarted (issue 4)."""
+    data = bytes(range(256)) * 40  # 10240 bytes
+    (server.root / "big.bin").write_bytes(data)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / ".big.bin.part").write_bytes(data[:4096])
+    watch = load_watch_config(pull_watch(make_watch, server, tmp_path,
+                                         extra='protocol = "sftp"\nresume = true\n'))
+    server.reads.clear()
+    report = engine(xdg, []).poll(watch, WatchState(False), events=[file_event("big.bin", data)])
+    assert not report.failed
+    assert (stage / "big.bin").read_bytes() == data
+    assert not (stage / ".big.bin.part").exists()
+    assert server.reads and all(offset >= 4096 for offset in server.reads), server.reads
+
+
+def test_pull_recipe_discards_a_partial_file_without_resume(make_watch, server, tmp_path, xdg):
+    """Without resume the partial goes, and the log says what that cost (issue 4)."""
+    data = b"data" * 1000
+    (server.root / "big.bin").write_bytes(data)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / ".big.bin.part").write_bytes(b"x" * 2048)
+    watch = load_watch_config(pull_watch(make_watch, server, tmp_path))
+    records = []
+    report = engine(xdg, records).poll(watch, WatchState(False), events=[file_event("big.bin", data)])
+    assert not report.failed
+    assert (stage / "big.bin").read_bytes() == data
+    messages = [r.get("message", "") for r in records if r["event"] == "plugin.log"]
+    assert any("discarded 2 KiB" in message and "big.bin" in message for message in messages), messages
+
+
+def test_pull_recipe_deletes_stale_part_files_after_a_successful_pull(make_watch, server, tmp_path, xdg):
+    """part_max_age sweeps the staging folder: a stale .part from a killed transfer goes (issue 4)."""
+    (server.root / "a.bin").write_bytes(b"data")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    stale = stage / ".old.bin.part"
+    stale.write_bytes(b"x" * 100)
+    old = time.time() - 8 * 86400
+    os.utime(stale, (old, old))
+    watch = load_watch_config(pull_watch(make_watch, server, tmp_path))
+    report = engine(xdg, []).poll(watch, WatchState(False), events=[file_event("a.bin", b"data")])
+    assert not report.failed
+    assert not stale.exists()
 
 
 def test_pull_recipe_does_not_record_a_mismatched_pull(make_watch, server, tmp_path, xdg):

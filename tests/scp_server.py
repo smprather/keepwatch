@@ -6,6 +6,7 @@ import os
 import subprocess
 import threading
 from pathlib import Path
+from typing import Any, cast
 
 import asyncssh
 
@@ -27,10 +28,28 @@ class _Server(asyncssh.SSHServer):
         return True
 
 
+class _CountingSftpServer(asyncssh.SFTPServer):
+    """The SFTP server the harness serves, remembering where every read started.
+
+    A resumed transfer's first read is at the partial file's size; a restart starts at zero, so a test can
+    tell them apart (see `resume` in the pull recipe).
+    """
+
+    def __init__(self, channel, *, chroot: str, reads: list[int]) -> None:
+        # asyncssh annotates chroot as bytes; the harness has always passed str(self.root) and it works
+        super().__init__(channel, chroot=cast(Any, chroot))
+        self._reads = reads
+
+    def read(self, file_obj, offset, size):
+        self._reads.append(offset)
+        return super().read(file_obj, offset, size)
+
+
 class ScpServer:
     def __init__(self, root: Path, workdir: Path, chroot: bool = True) -> None:
         self.root = root
         self.chroot = chroot
+        self.reads: list[int] = []  # every SFTP read offset served (see _CountingSftpServer)
         self.client_key = workdir / "client_key"
         self.known_hosts = workdir / "known_hosts"
         self.port = 0
@@ -79,7 +98,7 @@ class ScpServer:
             authorized_client_keys=authorized,
             allow_scp=True,
             sftp_factory=(
-                (lambda channel: asyncssh.SFTPServer(channel, chroot=str(self.root)))
+                (lambda channel: _CountingSftpServer(channel, chroot=str(self.root), reads=self.reads))
                 if self.chroot
                 else asyncssh.SFTPServer
             ),
@@ -91,7 +110,8 @@ class ScpServer:
 
     def stop(self) -> None:
         def close() -> None:
-            self._server.close()
+            if self._server is not None:
+                self._server.close()
             self._loop.stop()
 
         self._loop.call_soon_threadsafe(close)

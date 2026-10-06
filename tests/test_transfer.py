@@ -138,7 +138,8 @@ def test_a_transfer_needs_a_remote_endpoint():
 def test_bad_options():
     for bad in ({"protocol": "ftp"}, {"password_env": "1BAD"}, {"port": 0}, {"timeout": 0}):
         with pytest.raises(ValueError):
-            ScpOptions(**bad)
+            # bad values are the point: every one of these must be refused
+            ScpOptions(**bad)  # type: ignore[reportArgumentType]
 
 
 def test_askpass_prints_the_variable(monkeypatch, capfd):
@@ -221,6 +222,63 @@ def test_a_transfer_honours_an_explicit_deadline(tmp_path):
     exhausted = transfer.Transfer(base=tmp_path, remaining=lambda: 0.0)
     with pytest.raises(TransferFailed, match="no time left in this hook"):
         exhausted.copy("u@host:/a.gz", tmp_path / "a.gz")
+
+
+def test_sftp_reget_batch_quotes_both_paths():
+    batch = transfer.sftp_reget_batch(parse_endpoint("u@host:/data/a b.gz"), Path("/stage/.a b.gz.part"))
+    assert batch == 'reget "/data/a b.gz" "/stage/.a b.gz.part"\n'
+
+
+def test_the_resume_command_is_the_sftp_beside_scp(tmp_path):
+    options = ScpOptions(protocol="sftp", identity="/k/id", known_hosts="/k/hosts",
+                         ssh_options=["-F", "/k/config"], scp_command=["/usr/bin/scp"])
+    argv = transfer.sftp_reget_argv(parse_endpoint("scp://u@host:2222/a.gz"), options, Path("/tmp/b.batch"))
+    assert argv[0] == "/usr/bin/sftp"
+    assert argv[1:3] == ["-F", "/k/config"]
+    assert ["-o", "BatchMode=yes"] == argv[3:5]
+    assert "-i" in argv and "/k/id" in argv
+    assert "-P" in argv and "2222" in argv and "-b" in argv and "/tmp/b.batch" in argv
+    assert argv[-1] == "u@host"
+
+
+def test_a_partial_file_is_discarded_and_the_cost_is_reported(tmp_path):
+    """A .part left by a killed transfer is reported (the wasted bytes) before a fresh attempt (issue 4)."""
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    part = stage / ".a.gz.part"
+    part.write_bytes(b"x" * 2048)
+    warnings = []
+    with pytest.raises(TransferFailed, match="the deadline has passed"):
+        transfer.pull("u@host:/a.gz", stage, size=4096, sha256="0" * 64,
+                      options=ScpOptions(deadline=time.time() - 1), warn=warnings.append)
+    assert not part.exists()
+    assert warnings and "2 KiB" in warnings[0] and "a.gz" in warnings[0]
+
+
+def test_resume_keeps_the_partial_for_the_next_attempt(tmp_path):
+    """With resume the partial is continued, so a failed attempt keeps it (a mismatch is what discards it)."""
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    part = stage / ".a.gz.part"
+    part.write_bytes(b"x" * 2048)
+    warnings = []
+    with pytest.raises(TransferFailed, match="the deadline has passed"):
+        transfer.pull("u@host:/a.gz", stage, size=4096, sha256="0" * 64, resume=True,
+                      options=ScpOptions(protocol="sftp", deadline=time.time() - 1), warn=warnings.append)
+    assert part.exists()
+    assert warnings and "continuing a.gz from 2 KiB" in warnings[0]
+
+
+def test_resume_is_ignored_without_a_size(tmp_path):
+    """Resuming needs to know how big the file should be: without a size the partial goes, as before."""
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    part = stage / ".a.gz.part"
+    part.write_bytes(b"x" * 2048)
+    with pytest.raises(TransferFailed, match="the deadline has passed"):
+        transfer.pull("u@host:/a.gz", stage, resume=True,
+                      options=ScpOptions(protocol="sftp", deadline=time.time() - 1))
+    assert not part.exists()
 
 
 def test_a_one_letter_host_with_a_slash_is_a_drive():

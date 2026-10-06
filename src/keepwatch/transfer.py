@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -207,6 +207,52 @@ def _ssh_beside(scp: str) -> str:
     return str(path.with_name("ssh" + path.suffix))
 
 
+def _sftp_beside(scp: str) -> str:
+    """The sftp program that belongs to this scp (scp itself cannot resume a partial file)."""
+    path = Path(scp)
+    if not platform.has_path_separator(scp):
+        return "sftp"
+    return str(path.with_name("sftp" + path.suffix))
+
+
+def format_bytes(count: int) -> str:
+    """A size as text with binary units: 512 B, 1.5 KiB, 2.6 GiB."""
+    for unit, step in (("GiB", 1024**3), ("MiB", 1024**2), ("KiB", 1024)):
+        if count >= step:
+            return f"{count / step:.1f}".rstrip("0").rstrip(".") + f" {unit}"
+    return f"{count} B"
+
+
+def _quoted_for_sftp(path: str) -> str:
+    """A path for sftp's batch parser, which splits on whitespace but honours double quotes and backslashes."""
+    return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def sftp_reget_argv(source: Endpoint, options: ScpOptions, batch: Path) -> list[str]:
+    """The sftp command line that continues a partial file (scp itself cannot resume).
+
+    sftp takes the scp options it shares (-o, -i, -P, -F is part of ssh_options) and reads its commands from
+    `batch`. The program is the `sftp` beside `scp_command[0]`, so a watch that names its scp names its sftp.
+    """
+    argv = [_sftp_beside(options.scp_command[0]), *options.ssh_options]
+    argv += ["-o", "NumberOfPasswordPrompts=1"] if options.password_env else ["-o", "BatchMode=yes"]
+    if options.known_hosts is not None:
+        argv += known_hosts_option(options.known_hosts)
+    if options.identity is not None:
+        argv += ["-i", str(options.identity), "-o", "IdentitiesOnly=yes"]
+    port = options.port if options.port is not None else source.port
+    if port is not None:
+        argv += ["-P", str(port)]
+    argv += ["-q", "-b", str(batch)]
+    host = f"{source.user}@{source.host}" if source.user else str(source.host)
+    return [*argv, host]
+
+
+def sftp_reget_batch(source: Endpoint, part: Path) -> str:
+    """The sftp batch that continues `part` from the remote file (reget resumes from the local size)."""
+    return f"reget {_quoted_for_sftp(source.path)} {_quoted_for_sftp(str(part))}\n"
+
+
 @dataclass(frozen=True)
 class ScpOptions:
     """How to run scp. `ssh_options` are extra scp arguments placed before keepwatch's own (ssh keeps the first value)."""
@@ -339,6 +385,75 @@ def write_askpass(directory: Path, variable: str) -> Path:
     return path
 
 
+@contextlib.contextmanager
+def _transfer_env(options: ScpOptions) -> Iterator[dict[str, str]]:
+    """The environment for scp and sftp: the askpass launcher when a password variable is named."""
+    env = dict(os.environ)
+    with contextlib.ExitStack() as stack:
+        if options.password_env:
+            if options.password_env not in os.environ:
+                raise TransferFailed(
+                    f"password_env names {options.password_env}, which is not set in keepwatch's environment "
+                    "(on Windows: setx; for the service, restart it after setting the variable)"
+                )
+            work = stack.enter_context(tempfile.TemporaryDirectory(prefix="keepwatch-scp-", dir=_askpass_dir()))
+            env["SSH_ASKPASS"] = str(write_askpass(Path(work), options.password_env))
+            env["SSH_ASKPASS_REQUIRE"] = "force"
+            env.setdefault("DISPLAY", ":0")  # OpenSSH before 8.4 uses SSH_ASKPASS only when DISPLAY is set
+        yield env
+
+
+def _deadline_limit(options: ScpOptions, what: str, target: str) -> float | None:
+    """The timeout for one run: the caller's timeout, never past the deadline; None means no limit."""
+    limit = options.timeout
+    if options.deadline is not None:
+        left = options.deadline - time.time()
+        if left <= 0:
+            raise TransferFailed(f"no time left for {what} {target} (the deadline has passed)")
+        limit = left if limit is None else min(limit, left)
+    return limit
+
+
+def _verify_part(part: Path, src: Endpoint, size: int | None, sha256: str | None) -> None:
+    """Check a fetched part against what the observer reported: a mismatch means it changed or is corrupt."""
+    actual_size = part.stat().st_size
+    if size is not None and actual_size != size:
+        raise TransferMismatch(f"pulled {actual_size} bytes of {src.scp_arg()}, expected {size}")
+    if sha256 is not None:
+        actual = sha256_file(part)
+        if actual != sha256.lower():
+            raise TransferMismatch(f"sha256 of the pulled {src.scp_arg()} is {actual}, expected {sha256.lower()}")
+
+
+def _discard_part(part: Path, name: str, warn: Callable[[str], None] | None) -> None:
+    """Delete a partial file from an earlier attempt (a killed transfer leaves one behind), saying the cost."""
+    try:
+        wasted = part.stat().st_size
+    except OSError:
+        wasted = 0
+    part.unlink(missing_ok=True)
+    if wasted and warn is not None:
+        warn(f"discarded {format_bytes(wasted)} of a partial {name} from an earlier attempt")
+
+
+def _sftp_reget(source: Endpoint, part: Path, options: ScpOptions, report: Report | None) -> None:
+    """Continue a partial pull with sftp's reget: what scp itself cannot do (`resume` in the pull recipe)."""
+    limit = _deadline_limit(options, "sftp", f"{source.scp_arg()} -> {part}")
+    with tempfile.TemporaryDirectory(prefix="keepwatch-sftp-", dir=_askpass_dir()) as work:
+        batch = Path(work) / "reget.batch"
+        batch.write_text(sftp_reget_batch(source, part), encoding="utf-8")
+        argv = sftp_reget_argv(source, options, batch)
+        started = time.monotonic()
+        with _transfer_env(options) as env:
+            returncode, stdout, stderr, timed_out = _run(argv, env, limit)
+    if report is not None:
+        report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
+    if timed_out:
+        raise TransferFailed(f"sftp timed out after {format_duration(limit or 0)}: {source.scp_arg()} -> {part}")
+    if returncode != 0:
+        raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
+
+
 def _run(argv: list[str], env: dict[str, str], timeout: float | None) -> tuple[int | None, str, str, bool]:
     try:
         if platform.IS_WINDOWS:
@@ -402,19 +517,8 @@ def copy(
         if left <= 0:
             raise TransferFailed(f"no time left for scp {src.scp_arg()} -> {dst.scp_arg()} (the deadline has passed)")
         limit = left if limit is None else min(limit, left)
-    env = dict(os.environ)
     started = time.monotonic()
-    with contextlib.ExitStack() as stack:
-        if options.password_env:
-            if options.password_env not in os.environ:
-                raise TransferFailed(
-                    f"password_env names {options.password_env}, which is not set in keepwatch's environment "
-                    "(on Windows: setx; for the service, restart it after setting the variable)"
-                )
-            work = stack.enter_context(tempfile.TemporaryDirectory(prefix="keepwatch-scp-", dir=_askpass_dir()))
-            env["SSH_ASKPASS"] = str(write_askpass(Path(work), options.password_env))
-            env["SSH_ASKPASS_REQUIRE"] = "force"
-            env.setdefault("DISPLAY", ":0")  # OpenSSH before 8.4 uses SSH_ASKPASS only when DISPLAY is set
+    with _transfer_env(options) as env:
         returncode, stdout, stderr, timed_out = _run(argv, env, limit)
     if report is not None:
         report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
@@ -426,8 +530,17 @@ def copy(
 
 
 def sha256_file(path: str | os.PathLike[str]) -> str:
+    """The sha256 of a file as hex, read in chunks so a large file never sits in memory.
+
+    An unreadable file raises the OSError from open/read: callers decide what that means (the files observer
+    treats it as "not ready yet", a pull as "try again").
+    """
     digest = hashlib.sha256()
-    with open(path, "rb") as handle:
+    try:
+        handle = open(path, "rb")
+    except OSError:
+        raise  # the OSError is the contract, not an accident
+    with handle:
         while chunk := handle.read(CHUNK):
             digest.update(chunk)
     return digest.hexdigest()
@@ -463,9 +576,17 @@ def pull(
     sha256: str | None = None,
     on_conflict: str = "skip-identical",
     options: ScpOptions = ScpOptions(),
+    resume: bool = False,
     report: Report | None = None,
+    warn: Callable[[str], None] | None = None,
 ) -> Path:
-    """Copy a remote file into local_dir through .NAME.part, verify size and sha256 when given, rename it (an identical existing file is a no-op)."""
+    """Copy a remote file into local_dir through .NAME.part, verify size and sha256 when given, rename it (an identical existing file is a no-op).
+
+    A partial file from an earlier (killed) attempt is discarded, and `warn` is told how many bytes that cost.
+    With `resume` — which needs the sftp protocol, a known size and a sha256 — it is continued with sftp's
+    reget instead, and kept if this attempt fails; a resumed file that does not verify is pulled again from
+    the start, once.
+    """
     src = _endpoint(remote)
     if not src.remote:
         raise ValueError(f"pull needs a remote source (user@host:path), got {src.scp_arg()!r}")
@@ -495,19 +616,33 @@ def pull(
             if final.exists():
                 return final  # a numbered copy of this exact file is already there
     part = directory / f".{name}.part"
-    part.unlink(missing_ok=True)
+    kept = part.stat().st_size if part.exists() else 0
+    resumable = resume and kept > 0 and size is not None and kept < size
+    if resumable:
+        if warn is not None:
+            warn(f"continuing {name} from {format_bytes(kept)} left by an earlier attempt")
+    else:
+        _discard_part(part, name, warn)
+    attempts = [kept, 0] if resumable else [0]
     try:
-        copy(src, Endpoint(path=str(part)), options=options, report=report)
-        actual_size = part.stat().st_size
-        if size is not None and actual_size != size:
-            raise TransferMismatch(f"pulled {actual_size} bytes of {src.scp_arg()}, expected {size}")
-        if sha256 is not None:
-            actual = sha256_file(part)
-            if actual != sha256.lower():
-                raise TransferMismatch(f"sha256 of the pulled {src.scp_arg()} is {actual}, expected {sha256.lower()}")
-        platform.replace(part, final)
+        for index, offset in enumerate(attempts):
+            try:
+                if offset:
+                    _sftp_reget(src, part, options, report)
+                else:
+                    copy(src, Endpoint(path=str(part)), options=options, report=report)
+                _verify_part(part, src, size, sha256)
+                platform.replace(part, final)
+                break
+            except TransferMismatch:
+                if index + 1 == len(attempts):
+                    raise
+                if warn is not None:
+                    warn(f"the resumed transfer of {name} did not verify; pulling it again from the start")
+                part.unlink(missing_ok=True)
     finally:
-        part.unlink(missing_ok=True)
+        if not resumable or not part.exists():
+            part.unlink(missing_ok=True)  # a resumable partial is kept: the next attempt continues it
     return final
 
 
@@ -560,6 +695,9 @@ class Transfer:
     known_hosts file), port, ssh_options (extra scp arguments), timeout (seconds, per scp run) and deadline
     (the epoch after which this call's scp must not run; the hook's remaining time by default). A check may
     only use tcp_open: transferring files changes things, which a check must not do.
+
+    `pull` also takes `resume=True` (needs protocol="sftp" and a known size and sha256): an unfinished
+    `.NAME.part` from an earlier attempt is continued with the sftp client instead of being discarded.
     """
 
     def __init__(
@@ -569,11 +707,13 @@ class Transfer:
         report: Report | None = None,
         remaining: Callable[[], float] | None = None,
         writable: bool = True,
+        warn: Callable[[str], None] | None = None,
     ) -> None:
         self._base = base
         self._report = report
         self._remaining = remaining
         self._writable = writable
+        self._warn = warn
 
     def _options(self, options: dict[str, Any]) -> ScpOptions:
         if not self._writable:
@@ -605,18 +745,21 @@ class Transfer:
         size: int | None = None,
         sha256: str | None = None,
         on_conflict: str = "skip-identical",
+        resume: bool = False,
         **options: Any,
     ) -> Path:
         """Copy `remote` into local_dir through `.NAME.part`, verify size/sha256 when given, rename; returns the path.
 
         An existing file with the given sha256 makes this a no-op; any other existing file is an error unless
-        on_conflict is "rename" (NAME-1.ext) or "overwrite".
+        on_conflict is "rename" (NAME-1.ext) or "overwrite". With `resume` (needs protocol="sftp" and a
+        sha256) an unfinished `.NAME.part` is continued with sftp's reget instead of starting over.
         """
         scp = self._options(options)
         directory = Path(local_dir)
         if not directory.is_absolute():
             directory = self._base / directory
-        return pull(remote, directory, size=size, sha256=sha256, on_conflict=on_conflict, options=scp, report=self._report)
+        return pull(remote, directory, size=size, sha256=sha256, on_conflict=on_conflict, options=scp,
+                    resume=resume, warn=self._warn, report=self._report)
 
     def push(self, path: str | os.PathLike[str], remote_dir: str, *, marker: str = "sha256", **options: Any) -> str:
         """Upload a file into remote_dir, then NAME.sha256 (sha256sum format) unless marker="none"; returns the remote path."""

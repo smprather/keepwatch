@@ -11,6 +11,13 @@ or runs out of its share is logged, the rest of the queue is still attempted, an
 so the poll retries, and the files already completed are recorded as they finish: they are not pulled or pushed
 twice.
 
+A pull that is killed (a stop, a service restart, a timeout that kills the process) leaves a hidden
+`.NAME.part` in the staging folder. The next attempt **discards it and says how many bytes that cost**, and
+`part_max_age` (default 7 days) deletes stale ones after a successful pull. With `resume = true` — which needs
+`protocol = "sftp"` and `checksum = true` — that partial is **continued** with the sftp client instead of being
+thrown away (scp itself cannot resume), and the result is verified like any other pull: a resumed file that does
+not verify is pulled again from the start, once.
+
 ## pull: a remote directory → a local staging folder
 
 ```toml

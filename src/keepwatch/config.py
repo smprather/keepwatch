@@ -319,6 +319,7 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
         Key("pattern", "str", "*", "Pull only file names matching this glob."),
         Key("ignore", "str_list", DEFAULT_IGNORE, "Never pull file names matching any of these globs."),
         Key("settle", "duration", 10.0, "A remote file must be unchanged this long before it is pulled."),
+        Key("protocol", "str", "scp", "`scp` (classic; scp-only servers accept it) or `sftp` (needed for `resume`)."),
         Key("checksum", "bool", True, "Compute sha256 on the source host and verify every pull against it."),
         Key(
             "on_conflict",
@@ -333,6 +334,21 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
             0.0,
             "Cap one file's transfer. 0 gives each file an equal share of what is left of `action_timeout`, so "
             "one slow file cannot starve the queue; a positive value caps every file harder.",
+        ),
+        Key(
+            "resume",
+            "bool",
+            False,
+            "Continue an unfinished `.NAME.part` from an earlier attempt instead of discarding it and starting "
+            "over: needs `protocol = \"sftp\"` and `checksum = true` (scp itself cannot resume). A resumed file "
+            "is verified like any other; if it does not verify, it is pulled again from the start.",
+        ),
+        Key(
+            "part_max_age",
+            "duration",
+            7 * 86400.0,
+            "Delete `.NAME.part` files older than this from `local_dir` after a successful pull (a killed "
+            "transfer leaves one); 0 disables the cleanup.",
         ),
         Key(
             "delete_remote",
@@ -427,6 +443,23 @@ def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any],
             table="settings",
             topic="recipes",
         )
+    if recipe == "pull" and values["resume"]:
+        if values["protocol"] != "sftp":
+            collector.add(
+                'resume = true needs protocol = "sftp": scp cannot continue a partial file (a server without '
+                'SFTP cannot resume either)',
+                key="resume",
+                table="settings",
+                topic="recipes",
+            )
+        if not values["checksum"]:
+            collector.add(
+                "resume = true needs checksum = true: continuing a partial file is safe only when the result is "
+                "verified",
+                key="resume",
+                table="settings",
+                topic="recipes",
+            )
     if recipe == "push":
         try:
             dest_remote = not values["dest"] or parse_endpoint(values["dest"]).remote

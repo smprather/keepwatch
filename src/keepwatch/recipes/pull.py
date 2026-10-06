@@ -16,12 +16,13 @@ import subprocess
 import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, cast
 
 from keepwatch.ctx import CommandFailed, Ctx, as_text
 from keepwatch.recipes import file_budget
 from keepwatch.remote import ssh_argv, watcher_source
-from keepwatch.transfer import TransferFailed, TransferMismatch, with_known_hosts
+from keepwatch.transfer import TransferFailed, TransferMismatch, format_bytes, with_known_hosts
 
 LEDGER = "pulled"
 TO_DELETE = "to_delete"
@@ -37,7 +38,8 @@ def event_key(event: dict[str, Any]) -> str:
 
 
 def transfer_options(settings: Mapping[str, Any]) -> dict[str, Any]:
-    options = {name: settings[name] for name in ("port", "identity", "known_hosts") if settings[name] is not None}
+    options = {name: settings[name] for name in ("protocol", "port", "identity", "known_hosts")
+               if settings[name] is not None}
     return {**options, "ssh_options": list(settings["ssh_options"])}
 
 
@@ -159,6 +161,21 @@ def check(ctx: Ctx) -> tuple[bool, list[dict[str, Any]]]:
     return bool(new) or bool(due_deletions(ctx)), new
 
 
+def cleanup_parts(ctx: Ctx, directory: Path, max_age: float) -> None:
+    """Delete `.NAME.part` files left by killed attempts (older than `part_max_age`); 0 disables the cleanup."""
+    if max_age <= 0:
+        return
+    cutoff = time.time() - max_age
+    for part in sorted(directory.glob(".*.part")):
+        try:
+            info = part.stat()
+        except OSError:
+            continue
+        if info.st_mtime < cutoff:
+            part.unlink(missing_ok=True)
+            ctx.log.warning("deleted %s (%s left by a killed transfer)", part.name, format_bytes(info.st_size))
+
+
 def on_true(ctx: Ctx) -> None:
     settings = ctx.settings
     pulled = ctx.ledger(LEDGER)
@@ -166,6 +183,7 @@ def on_true(ctx: Ctx) -> None:
     queue = ctx.ledger(TO_DELETE) if settings["delete_remote"] else None
     options = transfer_options(settings)
     fresh: list[str] = []
+    pulled_now = 0
     error: Exception | None = None
     try:
         items = [item for item in ctx.payload if item["key"] not in pulled and item["key"] not in skipped]
@@ -184,6 +202,7 @@ def on_true(ctx: Ctx) -> None:
                     size=item["size"],
                     sha256=sha256,
                     on_conflict=settings["on_conflict"],
+                    resume=settings["resume"],
                     deadline=time.time() + budget,
                     **options,
                 )
@@ -201,7 +220,10 @@ def on_true(ctx: Ctx) -> None:
                 queue.add(entry)
                 fresh.append(entry)
             pulled.add(item["key"])
+            pulled_now += 1
             ctx.log.info("pulled %s", item["name"], extra={"local": str(final), "size": item["size"]})
+        if pulled_now:
+            cleanup_parts(ctx, Path(settings["local_dir"]), settings["part_max_age"])
     except Exception as exc:  # deletes below still run for what was pulled; the error is raised after them
         error = error or exc
     if queue is not None and (fresh or error is None):

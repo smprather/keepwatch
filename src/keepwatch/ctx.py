@@ -234,6 +234,7 @@ class Ctx:
             report=self._report_transfer,
             remaining=self._remaining,
             writable=self.hook != "check",
+            warn=self.log.warning,
         )
 
     def _report_transfer(
