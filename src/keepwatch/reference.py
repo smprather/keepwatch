@@ -24,6 +24,7 @@ TOPICS: tuple[tuple[str, str], ...] = (
     ("failures", "Failed polls, backoff, offline, enable, retry_after and alert_command"),
     ("storage", "Directories, persistent and run-only data, ledgers, renaming"),
     ("logging", "The log file, every event, ctx.log and keepwatch logs"),
+    ("tui", "The live terminal monitor: what it shows, its keys, and that it is read-only"),
     ("environment", "What hooks run inside: cwd, stdin, variables, PATH, ssh-agent, timeouts"),
     ("dependencies", "python_dependencies and uv"),
     ("reload", "How config changes are picked up while the service runs"),

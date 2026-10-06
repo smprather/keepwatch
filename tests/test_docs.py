@@ -55,6 +55,7 @@ def test_help_points_agents_at_the_docs(xdg):
 
 
 KEY_FACTS = {
+    "tui": ["keepwatch tui", "read-only", "polling", "space", "status.json", "logs --json", "countdown", "orphaned"],
     "python": ["keepwatch.Unknown", "(True, payload)", "1 MiB", "keepwatch_watch", "top-level"],
     "config": ["single-quoted"],
     "executables": ["KEEPWATCH_PAYLOAD_OUT", "KEEPWATCH_PAYLOAD_FILE", "KEEPWATCH_SETTINGS_FILE", "KEEPWATCH_EVENTS_FILE", "[check_exit_codes]", "/bin/sh -c", "Windows PowerShell", ".ps1", "UTF8Encoding", "keepwatch kit"],

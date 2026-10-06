@@ -6,6 +6,8 @@ keepwatch runs *watches*: small directories holding a `config.toml` plus a check
 
 Watches can also react to events instead of polling: observers keep commands, local directories or remote directories (over one ssh connection, with nothing installed remotely) under watch. Built-in recipes move files between machines with verified scp transfers; `keepwatch docs relay` walks through relaying files host A → this machine → host B.
 
+`keepwatch tui` watches all of it live in one screen: every watch and its state, the countdown to its next poll, and the actions it has taken with their results. It is read-only, so it is safe to leave open beside the running service.
+
 ## Install
 
 ```sh
@@ -23,6 +25,7 @@ On Windows, `keepwatch new <name> --template powershell` starts a PowerShell wat
 ## Learn more
 
 ```sh
+keepwatch tui            # a live view of every watch (read-only)
 keepwatch docs           # list the reference topics
 keepwatch docs agent     # the contract for writing a watch (start here)
 keepwatch docs --all     # everything
