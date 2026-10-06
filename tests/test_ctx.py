@@ -66,7 +66,7 @@ def test_ledger_read_only_and_key_type(tmp_path):
         ledger.add("k")
     with pytest.raises(TypeError):
         # a non-str key is exactly what this test asserts the ledger refuses
-        Ledger(tmp_path / "y.json").add(Path("/k"))  # type: ignore[reportArgumentType]
+        Ledger(tmp_path / "y.json").add(Path("/k"))  # type: ignore
 
 
 def test_ctx_ledger_is_read_only_in_check(tmp_path):

@@ -19,7 +19,7 @@ from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn, cast
 
 import rich_click as click
 from rich.markdown import Markdown
@@ -67,7 +67,8 @@ COMMAND_GROUPS = {
         {"name": "Reference", "commands": ["docs"]},
     ]
 }
-_PLAIN_BOXES = {
+# rich-click's box-style options, keyed by its own field names: its annotations are stricter than these strings
+_PLAIN_BOXES: dict[str, Any] = {
     "style_commands_panel_box": "SIMPLE_HEAD",
     "style_options_panel_box": "SIMPLE_HEAD",
     "style_errors_panel_box": "SIMPLE_HEAD",
@@ -78,12 +79,12 @@ _LOG_FILE: Path | None = None
 def help_config(plain: bool) -> click.RichHelpConfiguration:
     if plain:
         return click.RichHelpConfiguration(
-            command_groups=COMMAND_GROUPS,
+            command_groups=cast(Any, COMMAND_GROUPS),
             text_markup=None,
             color_system=None,
             **_PLAIN_BOXES,
         )
-    return click.RichHelpConfiguration(command_groups=COMMAND_GROUPS, text_markup="markdown")
+    return click.RichHelpConfiguration(command_groups=cast(Any, COMMAND_GROUPS), text_markup="markdown")
 
 
 @dataclass

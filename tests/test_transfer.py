@@ -138,8 +138,8 @@ def test_a_transfer_needs_a_remote_endpoint():
 def test_bad_options():
     for bad in ({"protocol": "ftp"}, {"password_env": "1BAD"}, {"port": 0}, {"timeout": 0}):
         with pytest.raises(ValueError):
-            # bad values are the point: every one of these must be refused
-            ScpOptions(**bad)  # type: ignore[reportArgumentType]
+            # bad values are the point: every one of these must be refused (ty and pyright both honour a bare ignore)
+            ScpOptions(**bad)  # type: ignore
 
 
 def test_askpass_prints_the_variable(monkeypatch, capfd):

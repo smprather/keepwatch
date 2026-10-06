@@ -120,7 +120,11 @@ def wanted(name, options):
 def sha256_of(path, output=None, heartbeat=None):
     """The file's sha256, read in chunks; with an output, heartbeats keep flowing while a large file is hashed."""
     digest = hashlib.sha256()
-    with open(path, "rb") as handle:
+    try:
+        handle = open(path, "rb")
+    except OSError:
+        raise  # the caller decides what an unreadable file means (one still being written, say)
+    with handle:
         while True:
             chunk = handle.read(CHUNK)
             if not chunk:
@@ -159,7 +163,10 @@ class Watcher(object):
     def scan(self):
         """Report settled files. Returns True while some file is still settling. Raises OSError if the directory is gone."""
         settle = self.options["settle"]
-        names = os.listdir(self.directory)
+        try:
+            names = os.listdir(self.directory)
+        except OSError:
+            raise  # documented above: the directory may be gone, and the caller reports that
         now = time.monotonic()
         wall = time.time()
         present = set()
@@ -296,7 +303,7 @@ def delete_files(options, output):
     directory = os.path.realpath(os.path.expanduser(options["dir"]).encode("utf-8", "surrogateescape"))
     for index, item in enumerate(options["files"]):
         try:
-            result = delete_one(item, directory)
+            result: dict = delete_one(item, directory)
         except Exception as exc:  # keep going: one odd entry must not stop the others
             result = {"event": "failed", "reason": str(exc)}
         result["path"] = item.get("path")
@@ -307,7 +314,10 @@ def delete_files(options, output):
 
 
 def parse_options(text):
-    given = json.loads(text)
+    try:
+        given = json.loads(text)
+    except ValueError:
+        raise  # not JSON at all: the caller says so on stderr and exits
     if not isinstance(given, dict):
         raise ValueError("options must be a JSON object")
     unknown = sorted(set(given) - set(DEFAULTS))

@@ -3,7 +3,7 @@
 ## Layout
 
 | Path | Contents |
-|---|---|
+| --- | --- |
 | `$XDG_CONFIG_HOME/keepwatch/config.toml` | The global config (optional). |
 | `$XDG_CONFIG_HOME/keepwatch/watches/<name>/` | A watch: `config.toml` plus code. |
 | `$XDG_STATE_HOME/keepwatch/logs/keepwatch.jsonl` | The log, rotated to `keepwatch.jsonl.1`, `.2`, … |
