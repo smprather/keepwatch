@@ -1,6 +1,6 @@
 """keepwatch: poll conditions and run actions, from login onward."""
 
-__version__ = "2026.10.5"
+__version__ = "2026.10.6"
 
 from keepwatch.ctx import CommandFailed, Ctx, Ledger, LedgerCorrupt, LedgerReadOnly, Unknown  # noqa: E402
 from keepwatch.transfer import TransferFailed  # noqa: E402
