@@ -284,6 +284,27 @@ def test_resume_is_ignored_without_a_size(tmp_path):
     assert not part.exists()
 
 
+def test_a_transfer_publishes_what_it_is_doing(tmp_path, monkeypatch):
+    """status.json (and so the TUI) learns what a hook is transferring, with the partial's size (issue 3)."""
+    monkeypatch.setenv("KEEPWATCH_RUN_DIR", str(tmp_path))
+    part = tmp_path / ".a.bin.part"
+    part.write_bytes(b"x" * 300)
+    with transfer._activity(name="a.bin", part=str(part), size=1000):
+        activity = transfer.read_activity(tmp_path)
+        assert activity is not None
+        assert activity["name"] == "a.bin" and activity["part_size"] == 300 and activity["size"] == 1000
+        assert activity["started_at"]
+    assert transfer.read_activity(tmp_path) is None  # gone when the transfer ends
+
+
+def test_transfer_progress_and_its_text():
+    activity = {"name": "a.bin", "part": "/s/.a.bin.part", "size": 4096, "part_size": 1024}
+    assert transfer.transfer_progress(activity) == 0.25
+    assert transfer.activity_text(activity) == "pulling a.bin 25% (1 KiB/4 KiB)"
+    assert transfer.transfer_progress({"name": "a", "size": 0}) is None
+    assert transfer.activity_text({"name": "a.bin", "size": 4096}) == "pushing a.bin (4 KiB)"
+
+
 def test_a_one_letter_host_with_a_slash_is_a_drive():
     assert parse_endpoint("h:/a.gz") == Endpoint(path="h:/a.gz")
     assert parse_endpoint("me@h:/a.gz").remote and parse_endpoint("scp://h/a.gz").remote

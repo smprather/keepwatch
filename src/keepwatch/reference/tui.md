@@ -5,6 +5,9 @@ until its next poll, and the stream of actions with their results. It reads `sta
 follows the log file. It never writes anything, so it is safe beside a running service, and several monitors may
 run at once.
 
+`status.json` carries a `format` number (currently 1): new fields are added without notice, and that number goes
+up only if an existing field changes meaning, so a consumer can rely on the ones it knows.
+
 ## What it shows
 
 - **The banner**: whether the service is running, its pid and version, and how old the status is. When the
@@ -14,8 +17,14 @@ run at once.
   `invalid`, `orphaned`); `COND`; `FAIL`; `LAST` (outcome and age); `NEXT` (a countdown, `due`, or `retry …` for
   an offline watch); `OBS` (running observers); and `NOTE`, the first thing that is wrong: an invalid config, a
   config error, a missing directory, orphaned state, queued events, a user-disabled watch.
+- **What is running right now**: the service puts the hook it is running (`in_flight`) and what that hook is
+  transferring (`transfer`, with the partial file's size) into `status.json`, so `keepwatch status` and this
+  monitor show them without reading the log.
 - **The pane**: the selected watch's recent records, oldest first — the same lines `keepwatch logs` prints.
-  While a poll is in flight the pane header names it and how long it has been running.
+  While a hook is running the pane header names it and how long it has been going: `recipe pull:on_true running
+  1m30s · pulling psg-export.gz 74% (2.6 GiB/3.7 GiB), 2.1 MiB/s, 8m left`. A transfer says how far it has got
+  (from the partial file's size), how fast and how long is left once there are two samples of it; an upload says
+  its size, since scp reports no progress of its own.
 
 Below 80 columns `NOTE` is dropped, and then `OBS`.
 

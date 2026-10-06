@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import functools
+import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from keepwatch.config import GlobalConfig, WatchConfig
 from keepwatch.hooks import CHECK, NO_CHECK, watch_hooks
 from keepwatch.logstore import Sink, make_record
+from keepwatch.offline import iso_time
 from keepwatch.paths import Paths
 from keepwatch.runner import FAILED_STATUSES, HookCall, HookResult, Runner
 from keepwatch.state import Outcome, WatchState, finish_poll, plan_poll
@@ -104,6 +106,11 @@ class PollEngine:
     def global_config(self) -> GlobalConfig:
         return self._global
 
+    @property
+    def pid(self) -> int:
+        """The process whose run dirs this engine's hooks use (the service, or a manual poll)."""
+        return self._pid
+
     def poll(
         self,
         watch: WatchConfig,
@@ -113,6 +120,7 @@ class PollEngine:
         dry_run: bool = False,
         trial: bool = False,
         events: Sequence[dict[str, Any]] = (),
+        on_hook: Callable[[dict[str, Any] | None], None] | None = None,
     ) -> PollReport:
         poll_id = uuid.uuid4().hex[:12]
         events = tuple(events)
@@ -127,7 +135,7 @@ class PollEngine:
         elif fake is not None:
             outcome, reason, payload = fake.outcome, "faked with --fake", fake.payload
         else:
-            result = self._run(watch, CHECK, poll_id, state.condition, None, watch.check_timeout, events)
+            result = self._run(watch, CHECK, poll_id, state.condition, None, watch.check_timeout, events, on_hook)
             outcome, reason, payload = result.outcome(), result.reason, result.payload
         plan = plan_poll(state, outcome, hooks)
         answered = outcome in (Outcome.TRUE, Outcome.FALSE, Outcome.UNKNOWN)
@@ -151,7 +159,8 @@ class PollEngine:
             after, failed = finish_poll(plan, [(hook, True) for hook in plan.actions])
         else:
             for hook in plan.actions:
-                result = self._run(watch, hook, poll_id, plan.state.condition, payload, watch.action_timeout, events)
+                result = self._run(watch, hook, poll_id, plan.state.condition, payload, watch.action_timeout, events,
+                                   on_hook)
                 results.append(result)
                 if not result.succeeded:
                     break
@@ -190,7 +199,7 @@ class PollEngine:
             level = "INFO" if message.get("exit_code") == 0 else "WARNING"
             self._sink(make_record("command", level=level, **tag, **fields))
             return
-        level = message.get("level") if message.get("level") in _PLUGIN_LEVELS else "INFO"
+        level = str(message.get("level")) if message.get("level") in _PLUGIN_LEVELS else "INFO"
         self._sink(
             make_record(
                 "plugin.log",
@@ -212,6 +221,7 @@ class PollEngine:
         payload: Any,
         timeout: float,
         events: tuple[dict[str, Any], ...],
+        on_hook: Callable[[dict[str, Any] | None], None] | None = None,
     ) -> HookResult:
         tag = {"watch": watch.name, "poll_id": poll_id, "hook": hook}
         call = HookCall(
@@ -228,7 +238,13 @@ class PollEngine:
             events=events,
             on_message=functools.partial(self._emit_message, tag),
         )
-        result = self._runner.run(call)
+        if on_hook is not None:
+            on_hook({"hook": hook, "poll_id": poll_id, "timeout": timeout, "started_at": iso_time(time.time())})
+        try:
+            result = self._runner.run(call)
+        finally:
+            if on_hook is not None:
+                on_hook(None)  # nothing of this watch is running for the moment
         for message in result.messages:
             self._emit_message(tag, message)
         level = "ERROR" if result.status in FAILED_STATUSES else "INFO"

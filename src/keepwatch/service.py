@@ -58,8 +58,8 @@ class Service:
         self._start_threads = start_threads
         self._clock = clock
         self._runner = runner or Runner()
-        self.global_config: GlobalConfig | None = None
-        self.engine: PollEngine | None = None
+        self._global_config: GlobalConfig | None = None
+        self._engine: PollEngine | None = None
         self.runners: dict[str, WatchRunner] = {}
         self._retired: list[WatchRunner] = []
         self._global_signature: Signature = None
@@ -71,11 +71,25 @@ class Service:
         self._tick_error: str | None = None
         self._stale_before = stale_before
 
+    @property
+    def global_config(self) -> GlobalConfig:
+        """The config the service runs with: set by start(), so it is never None while the service runs."""
+        if self._global_config is None:
+            raise RuntimeError("the service has not started yet")
+        return self._global_config
+
+    @property
+    def engine(self) -> PollEngine:
+        """The engine its watches poll through: set by start(), so it is never None while the service runs."""
+        if self._engine is None:
+            raise RuntimeError("the service has not started yet")
+        return self._engine
+
     def start(self) -> None:
         """Load the global config (raises ConfigError if broken), log service.start, run the first tick."""
         self._global_signature = file_signature(self.config_path)
-        self.global_config = load_global_config(self.config_path, self.paths)
-        self.engine = PollEngine(
+        self._global_config = load_global_config(self.config_path, self.paths)
+        self._engine = PollEngine(
             runner=self._runner,
             paths=self.paths,
             global_config=self.global_config,
@@ -170,7 +184,7 @@ class Service:
             self._global_error = str(exc)
             self._sink(make_record("config.error", level="ERROR", path=str(self.config_path), error=str(exc)))
             return
-        self.global_config = config
+        self._global_config = config
         self._global_error = None
         self.engine.set_global_config(config)
         self._watch_signatures.clear()
@@ -252,6 +266,8 @@ class Service:
 
     def write_status(self, now: float, *, running: bool = True) -> None:
         document = {
+            # status.json's own format: new fields are additive; bump this only if an existing field changes meaning
+            "format": 1,
             "service": {
                 "running": running,
                 "pid": os.getpid(),

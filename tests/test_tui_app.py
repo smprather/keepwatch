@@ -271,6 +271,27 @@ def test_an_in_flight_poll_is_named_in_the_pane_header(xdg, make_watch):
         run_app(monitor, check)
 
 
+def test_the_service_view_of_an_in_flight_hook_is_shown(xdg, make_watch):
+    """status.json's own in_flight and transfer win over the log's guess (issue 3)."""
+    make_watch("a", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry(
+        in_flight={"hook": "on_true", "poll_id": "p1", "target": "recipe pull:on_true",
+                   "started_at": iso_time(time.time() - 90)},
+        transfer={"name": "big.bin", "part": "/stage/.big.bin.part", "size": 4096, "part_size": 3072,
+                  "started_at": iso_time(time.time() - 90)},
+    )}))
+    monitor = Monitor(xdg, xdg.config_file)
+
+    async def check(app, pilot):
+        assert cell(app, 0, "STATE") == "polling"
+        assert "recipe pull:on_true running 1m30s" in app.header
+        assert "pulling big.bin 75%" in app.header
+
+    with running(xdg):
+        monitor.refresh()
+        run_app(monitor, check)
+
+
 def test_q_quits_the_app(xdg, make_watch):
     make_watch("a", config=WATCH_CONFIG)
     publish(xdg, status_document(watches={"a": entry()}))

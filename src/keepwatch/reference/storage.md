@@ -7,7 +7,7 @@
 | `$XDG_CONFIG_HOME/keepwatch/config.toml` | The global config (optional). |
 | `$XDG_CONFIG_HOME/keepwatch/watches/<name>/` | A watch: `config.toml` plus code. |
 | `$XDG_STATE_HOME/keepwatch/logs/keepwatch.jsonl` | The log, rotated to `keepwatch.jsonl.1`, `.2`, … |
-| `$XDG_STATE_HOME/keepwatch/status.json` | Written by the service every master tick. |
+| `$XDG_STATE_HOME/keepwatch/status.json` | Written by the service every master tick, with a `format` number (see `keepwatch docs tui`); each watch's entry says whether it is running a hook right now (`in_flight`) and what that hook is transferring (`transfer`, with the partial file's size). |
 | `$XDG_STATE_HOME/keepwatch/watches/<name>/offline.json` | Present while the watch is offline. |
 | `$XDG_STATE_HOME/keepwatch/watches/<name>/data/` | The watch's persistent storage (`ctx.data_dir`). |
 | `$XDG_STATE_HOME/keepwatch/watches/<name>/data/ledgers/<ledger>.json` | Ledgers. |

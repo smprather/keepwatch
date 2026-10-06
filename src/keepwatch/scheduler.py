@@ -18,6 +18,7 @@ from keepwatch.offline import OfflineMarker, clear_offline, iso_time, read_offli
 from keepwatch.paths import Paths
 from keepwatch.pollengine import PollEngine, PollReport
 from keepwatch.state import ANSWERS, initial_state, next_delay, should_go_offline
+from keepwatch.transfer import read_activity
 
 Alert = Callable[[str, str, str], None]
 CRASH_RETRY = 60.0
@@ -70,6 +71,8 @@ class WatchRunner:
         self.offline: OfflineMarker | None = read_offline(paths, self.name)
         self.last_trial: float | None = None
         self.last_poll: LastPoll | None = None
+        self._in_flight: dict[str, Any] | None = None
+        self._in_flight_lock = threading.Lock()
         self.config_error: str | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -217,7 +220,7 @@ class WatchRunner:
             trial = self.offline is not None
             if trial:
                 self.last_trial = now
-            report = self._engine.poll(config, self.state, trial=trial, events=events)
+            report = self._engine.poll(config, self.state, trial=trial, events=events, on_hook=self._record_in_flight)
         self.state = report.after
         if not report.failed and report.outcome in ANSWERS:
             with self._lock:
@@ -289,7 +292,29 @@ class WatchRunner:
             "config_error": self.config_error,
             "pending_events": len(self.events),
             "observers": self._observer_status(),
+            "in_flight": self._in_flight_snapshot(),
+            "transfer": self._transfer_snapshot(),
         }
+
+    def _record_in_flight(self, report: dict[str, Any] | None) -> None:
+        """The engine says which hook is running now (None between hooks and after the poll)."""
+        with self._in_flight_lock:
+            self._in_flight = report
+
+    def _in_flight_snapshot(self) -> dict[str, Any] | None:
+        """The hook running right now, with the name the log uses for it."""
+        with self._in_flight_lock:
+            report = dict(self._in_flight) if self._in_flight else None
+        if report is not None and self._config.recipe:
+            report["target"] = f"recipe {self._config.recipe}:{report['hook']}"
+        return report
+
+    def _transfer_snapshot(self) -> dict[str, Any] | None:
+        """What the running hook is transferring (its run dir says so; see transfer.read_activity)."""
+        with self._in_flight_lock:
+            if self._in_flight is None:
+                return None
+        return read_activity(self._paths.run_dir(self._engine.pid, self.name))
 
     def _observer_status(self) -> dict[str, Any]:
         with self._observers_lock:

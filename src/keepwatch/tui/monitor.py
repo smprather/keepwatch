@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from keepwatch import transfer
 from keepwatch.config import ConfigError, Discovery, discover_watches, load_global_config
 from keepwatch.durations import format_duration
 from keepwatch.logquery import LogFilter, follow_log, select_records
@@ -62,6 +63,8 @@ class WatchRow:
     watch_dir: str | None
     offline: dict[str, Any] | None
     config_error: str | None
+    in_flight: dict[str, Any] | None
+    transfer: dict[str, Any] | None
 
 
 @dataclass(frozen=True)
@@ -118,6 +121,8 @@ class Monitor:
         self._discovery_at = 0.0
         self._discovery_error: str | None = None
         self._follower_error: str | None = None
+        self._samples: dict[str, tuple[float, int]] = {}
+        self._rates: dict[str, float] = {}
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -206,6 +211,9 @@ class Monitor:
                              stale=stale, running=running)
                    for name in sorted(set(dirs) | set(entries) | set(invalid) | set(saved_watches))]
         watches += [self._orphan_row(name) for name in document["orphaned_state"]]
+        now = time.time()
+        for row in watches:
+            self._sample_transfer(row.name, row.transfer, now)
         problems = [str(problem) for problem in document["problems"]]
         if self._discovery_error:
             problems.insert(0, f"global config error (showing the last good config): {_first_line(self._discovery_error)}")
@@ -229,7 +237,7 @@ class Monitor:
             return WatchRow(
                 name=name, state="invalid", condition=None, failures=None, last_poll=None, next_poll=None,
                 observers=None, pending_events=0, note=f"invalid: {text}", interval=None, description=None,
-                watch_dir=directory, offline=None, config_error=text,
+                watch_dir=directory, offline=None, config_error=text, in_flight=None, transfer=None,
             )
         merged = {**(saved or {}), **(entry or {})}
         if entry is None and saved:
@@ -252,13 +260,15 @@ class Monitor:
             watch_dir=merged.get("watch_dir") or directory,
             offline=merged.get("offline") if isinstance(merged.get("offline"), dict) else None,
             config_error=merged.get("config_error"),
+            in_flight=merged.get("in_flight") if isinstance(merged.get("in_flight"), dict) else None,
+            transfer=merged.get("transfer") if isinstance(merged.get("transfer"), dict) else None,
         )
 
     def _orphan_row(self, name: str) -> WatchRow:
         return WatchRow(
             name=name, state="orphaned", condition=None, failures=None, last_poll=None, next_poll=None, observers=None,
             pending_events=0, note="state of a watch that no longer exists (keepwatch rename)", interval=None,
-            description=None, watch_dir=None, offline=None, config_error=None,
+            description=None, watch_dir=None, offline=None, config_error=None, in_flight=None, transfer=None,
         )
 
     def _believed(self, name: str, entry: dict[str, Any], *, stale: bool, running: bool) -> InFlight | None:
@@ -298,6 +308,27 @@ class Monitor:
 
     # -- records -------------------------------------------------------------
 
+    # -- the transfer a hook is running right now (see transfer.read_activity) --------
+
+    def _sample_transfer(self, name: str, activity: dict[str, Any] | None, now: float) -> None:
+        """Remember two samples of a partial file, so the header can show a rate and an ETA."""
+        part_size = activity.get("part_size") if isinstance(activity, dict) else None
+        if not isinstance(part_size, int):
+            with self._lock:
+                self._samples.pop(name, None)
+                self._rates.pop(name, None)
+            return
+        with self._lock:
+            previous = self._samples.get(name)
+            self._samples[name] = (now, part_size)
+            if previous is not None and now - previous[0] >= 0.2 and part_size >= previous[1]:
+                self._rates[name] = (part_size - previous[1]) / (now - previous[0])
+
+    def transfer_rate(self, name: str) -> float | None:
+        """Bytes a second for this watch's transfer, from the last two samples (None before there are two)."""
+        with self._lock:
+            return self._rates.get(name)
+
     def records(self, watch: str | None = None, *, verbose: bool = False) -> list[str]:
         """The recent records, oldest first: one watch's, or every watch's."""
         with self._lock:
@@ -328,7 +359,7 @@ def _state(entry: dict[str, Any], poll: InFlight | None) -> str:
     enabled = entry.get("enabled")
     if isinstance(enabled, bool) and not enabled:
         return "parked"
-    if poll is not None:
+    if entry.get("in_flight") or poll is not None:
         return "polling"
     known = entry.get("known_to_service")
     if isinstance(known, bool) and not known:
@@ -406,10 +437,21 @@ def note_text(row: WatchRow) -> str:
     return row.note
 
 
+def transfer_line(activity: dict[str, Any], rate: float | None = None) -> str:
+    """The transfer part of the header: what is moving, how far, and (with two samples) how fast."""
+    text = transfer.activity_text(activity)
+    if isinstance(rate, float) and rate > 0:
+        text += f", {transfer.format_bytes(int(rate))}/s"
+    return text
+
+
 def pane_header_text(
     row: WatchRow | None,
     *,
-    in_flight: InFlight | None = None,
+    in_flight: dict[str, Any] | None = None,
+    poll: InFlight | None = None,
+    transfer_now: dict[str, Any] | None = None,
+    rate: float | None = None,
     hooks: list[str] | None = None,
     now: float = 0.0,
     paused_new: int = 0,
@@ -426,12 +468,17 @@ def pane_header_text(
             parts.append(row.watch_dir)
         text = " · ".join(parts)
     if in_flight is not None:
+        started = _epoch(in_flight.get("started_at"))
+        running = "?" if started is None else format_duration(_whole(now - started))
+        text += f" · {in_flight.get('target') or in_flight.get('hook')} running {running}"
+    elif poll is not None:
         done = hooks or []
-        running = format_duration(_whole(now - in_flight.started))
         suffix = f" — {len(done)} hook{'s' if len(done) != 1 else ''} done"
         if done:
             suffix += f" ({', '.join(done[:3])})"
-        text += f" · {in_flight.poll_id} running {running}{suffix}"
+        text += f" · {poll.poll_id} running {format_duration(_whole(now - poll.started))}{suffix}"
+    if isinstance(transfer_now, dict):
+        text += f" · {transfer_line(transfer_now, rate)}"
     if paused_new:
         text += f" · paused · +{paused_new} new"
     return text

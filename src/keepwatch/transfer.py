@@ -10,6 +10,7 @@ import contextlib
 import functools
 import hashlib
 import itertools
+import json
 import os
 import re
 import shlex
@@ -26,6 +27,8 @@ from typing import Any
 from keepwatch import askpass, platform
 from keepwatch.ctx import CommandFailed
 from keepwatch.durations import format_duration
+from keepwatch.offline import iso_time
+from keepwatch.paths import write_json_atomic
 
 PROTOCOLS = ("scp", "sftp")
 CONFLICTS = ("skip-identical", "rename", "overwrite")
@@ -501,6 +504,74 @@ def _askpass_dir() -> str | None:
     return run_dir if run_dir and os.path.isdir(run_dir) else None
 
 
+ACTIVITY = "activity.json"
+
+
+def _activity_file() -> Path | None:
+    """Where a transfer publishes what it is doing: the hook's run dir, when there is one."""
+    run_dir = os.environ.get("KEEPWATCH_RUN_DIR")
+    return Path(run_dir) / ACTIVITY if run_dir and os.path.isdir(run_dir) else None
+
+
+@contextlib.contextmanager
+def _activity(**fields: Any) -> Iterator[None]:
+    """Publish what this transfer is doing (best effort: a status line never fails a transfer)."""
+    path = _activity_file()
+    if path is not None:
+        try:
+            write_json_atomic(path, {"started_at": iso_time(time.time()), **fields})
+        except OSError:
+            path = None
+    try:
+        yield
+    finally:
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def read_activity(run_dir: Path) -> dict[str, Any] | None:
+    """What a hook in this run dir is transferring, with the part's current size; None when nothing is."""
+    try:
+        activity = json.loads((run_dir / ACTIVITY).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(activity, dict):
+        return None
+    part = activity.get("part")
+    if isinstance(part, str):
+        try:
+            activity["part_size"] = Path(part).stat().st_size
+        except OSError:
+            pass
+    return activity
+
+
+def transfer_progress(activity: dict[str, Any]) -> float | None:
+    """How much of a pull has arrived (part_size / size), or None when that cannot be told."""
+    size, part_size = activity.get("size"), activity.get("part_size")
+    if not isinstance(size, int) or not isinstance(part_size, int) or size <= 0:
+        return None
+    return min(max(part_size / size, 0.0), 1.0)
+
+
+def activity_text(activity: dict[str, Any]) -> str:
+    """One line for `status` and the TUI: `pulling psg-export.gz 74% (2.6 GiB/3.7 GiB)`."""
+    name = str(activity.get("name") or "?")
+    size = activity.get("size")
+    if not isinstance(activity.get("part"), str):
+        return f"pushing {name}" + (f" ({format_bytes(size)})" if isinstance(size, int) else "")
+    progress = transfer_progress(activity)
+    if progress is None:
+        return f"pulling {name}"
+    if isinstance(size, int) and isinstance(activity.get("part_size"), int):
+        return (f"pulling {name} {progress * 100:.0f}% "
+                f"({format_bytes(activity['part_size'])}/{format_bytes(size)})")
+    return f"pulling {name} {progress * 100:.0f}%"
+
+
 def copy(
     source: str | os.PathLike[str] | Endpoint,
     destination: str | os.PathLike[str] | Endpoint,
@@ -625,21 +696,22 @@ def pull(
         _discard_part(part, name, warn)
     attempts = [kept, 0] if resumable else [0]
     try:
-        for index, offset in enumerate(attempts):
-            try:
-                if offset:
-                    _sftp_reget(src, part, options, report)
-                else:
-                    copy(src, Endpoint(path=str(part)), options=options, report=report)
-                _verify_part(part, src, size, sha256)
-                platform.replace(part, final)
-                break
-            except TransferMismatch:
-                if index + 1 == len(attempts):
-                    raise
-                if warn is not None:
-                    warn(f"the resumed transfer of {name} did not verify; pulling it again from the start")
-                part.unlink(missing_ok=True)
+        with _activity(name=name, part=str(part), size=size):  # status.json and the TUI read this
+            for index, offset in enumerate(attempts):
+                try:
+                    if offset:
+                        _sftp_reget(src, part, options, report)
+                    else:
+                        copy(src, Endpoint(path=str(part)), options=options, report=report)
+                    _verify_part(part, src, size, sha256)
+                    platform.replace(part, final)
+                    break
+                except TransferMismatch:
+                    if index + 1 == len(attempts):
+                        raise
+                    if warn is not None:
+                        warn(f"the resumed transfer of {name} did not verify; pulling it again from the start")
+                    part.unlink(missing_ok=True)
     finally:
         if not resumable or not part.exists():
             part.unlink(missing_ok=True)  # a resumable partial is kept: the next attempt continues it
@@ -664,16 +736,21 @@ def push(
     if not directory.remote:
         raise ValueError(f"push needs a remote directory (user@host:dir), got {directory.scp_arg()!r}")
     target = directory.child(local.name)
-    if marker == "none":
+    try:
+        size = local.stat().st_size
+    except OSError:
+        size = None
+    with _activity(name=local.name, size=size):  # status.json and the TUI read this
+        if marker == "none":
+            copy(local, target, options=options, report=report)
+            return target.scp_arg()
         copy(local, target, options=options, report=report)
-        return target.scp_arg()
-    copy(local, target, options=options, report=report)
-    with tempfile.TemporaryDirectory(prefix="keepwatch-marker-") as work:
-        marker_file = Path(work) / f"{local.name}.sha256"
-        marker_file.write_bytes(f"{sha256_file(local)}  {local.name}\n".encode())
-        # A second run, only after the data succeeded: one scp run carries on past a failed source, which
-        # could put the marker beside a truncated file.
-        copy(marker_file, directory.child(marker_file.name), options=options, report=report)
+        with tempfile.TemporaryDirectory(prefix="keepwatch-marker-") as work:
+            marker_file = Path(work) / f"{local.name}.sha256"
+            marker_file.write_bytes(f"{sha256_file(local)}  {local.name}\n".encode())
+            # A second run, only after the data succeeded: one scp run carries on past a failed source, which
+            # could put the marker beside a truncated file.
+            copy(marker_file, directory.child(marker_file.name), options=options, report=report)
     return target.scp_arg()
 
 

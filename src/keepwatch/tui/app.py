@@ -188,13 +188,19 @@ class KeepwatchApp(App[None]):
 
     def _update_header(self) -> None:
         row = self._row_for(self._selected_name())
-        in_flight = None
+        in_flight = row.in_flight if row is not None else None
+        transfer_now = row.transfer if row is not None else None
+        poll = None
         hooks: list[str] = []
-        if row is not None:
-            in_flight = self.monitor.in_flight().get(row.name)
-            if in_flight is not None:
-                hooks = self.monitor.hooks_done(row.name, in_flight.poll_id)
-        header = view.pane_header_text(row, in_flight=in_flight, hooks=hooks, now=time.time(), paused_new=self.pending)
+        rate = None
+        if row is not None and in_flight is None:
+            poll = self.monitor.in_flight().get(row.name)  # an older status, or a manual poll: the log's view
+            if poll is not None:
+                hooks = self.monitor.hooks_done(row.name, poll.poll_id)
+        if row is not None and isinstance(transfer_now, dict):
+            rate = self.monitor.transfer_rate(row.name)
+        header = view.pane_header_text(row, in_flight=in_flight, poll=poll, transfer_now=transfer_now, rate=rate,
+                                       hooks=hooks, now=time.time(), paused_new=self.pending)
         self.header = header
         self.query_one("#pane-header", Static).update(header)
 

@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from typing import Any
 
+from keepwatch import transfer
 from keepwatch.config import Discovery
 from keepwatch.durations import format_duration
 from keepwatch.locks import LockBusy, hold_lock
@@ -44,7 +45,7 @@ def collect_status(paths: Paths, discovery: Discovery, names: list[str]) -> dict
     saved_watches = saved.get("watches", {})
     watches = {}
     for name in names or list(discovery.watches):
-        entry = dict(saved_watches.get(name) or {"known_to_service": False})
+        entry: dict[str, Any] = dict(saved_watches.get(name) or {"known_to_service": False})
         marker = read_offline(paths, name)
         entry["offline"] = marker.to_dict() if marker else None
         entry["exists"] = name in discovery.watches
@@ -79,13 +80,25 @@ def _until(value: Any, now: float) -> str:
     return "?" if stamp is None else format_duration(max(int(stamp - now), 0))
 
 
+def in_flight_text(in_flight: dict[str, Any], activity: dict[str, Any] | None, *, now: float) -> str:
+    """What a watch is doing right now: the hook, for how long, and what it is transferring."""
+    started = _epoch(in_flight.get("started_at"))
+    running = "?" if started is None else format_duration(max(int(now - started), 0))
+    text = f"{in_flight.get('target') or in_flight.get('hook')} running {running}"
+    if isinstance(activity, dict):
+        text += f" · {transfer.activity_text(activity)}"
+    return text
+
+
 def _watch_line(name: str, entry: dict[str, Any], now: float) -> str:
     if entry.get("offline"):
         label = "offline"
-    elif entry.get("enabled") is False:
+    elif isinstance(entry.get("enabled"), bool) and not entry["enabled"]:
         label = "parked"
-    elif entry.get("known_to_service") is False:
+    elif isinstance(entry.get("known_to_service"), bool) and not entry["known_to_service"]:
         label = "idle"
+    elif entry.get("in_flight"):
+        label = "polling"
     else:
         label = "online"
     parts = [f"{name:<20} {label:<8}"]
@@ -114,6 +127,8 @@ def format_status(document: dict[str, Any], now: float) -> list[str]:
         lines = ["service: not running (start it with: keepwatch run)"]
     for name, entry in document["watches"].items():
         lines.append(_watch_line(name, entry, now))
+        if entry.get("in_flight"):
+            lines.append(f"    {in_flight_text(entry['in_flight'], entry.get('transfer'), now=now)}")
         offline = entry.get("offline")
         if offline:
             lines.append(f"    offline since {offline['since']}: {offline['reason']}")
