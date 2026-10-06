@@ -63,12 +63,12 @@ KEY_FACTS = {
     "failures": ["max_failures", "retry_after", "alert_command", "KEEPWATCH_ALERT_EVENT", "offline.json"],
     "storage": ["ctx.data_dir", "ctx.run_dir", "file_key", "LedgerCorrupt", "keepwatch rename", "%LOCALAPPDATA%"],
     "logging": ["keepwatch.jsonl", "poll_id", "hook.end", "check.outcome", "observer.stopped", "extra=", "data_clipped", "observer.connected"],
-    "environment": ["/dev/null", "SIGTERM", "SSH_AUTH_SOCK", "BatchMode=yes", "[environment]", "Job Object", "keepwatch stop"],
+    "environment": ["/dev/null", "SIGTERM", "SSH_AUTH_SOCK", "BatchMode=yes", "[environment]", "Job Object", "keepwatch stop", "Command Processor"],
     "dependencies": ["python_dependencies", "uv run", "--offline", "keepwatch validate"],
     "reload": ["reload_interval", "last valid", "watch.removed", "offline.json"],
     "observers": ["[observe.", "./feed.py", "uv\", \"run\", \"--script", "ctx.events", "KEEPWATCH_EVENTS_FILE", "at-least-once", "heartbeat_timeout", "keepwatch observe", "--events", "wake", "settle", "flush", "ledger", "FileNotFoundError", "64 MiB", "1 second after", "do not restart", "remote_files", "remote_python", "BatchMode", "known_hosts", "observer.connected", "Python 3.6", "ssh-agent", "not valid UTF-8", "IdentitiesOnly", "expire", "marker = \"sha256\""],
     "transfers": ["ctx.transfer", "keepwatch kit", "password_env", "SSH_ASKPASS", "setx", "known_hosts", "-O", "scp -3", "protocol = \"sftp\"", ".part", ".sha256", "sha256sum -c", "tcp_open", "TransferFailed", "CommandFailed", "NumberOfPasswordPrompts", "must print nothing", "icacls", "TimeoutExpired", "ssh_options", "OWNER RIGHTS", "Windows' scp", "TransferMismatch"],
-    "recipes": ["recipe = \"pull\"", "recipe = \"push\"", "pulled", "pushed", "skip_ledger", "unknown", "reachable_host", "staging", "at-least-once", "on_conflict", "delete_remote", "delete_retry", "to_delete", "interval", "the same size and modification time"],
+    "recipes": ["recipe = \"pull\"", "recipe = \"push\"", "pulled", "pushed", "skip_ledger", "unknown", "reachable_host", "staging", "at-least-once", "on_conflict", "delete_remote", "delete_retry", "to_delete", "interval", "the same size and modification time", "file_timeout", "equal share"],
     "relay": ["relay-pull", "relay-push", "staging", "uv tool install keepwatch", "ssh-keygen", "authorized_keys", "known_hosts", "setx RELAY_PASSWORD", "sha256sum -c", "$?prompt", "keepwatch observe relay-pull", "scp -3", "unknown", "the same path", "relay-receive", "delete_remote = true", "Receiving on linux2"],
 }
 

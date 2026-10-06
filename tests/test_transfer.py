@@ -213,6 +213,16 @@ def test_the_askpass_helper_runs_without_keepwatch_on_the_path(tmp_path):
     assert broken.returncode != 0  # -S has no site-packages: the shape of the bug the file path avoids
 
 
+def test_a_transfer_honours_an_explicit_deadline(tmp_path):
+    """The recipes give each file its own deadline (issue 5); the hook's remaining time is only the default."""
+    per_file = transfer.Transfer(base=tmp_path, remaining=lambda: 3600.0)
+    with pytest.raises(TransferFailed, match="the deadline has passed"):
+        per_file.copy("u@host:/a.gz", tmp_path / "a.gz", deadline=time.time() - 1)
+    exhausted = transfer.Transfer(base=tmp_path, remaining=lambda: 0.0)
+    with pytest.raises(TransferFailed, match="no time left in this hook"):
+        exhausted.copy("u@host:/a.gz", tmp_path / "a.gz")
+
+
 def test_a_one_letter_host_with_a_slash_is_a_drive():
     assert parse_endpoint("h:/a.gz") == Endpoint(path="h:/a.gz")
     assert parse_endpoint("me@h:/a.gz").remote and parse_endpoint("scp://h/a.gz").remote

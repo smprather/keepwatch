@@ -400,7 +400,7 @@ def copy(
     if options.deadline is not None:
         left = options.deadline - time.time()
         if left <= 0:
-            raise TransferFailed(f"no time left for scp {src.scp_arg()} -> {dst.scp_arg()} (the hook's deadline has passed)")
+            raise TransferFailed(f"no time left for scp {src.scp_arg()} -> {dst.scp_arg()} (the deadline has passed)")
         limit = left if limit is None else min(limit, left)
     env = dict(os.environ)
     started = time.monotonic()
@@ -557,8 +557,9 @@ class Transfer:
 
     Options (keyword arguments of copy, pull and push): protocol ("scp" or "sftp"), password_env (the name
     of an environment variable holding the password), identity (a private key file), known_hosts (a
-    known_hosts file), port, ssh_options (extra scp arguments), timeout (seconds). A check may only use
-    tcp_open: transferring files changes things, which a check must not do.
+    known_hosts file), port, ssh_options (extra scp arguments), timeout (seconds, per scp run) and deadline
+    (the epoch after which this call's scp must not run; the hook's remaining time by default). A check may
+    only use tcp_open: transferring files changes things, which a check must not do.
     """
 
     def __init__(
@@ -577,8 +578,8 @@ class Transfer:
     def _options(self, options: dict[str, Any]) -> ScpOptions:
         if not self._writable:
             raise TransferFailed("a check must not transfer files; do it in an action (ctx.transfer.tcp_open is fine)")
-        deadline = None
-        if self._remaining is not None:
+        deadline = options.pop("deadline", None)  # a caller's own deadline wins over the hook's remaining time
+        if deadline is None and self._remaining is not None:
             left = self._remaining()
             if left <= 0:
                 raise TransferFailed("no time left in this hook for a transfer (raise action_timeout)")

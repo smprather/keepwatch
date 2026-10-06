@@ -11,22 +11,24 @@ import fnmatch
 import os
 import shutil
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from keepwatch.ctx import Ctx, Unknown
-from keepwatch.transfer import parse_endpoint
+from keepwatch.ctx import CommandFailed, Ctx, Unknown
+from keepwatch.recipes import file_budget
+from keepwatch.transfer import TransferFailed, parse_endpoint
 
 LEDGER = "pushed"
 
 
-def transfer_options(settings: dict[str, Any]) -> dict[str, Any]:
+def transfer_options(settings: Mapping[str, Any]) -> dict[str, Any]:
     names = ("protocol", "password_env", "port", "identity", "known_hosts")
     options = {name: settings[name] for name in names if settings[name] is not None}
     return {**options, "ssh_options": list(settings["ssh_options"])}
 
 
-def reachable(settings: dict[str, Any]) -> tuple[str, int]:
+def reachable(settings: Mapping[str, Any]) -> tuple[str, int]:
     """The host and port to probe: reachable_host/port, else dest's host and port (else `port`, else 22)."""
     dest = parse_endpoint(settings["dest"])
     host = settings["reachable_host"] or dest.host
@@ -34,7 +36,7 @@ def reachable(settings: dict[str, Any]) -> tuple[str, int]:
     return str(host), int(port)
 
 
-def settled_files(settings: dict[str, Any]) -> list[Path]:
+def settled_files(settings: Mapping[str, Any]) -> list[Path]:
     """Regular files in local_dir matching pattern, not ignore, last modified at least `settle` ago."""
     directory = Path(settings["local_dir"])
     try:
@@ -76,7 +78,10 @@ def check(ctx: Ctx) -> tuple[bool, list[str]]:
 def _archive(path: Path, directory: Path, keep_for: float) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / path.name
-    shutil.move(str(path), str(target))
+    try:
+        shutil.move(str(path), str(target))
+    except OSError as exc:
+        raise TransferFailed(f"cannot archive {path} to {target}: {exc}") from exc
     os.utime(target)  # the archive's own clock starts now
     cutoff = time.time() - keep_for
     for old in directory.iterdir():
@@ -91,18 +96,37 @@ def on_true(ctx: Ctx) -> None:
     settings = ctx.settings
     options = transfer_options(settings)
     pushed = ctx.ledger(LEDGER)
-    for name in ctx.payload:
-        path = Path(name)
-        if not path.is_file():
-            continue  # moved or deleted since the check
-        key = ctx.file_key(path)
-        if settings["after"] == "keep" and key in pushed:
-            continue
-        remote = ctx.transfer.push(path, settings["dest"], marker=settings["marker"], **options)
-        ctx.log.info("pushed %s", path.name, extra={"remote": remote})
-        if settings["after"] == "delete":
-            path.unlink()
-        elif settings["after"] == "archive":
-            _archive(path, Path(settings["archive_dir"]), settings["keep_for"])
-        else:
-            pushed.add(key)
+    files = [Path(name) for name in ctx.payload]
+    error: Exception | None = None
+    try:
+        for index, path in enumerate(files):
+            if not path.is_file():
+                continue  # moved or deleted since the check
+            key = ctx.file_key(path)
+            if settings["after"] == "keep" and key in pushed:
+                continue
+            if ctx.remaining <= 0:
+                error = error or TransferFailed("no time left for the rest of this queue (raise action_timeout)")
+                break
+            # A fair share of what is left, so one slow upload cannot starve the rest of the queue
+            # (`file_timeout` caps it harder). A file that fails or runs out of its share is logged, and the
+            # queue carries on; the failure is raised at the end so the poll still reports it.
+            budget = file_budget(ctx.remaining, len(files) - index, settings["file_timeout"])
+            try:
+                remote = ctx.transfer.push(path, settings["dest"], marker=settings["marker"],
+                                           deadline=time.time() + budget, **options)
+            except (TransferFailed, CommandFailed, OSError) as exc:
+                error = error or exc
+                ctx.log.warning("pushing %s failed (%s); the rest of the queue is still tried", path.name, exc)
+                continue
+            ctx.log.info("pushed %s", path.name, extra={"remote": remote})
+            if settings["after"] == "delete":
+                path.unlink()
+            elif settings["after"] == "archive":
+                _archive(path, Path(settings["archive_dir"]), settings["keep_for"])
+            else:
+                pushed.add(key)
+    except Exception as exc:
+        error = error or exc
+    if error is not None:
+        raise error

@@ -74,6 +74,19 @@ def test_pull_recipe_pulls_new_files_once(make_watch, server, tmp_path, xdg):
     assert second.outcome is Outcome.FALSE
 
 
+def test_a_failing_file_does_not_stop_the_rest_of_the_queue(make_watch, server, tmp_path, xdg):
+    """One unreachable file must not starve the queue, and the poll still fails so it is retried (issue 5)."""
+    (server.root / "good.tar.gz").write_bytes(b"data")
+    watch = load_watch_config(pull_watch(make_watch, server, tmp_path))
+    records = []
+    events = [file_event("missing.tar.gz", b"gone"), file_event("good.tar.gz", b"data")]
+    report = engine(xdg, records).poll(watch, WatchState(False), events=events)
+    assert report.failed  # reported, so the next poll retries
+    assert (tmp_path / "stage" / "good.tar.gz").read_bytes() == b"data"  # the queue carried on
+    messages = [r.get("message", "") for r in records if r["event"] == "plugin.log"]
+    assert any("the rest of the queue is still tried" in message for message in messages), messages
+
+
 def test_pull_recipe_does_not_record_a_mismatched_pull(make_watch, server, tmp_path, xdg):
     (server.root / "a.tar.gz").write_bytes(b"data")
     watch = load_watch_config(pull_watch(make_watch, server, tmp_path))

@@ -2,6 +2,15 @@
 
 Some watches are the same everywhere. A **recipe** is one keepwatch provides: set `recipe = "<name>"` in config.toml and configure it in `[settings]`. A recipe watch has no watch.py, no `[hooks]` and no `[observe.*]` tables (the recipe brings its own); everything else (`interval`, timeouts, `max_failures`, `retry_after`, `[environment]`) works as for any watch. `keepwatch validate`, `poll`, `observe`, `status` and `logs` work too; hook records show `recipe pull:check` and so on.
 
+## Time budgets
+
+`action_timeout` is the deadline for one whole action, and a recipe action handles every file of one poll. So
+that one slow file cannot starve the queue, each file gets an **equal share of what is left** of that budget
+(the last file gets the remainder), and `file_timeout` in `[settings]` caps every file harder. A file that fails
+or runs out of its share is logged, the rest of the queue is still attempted, and the action says it failed —
+so the poll retries, and the files already completed are recorded as they finish: they are not pulled or pushed
+twice.
+
 ## pull: a remote directory → a local staging folder
 
 ```toml

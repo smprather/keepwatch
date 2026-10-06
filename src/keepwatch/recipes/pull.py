@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
-from keepwatch.ctx import Ctx, as_text
+from keepwatch.ctx import CommandFailed, Ctx, as_text
+from keepwatch.recipes import file_budget
 from keepwatch.remote import ssh_argv, watcher_source
-from keepwatch.transfer import TransferMismatch, with_known_hosts
+from keepwatch.transfer import TransferFailed, TransferMismatch, with_known_hosts
 
 LEDGER = "pulled"
 TO_DELETE = "to_delete"
@@ -33,7 +36,7 @@ def event_key(event: dict[str, Any]) -> str:
     return f"{event['path']}|{event['size']}|{event['mtime']!r}"
 
 
-def transfer_options(settings: dict[str, Any]) -> dict[str, Any]:
+def transfer_options(settings: Mapping[str, Any]) -> dict[str, Any]:
     options = {name: settings[name] for name in ("port", "identity", "known_hosts") if settings[name] is not None}
     return {**options, "ssh_options": list(settings["ssh_options"])}
 
@@ -60,7 +63,8 @@ def due_deletions(ctx: Ctx) -> list[str]:
         return []
     pending = ctx.ledger(TO_DELETE)
     now = datetime.now(timezone.utc)
-    return [entry for entry in pending if (now - pending.added_at(entry)).total_seconds() >= settings["delete_retry"]]
+    return [entry for entry in pending
+            if (now - cast(datetime, pending.added_at(entry))).total_seconds() >= settings["delete_retry"]]
 
 
 def delete_remote(ctx: Ctx, entries: list[str]) -> None:
@@ -126,10 +130,14 @@ def delete_remote(ctx: Ctx, entries: list[str]) -> None:
         elif event == "refused":
             pending.discard(entry)
             kept.add(key)
-            ctx.log.warning("not deleting %s on %s: %s", name, remote, result.get("reason"))
+            reason = (result or {}).get("reason")
+            ctx.log.warning("not deleting %s on %s: %s", name, remote, reason)
         else:
             pending.add(entry)  # refreshes its stamp: retried after delete_retry
-            reason = result.get("reason") if result else (" | ".join(stderr.strip().splitlines()[-3:]) or "no answer")
+            if result is not None:
+                reason = result.get("reason")
+            else:
+                reason = " | ".join(stderr.strip().splitlines()[-3:]) or "no answer"
             ctx.log.warning("could not delete %s from %s (will retry): %s", name, remote, reason)
 
 
@@ -160,10 +168,15 @@ def on_true(ctx: Ctx) -> None:
     fresh: list[str] = []
     error: Exception | None = None
     try:
-        for item in ctx.payload:
-            if item["key"] in pulled or item["key"] in skipped:
-                continue
+        items = [item for item in ctx.payload if item["key"] not in pulled and item["key"] not in skipped]
+        for index, item in enumerate(items):
+            if ctx.remaining <= 0:
+                error = error or TransferFailed("no time left for the rest of this queue (raise action_timeout)")
+                break
             sha256 = item["sha256"] if settings["checksum"] else None
+            # A fair share of what is left, so one slow file cannot starve the rest of the queue (`file_timeout`
+            # caps it harder). A file that fails or runs out of its share is logged and the queue carries on.
+            budget = file_budget(ctx.remaining, len(items) - index, settings["file_timeout"])
             try:
                 final = ctx.transfer.pull(
                     f"{settings['remote']}:{item['path']}",
@@ -171,11 +184,17 @@ def on_true(ctx: Ctx) -> None:
                     size=item["size"],
                     sha256=sha256,
                     on_conflict=settings["on_conflict"],
+                    deadline=time.time() + budget,
                     **options,
                 )
             except TransferMismatch as exc:
                 # The file changed after it was reported; its new version comes as a new event.
                 ctx.log.warning("%s changed on %s after it was reported (%s); not pulled", item["name"], settings["remote"], exc)
+                continue
+            except (TransferFailed, CommandFailed, OSError) as exc:
+                error = error or exc
+                ctx.log.warning("pulling %s from %s failed (%s); the rest of the queue is still tried",
+                                item["name"], settings["remote"], exc)
                 continue
             if queue is not None:  # queued first: a crash before the next line still gets the file deleted
                 entry = queue_key(item["key"], sha256)
@@ -184,7 +203,7 @@ def on_true(ctx: Ctx) -> None:
             pulled.add(item["key"])
             ctx.log.info("pulled %s", item["name"], extra={"local": str(final), "size": item["size"]})
     except Exception as exc:  # deletes below still run for what was pulled; the error is raised after them
-        error = exc
+        error = error or exc
     if queue is not None and (fresh or error is None):
         entries = set(fresh) if error is not None else set(fresh) | set(due_deletions(ctx))
         try:

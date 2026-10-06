@@ -30,6 +30,11 @@ def make_ctx(tmp_path, hook="on_true", emitted=None, deadline_in=30.0, shell=Non
     )
 
 
+def test_remaining_is_the_time_left_before_the_deadline(tmp_path):
+    assert 0 < make_ctx(tmp_path, deadline_in=30.0).remaining <= 30.0
+    assert make_ctx(tmp_path, deadline_in=-5.0).remaining == 0
+
+
 def test_ledger_persists_and_writes_atomically(tmp_path):
     path = tmp_path / "ledgers" / "sent.json"
     ledger = Ledger(path)
@@ -60,7 +65,8 @@ def test_ledger_read_only_and_key_type(tmp_path):
     with pytest.raises(LedgerReadOnly):
         ledger.add("k")
     with pytest.raises(TypeError):
-        Ledger(tmp_path / "y.json").add(Path("/k"))
+        # a non-str key is exactly what this test asserts the ledger refuses
+        Ledger(tmp_path / "y.json").add(Path("/k"))  # type: ignore[reportArgumentType]
 
 
 def test_ctx_ledger_is_read_only_in_check(tmp_path):

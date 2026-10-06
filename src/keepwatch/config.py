@@ -328,6 +328,13 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
             "one was pushed): `rename` the new one to NAME-1.ext, `overwrite` the old one, or `skip-identical` (fail).",
         ),
         Key(
+            "file_timeout",
+            "duration",
+            0.0,
+            "Cap one file's transfer. 0 gives each file an equal share of what is left of `action_timeout`, so "
+            "one slow file cannot starve the queue; a positive value caps every file harder.",
+        ),
+        Key(
             "delete_remote",
             "bool",
             False,
@@ -356,6 +363,13 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
         Key("pattern", "str", "*", "Push only file names matching this glob."),
         Key("ignore", "str_list", DEFAULT_IGNORE, "Never push file names matching any of these globs."),
         Key("settle", "duration", 10.0, "A file must be unchanged this long before it is pushed."),
+        Key(
+            "file_timeout",
+            "duration",
+            0.0,
+            "Cap one file's upload (and its marker). 0 gives each file an equal share of what is left of "
+            "`action_timeout`, so one slow file cannot starve the queue; a positive value caps every file harder.",
+        ),
         Key("protocol", "str", "scp", "`scp` (classic; scp-only servers accept it) or `sftp`."),
         Key("password_env", "str", None, "Name of the environment variable holding the destination password."),
         *_SSH_SETTINGS,

@@ -220,6 +220,11 @@ class Ctx:
         return self._run_dir
 
     @property
+    def remaining(self) -> float:
+        """Seconds left before this hook's timeout (0 once the deadline has passed)."""
+        return self._remaining()
+
+    @property
     def transfer(self) -> Transfer:
         """scp transfers (copy, pull, push) and tcp_open, logged like ctx.run; see `keepwatch docs transfers`."""
         from keepwatch.transfer import Transfer
@@ -265,7 +270,7 @@ class Ctx:
         try:
             completed = subprocess.run(
                 platform.shell_argv(args, self._shell)
-                if shell
+                if isinstance(args, str)
                 else platform.command_argv(args, Path(cwd) if cwd is not None else self.watch_dir),
                 input=input,
                 stdin=subprocess.DEVNULL if input is None else None,
