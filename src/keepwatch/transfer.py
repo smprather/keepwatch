@@ -23,7 +23,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from keepwatch import platform
+from keepwatch import askpass, platform
 from keepwatch.ctx import CommandFailed
 from keepwatch.durations import format_duration
 
@@ -306,14 +306,25 @@ def _askpass_python() -> str:
     return str(executable)
 
 
+def _askpass_script() -> str:
+    """The helper's own file, run as a path rather than `-m keepwatch.askpass`.
+
+    The launcher's interpreter is not always one that can import keepwatch (under a uv symlinked venv on
+    Windows, sys.executable and its sibling console python are the base interpreter), but the helper imports
+    only the standard library, so its file runs under any interpreter.
+    """
+    return str(Path(askpass.__file__).resolve())
+
+
 def write_askpass(directory: Path, variable: str) -> Path:
-    """Write the SSH_ASKPASS launcher: it runs `python -m keepwatch.askpass VARIABLE` (no secret in the file)."""
+    """Write the SSH_ASKPASS launcher: it runs the askpass helper's file (no secret in the file)."""
     if not _VARIABLE.fullmatch(variable):
         raise ValueError(f"not an environment variable name: {variable!r}")
+    python, script = _askpass_python(), _askpass_script()
     if platform.IS_WINDOWS:
         path = directory / "askpass.cmd"
-        python = _askpass_python().replace("%", "%%")
-        text = f'@echo off\r\n"{python}" -m keepwatch.askpass {variable} %*\r\n'
+        line = f'"{python.replace("%", "%%")}" "{script.replace("%", "%%")}" {variable} %*'
+        text = f"@echo off\r\n{line}\r\n"
         try:
             data = text.encode("oem")  # cmd.exe reads batch files in the OEM code page (C:\Users\José\...)
         except (LookupError, UnicodeEncodeError):
@@ -322,7 +333,7 @@ def write_askpass(directory: Path, variable: str) -> Path:
         return path
     path = directory / "askpass.sh"
     path.write_text(
-        f'#!/bin/sh\nexec {shlex.quote(_askpass_python())} -m keepwatch.askpass {variable} "$@"\n', encoding="utf-8"
+        f'#!/bin/sh\nexec {shlex.quote(python)} {shlex.quote(script)} {variable} "$@"\n', encoding="utf-8"
     )
     path.chmod(0o700)
     return path

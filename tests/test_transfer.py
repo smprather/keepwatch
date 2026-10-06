@@ -169,6 +169,50 @@ def test_askpass_launcher_runs_the_helper(tmp_path):
     assert "pa ss" not in launcher.read_text(encoding="utf-8")
 
 
+def test_the_askpass_launcher_runs_the_helper_file(tmp_path):
+    """Not `-m keepwatch.askpass`: under a uv symlinked venv on Windows every interpreter the launcher can
+    reach (sys.executable is the base python then, see uv issue 19374) cannot import keepwatch."""
+    launcher = write_askpass(tmp_path, "KW_TEST_PW")
+    text = launcher.read_text(encoding="utf-8")
+    assert str(Path(askpass.__file__).resolve()) in text
+    assert "-m keepwatch.askpass" not in text
+
+
+def test_the_windows_askpass_launcher_quotes_the_helper_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(transfer.platform, "IS_WINDOWS", True)
+    launcher = write_askpass(tmp_path, "KW_TEST_PW")
+    assert launcher.name == "askpass.cmd"
+    text = launcher.read_text(encoding="utf-8", errors="replace")
+    assert text.startswith("@echo off")
+    assert f'"{Path(askpass.__file__).resolve()}"' in text
+    assert "-m keepwatch.askpass" not in text
+
+
+def test_the_askpass_helper_runs_without_keepwatch_on_the_path(tmp_path):
+    """The helper's file is stdlib only, so any interpreter can run it; `-m keepwatch.askpass` would need
+    keepwatch importable, which is exactly what the sibling console python of a uv shim lacks (issue 1)."""
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    env["KW_TEST_PW"] = "pa ss"
+    module = str(Path(askpass.__file__).resolve())
+    worked = subprocess.run(
+        [sys.executable, "-S", module, "KW_TEST_PW", "u@h's password: "],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        timeout=60,
+    )
+    assert worked.returncode == 0, worked.stderr
+    assert worked.stdout == b"pa ss\n"
+    broken = subprocess.run(
+        [sys.executable, "-S", "-m", "keepwatch.askpass", "KW_TEST_PW", "u@h's password: "],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        timeout=60,
+    )
+    assert broken.returncode != 0  # -S has no site-packages: the shape of the bug the file path avoids
+
+
 def test_a_one_letter_host_with_a_slash_is_a_drive():
     assert parse_endpoint("h:/a.gz") == Endpoint(path="h:/a.gz")
     assert parse_endpoint("me@h:/a.gz").remote and parse_endpoint("scp://h/a.gz").remote

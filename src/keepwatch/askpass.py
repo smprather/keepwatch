@@ -1,8 +1,10 @@
-"""SSH_ASKPASS helper: `python -m keepwatch.askpass VAR [prompt]` prints $VAR for ssh/scp. Stdlib only.
+"""SSH_ASKPASS helper: `python askpass.py VAR [prompt]` prints $VAR for ssh/scp. Stdlib only.
 
-keepwatch points SSH_ASKPASS at a small launcher that runs this module with the *name* of the
-environment variable holding the password, so the secret is never written to a file, passed as an
-argument or quoted for a shell.
+keepwatch points SSH_ASKPASS at a small launcher that runs this file with the *name* of the environment
+variable holding the password, so the secret is never written to a file, passed as an argument or quoted
+for a shell. The file rather than `-m keepwatch.askpass`: the launcher's interpreter (for example the
+console python beside a Windows pythonw.exe) is not always one that can import keepwatch, and this file
+needs nothing but the standard library.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import sys
 
 def main(argv: list[str]) -> int:
     if not argv:
-        sys.stderr.write("usage: python -m keepwatch.askpass VAR [prompt]\n")
+        sys.stderr.write("usage: python askpass.py VAR [prompt]\n")
         return 2
     name, prompt = argv[0], " ".join(argv[1:])
     if "yes/no" in prompt:

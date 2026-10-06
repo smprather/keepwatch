@@ -60,7 +60,7 @@ Never put a password in config.toml, a hook or a command line. Put it in an envi
 - **Windows:** `setx RELAY_PASSWORD "…"` (for your user), then restart the keepwatch logon task (`keepwatch stop`, then start it from Task Scheduler, or log off and on): processes only see variables that existed when they started.
 - **Linux:** `Environment=` in a systemd drop-in (`systemctl --user edit keepwatch`), or the global `[environment]` table of keepwatch's config if that file is private to you.
 
-keepwatch hands it to scp through `SSH_ASKPASS` (with `SSH_ASKPASS_REQUIRE=force`): a small launcher in a private temporary directory runs `python -m keepwatch.askpass VAR`, which prints the variable's value. The password is never written to a file, passed as an argument or logged; only the variable's name is. The helper refuses to answer host-key questions ("yes/no"). Password and keyboard-interactive logins both work.
+keepwatch hands it to scp through `SSH_ASKPASS` (with `SSH_ASKPASS_REQUIRE=force`): a small launcher in a private temporary directory runs the helper's own file (`askpass.py`, standard library only, so even an interpreter that cannot import keepwatch can run it) with the variable's name, and the helper prints its value. The password is never written to a file, passed as an argument or logged; only the variable's name is. The helper refuses to answer host-key questions ("yes/no"). Password and keyboard-interactive logins both work.
 
 ## Errors
 
