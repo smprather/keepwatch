@@ -60,7 +60,7 @@ COMMAND_GROUPS = {
     "keepwatch": [
         {"name": "Run", "commands": ["run", "stop"]},
         {"name": "Develop", "commands": ["new", "validate", "poll", "observe"]},
-        {"name": "Inspect", "commands": ["status", "logs"]},
+        {"name": "Inspect", "commands": ["status", "logs", "tui"]},
         {"name": "Control", "commands": ["enable", "disable", "rename"]},
         {"name": "Setup", "commands": ["init", "install", "uninstall"]},
         {"name": "Hook tools", "commands": ["kit"]},
@@ -885,6 +885,26 @@ def docs(topic: str | None, show_all: bool) -> None:
         click.echo(text)
     else:
         make_console().print(Markdown(text))
+
+
+@cli.command()
+@click.pass_obj
+def tui(app: App) -> None:
+    """Watch the service live: every watch, its next poll, and the actions it takes.
+
+    Read-only: it never enables, disables or polls anything, and it writes nothing, so it is safe beside a
+    running service (several at once, even). The arrow keys or j/k select a watch, `a` shows every watch's
+    records, `v` captured output, space pauses the pane, `r` re-reads the config, q quits.
+
+    Needs a terminal: when stdout is not one, use `keepwatch status` or `keepwatch logs --json` instead.
+
+    Exit status: 0 after quitting, 1 if there is no terminal to draw on.
+    """
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        _fail("keepwatch tui needs a terminal; use keepwatch status or keepwatch logs --json")
+    from keepwatch.tui import run
+
+    run(app.paths, app.config_path)
 
 
 def _request_stop(paths: Paths, timeout: float) -> bool:
