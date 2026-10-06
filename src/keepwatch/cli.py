@@ -45,7 +45,7 @@ from keepwatch.logquery import LogFilter, follow_log, parse_when, select_records
 from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter, make_record
 from keepwatch.observers import build_observer, stop_all
 from keepwatch.offline import iso_time
-from keepwatch.output import ConsolePrinter, make_console, plain_output
+from keepwatch.output import ConsolePrinter, make_console, plain_output, use_utf8_output
 from keepwatch.paths import PathError, Paths, ensure_private_dir, remove_stale_process_dirs, resolve_paths
 from keepwatch.pollengine import Fake, PollEngine, PollReport, parse_fakes
 from keepwatch.reference import UnknownTopic, render_all, render_topic, topic_index
@@ -1041,4 +1041,5 @@ def kit_tcp_open(host: str, port: int, timeout: float) -> None:
 
 
 def main() -> None:
+    use_utf8_output()  # a piped stream uses the console code page (Windows cp1252) and cannot write our arrows
     cli()

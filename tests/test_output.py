@@ -1,6 +1,7 @@
 import io
+import sys
 
-from keepwatch.output import format_record, plain_output
+from keepwatch.output import format_record, plain_output, use_utf8_output
 
 BASE = {"ts": "2026-09-29T10:11:12.345-05:00", "level": "INFO", "watch": "psg", "poll_id": "abc123"}
 
@@ -124,3 +125,21 @@ def test_service_error_is_readable():
 def test_cli_error_is_readable():
     record = {"ts": "2026-09-29T10:11:12.345-05:00", "level": "CRITICAL", "event": "cli.error", "error": "x: y"}
     assert format_record(record) == "10:11:12 command failed: x: y"
+
+
+def test_use_utf8_output_reconfigures_a_code_page_stream(monkeypatch):
+    """A Windows pipe is encoded with the console code page (cp1252), which cannot write keepwatch's arrows."""
+    buffer = io.BytesIO()
+    stream = io.TextIOWrapper(buffer, encoding="cp1252", newline="")
+    monkeypatch.setattr(sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stderr", io.TextIOWrapper(io.BytesIO(), encoding="cp1252", newline=""))
+    use_utf8_output()
+    stream.write("hook x → ok")
+    stream.flush()
+    assert buffer.getvalue() == "hook x → ok".encode("utf-8")
+
+
+def test_use_utf8_output_tolerates_streams_without_reconfigure(monkeypatch):
+    monkeypatch.setattr(sys, "stdout", io.StringIO())  # a test harness: no encoding, no reconfigure
+    monkeypatch.setattr(sys, "stderr", None)  # pythonw: no streams at all
+    use_utf8_output()

@@ -1,4 +1,7 @@
 import inspect
+import os
+import subprocess
+import sys
 
 import click
 import pytest
@@ -124,3 +127,17 @@ def test_every_command_and_option_is_documented():
                 assert param.opts[-1] in text
     assert "keepwatch kit pull" in names and "keepwatch run" in names
     assert "UNSET" not in text and "Sentinel" not in text
+
+
+def test_docs_write_utf8_to_a_cp1252_pipe(tmp_path):
+    """A Windows pipe is encoded with the console code page, which cannot write '→' (issue 2)."""
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    result = subprocess.run(
+        [sys.executable, "-m", "keepwatch", "docs", "relay"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert "→".encode("utf-8") in result.stdout

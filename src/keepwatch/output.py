@@ -27,6 +27,24 @@ def plain_output(stream: TextIO | None = None) -> bool:
     return not (isatty is not None and isatty())
 
 
+def use_utf8_output() -> None:
+    """Make stdout and stderr write UTF-8 when their encoding cannot (a piped Windows stream is cp1252).
+
+    Python encodes a pipe or a file with the locale's code page, which cannot write the arrows and boxes in
+    keepwatch's output and raises UnicodeEncodeError instead; agents read UTF-8. A terminal is already UTF-8
+    (or uses the console API), pythonw has no streams at all, and test harnesses have nothing to reconfigure.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        encoding = getattr(stream, "encoding", None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not encoding or encoding.lower().replace("-", "") == "utf8" or reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 def make_console(*, stderr: bool = False) -> Console:
     """A Console for the current stdout/stderr (call it inside a command, not at import)."""
     stream = sys.stderr if stderr else sys.stdout
