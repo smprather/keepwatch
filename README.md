@@ -39,6 +39,7 @@ keepwatch docs --all     # everything
 uv sync
 uv run pytest -q
 uv run ruff check src tests
+uv run ty check src     # types; the tests are typed only as far as ruff and pytest require
 ```
 
 The design is in `docs/superpowers/specs/`; the implementation plans are in `docs/superpowers/plans/`.

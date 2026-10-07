@@ -15,7 +15,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -140,7 +140,7 @@ def _load_one(app: App, name: str) -> tuple[GlobalConfig, WatchConfig]:
 
 
 @contextmanager
-def _process_dir(paths: Paths) -> Iterator[int]:
+def _process_dir(paths: Paths) -> Generator[int]:
     """Prepare the private runtime dir for this process and remove it afterwards."""
     pid = os.getpid()
     try:

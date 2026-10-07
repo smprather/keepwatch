@@ -20,7 +20,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, cast
 
 from keepwatch import __version__, platform
 from keepwatch.config import Command, ExitCodes, WatchConfig
@@ -504,8 +504,8 @@ class Runner:
         os.close(req_r)
         os.close(res_w)
         _Writer(req_w, json.dumps(request).encode("utf-8")).start()
-        out = _Reader(process.popen.stdout, call.capture_bytes)
-        err = _Reader(process.popen.stderr, call.capture_bytes)
+        out = _Reader(cast(IO[bytes], process.popen.stdout), call.capture_bytes)
+        err = _Reader(cast(IO[bytes], process.popen.stderr), call.capture_bytes)
         messages = _MessageReader(os.fdopen(res_r, "rb"), RESULT_LIMIT, call.on_message)
         for reader in (out, err, messages):
             reader.start()
@@ -587,7 +587,7 @@ class Runner:
                 }
             )
         base["messages"] = results.messages
-        common = {"hook": call.hook, "kind": "python", "target": target, **base}
+        common: dict[str, Any] = {"hook": call.hook, "kind": "python", "target": target, **base}
         failure = self._failure_status(call)
         returncode = run.returncode
         if run.timed_out:
@@ -619,7 +619,7 @@ class Runner:
                 **common,
             )
         status = result.get("status")
-        details = {"reason": result.get("reason"), "exception": result.get("exception")}
+        details: dict[str, Any] = {"reason": result.get("reason"), "exception": result.get("exception")}
         if call.mode == "describe":
             return HookResult(status="ok" if status == "ok" else "error", hooks=result.get("hooks"), **details, **common)
         if call.hook == CHECK:
@@ -685,8 +685,8 @@ class Runner:
                 )
             except OSError as exc:
                 return self._error(call, "command", target, started, f"cannot start command: {exc.strerror or exc}")
-            out = _Reader(process.popen.stdout, call.capture_bytes)
-            err = _Reader(process.popen.stderr, call.capture_bytes)
+            out = _Reader(cast(IO[bytes], process.popen.stdout), call.capture_bytes)
+            err = _Reader(cast(IO[bytes], process.popen.stderr), call.capture_bytes)
             out.start()
             err.start()
             self._track(process)
@@ -694,7 +694,7 @@ class Runner:
                 returncode, timed_out = self._supervise(process, (out, err), call.timeout)
             finally:
                 self._untrack(process)
-            common = {
+            common: dict[str, Any] = {
                 "hook": call.hook,
                 "kind": "command",
                 "target": target,

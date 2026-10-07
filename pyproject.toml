@@ -33,6 +33,7 @@ dev = [
     "asyncssh>=2.24.0",
     "pytest>=8",
     "ruff>=0.6",
+    "ty>=0.0.85",
 ]
 
 [tool.pytest.ini_options]

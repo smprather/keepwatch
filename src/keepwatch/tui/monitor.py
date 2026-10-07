@@ -247,23 +247,25 @@ class Monitor:
         condition, failures = merged.get("condition"), merged.get("failures")
         interval, description = merged.get("interval"), merged.get("description")
         merged_dir, config_error = merged.get("watch_dir"), merged.get("config_error")
+        last_poll, next_poll = merged.get("last_poll"), merged.get("next_poll")
+        offline, in_flight, activity = merged.get("offline"), merged.get("in_flight"), merged.get("transfer")
         return WatchRow(
             name=name,
             state=_state(merged, poll),
             condition=condition if isinstance(condition, bool) else None,
             failures=failures if isinstance(failures, int) else None,
-            last_poll=merged.get("last_poll") if isinstance(merged.get("last_poll"), dict) else None,
-            next_poll=merged.get("next_poll") if isinstance(merged.get("next_poll"), str) else None,
+            last_poll=last_poll if isinstance(last_poll, dict) else None,
+            next_poll=next_poll if isinstance(next_poll, str) else None,
             observers=_observers(merged),
             pending_events=_count(merged.get("pending_events")),
             note=_note(merged),
             interval=float(interval) if isinstance(interval, (int, float)) else None,
             description=description if isinstance(description, str) else None,
             watch_dir=merged_dir if isinstance(merged_dir, str) else directory,
-            offline=merged.get("offline") if isinstance(merged.get("offline"), dict) else None,
+            offline=offline if isinstance(offline, dict) else None,
             config_error=config_error if isinstance(config_error, str) else None,
-            in_flight=merged.get("in_flight") if isinstance(merged.get("in_flight"), dict) else None,
-            transfer=merged.get("transfer") if isinstance(merged.get("transfer"), dict) else None,
+            in_flight=in_flight if isinstance(in_flight, dict) else None,
+            transfer=activity if isinstance(activity, dict) else None,
         )
 
     def _orphan_row(self, name: str) -> WatchRow:

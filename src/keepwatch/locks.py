@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -20,7 +20,7 @@ def hold_lock(
     *,
     blocking: bool = True,
     on_wait: Callable[[], None] | None = None,
-) -> Iterator[None]:
+) -> Generator[None]:
     """Hold an exclusive lock on path for the duration of the block.
 
     Non-blocking: raise LockBusy if it is held. Blocking: call on_wait (if given)

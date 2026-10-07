@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -398,7 +398,7 @@ def write_askpass(directory: Path, variable: str) -> Path:
 
 
 @contextlib.contextmanager
-def _transfer_env(options: ScpOptions) -> Iterator[dict[str, str]]:
+def _transfer_env(options: ScpOptions) -> Generator[dict[str, str]]:
     """The environment for scp and sftp: the askpass launcher when a password goes through askpass.
 
     With `password_mode = "conpty"` the password is typed at the console instead, so ssh must not find an
@@ -536,7 +536,7 @@ def _activity_file() -> Path | None:
 
 
 @contextlib.contextmanager
-def _activity(**fields: Any) -> Iterator[None]:
+def _activity(**fields: Any) -> Generator[None]:
     """Publish what this transfer is doing (best effort: a status line never fails a transfer)."""
     path = _activity_file()
     if path is not None:

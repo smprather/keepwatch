@@ -554,7 +554,7 @@ class FilesObserver(Observer):
             self._stopped(started, exit_code=None, reason=f"directory {root} does not exist", stderr_tail=[])
             return
         changed = threading.Event()
-        native: NativeObserver | None = NativeObserver()
+        native: Any = NativeObserver()  # watchdog exposes Observer as a per-platform variable, not a class
         native_error = None
         try:
             native.schedule(_Poke(changed), str(root), recursive=self.config.recursive)

@@ -215,7 +215,8 @@ class HookProcess:
                     _kernel32.TerminateJobObject(self._job, TERMINATED_EXIT)
                 return
             try:
-                os.killpg(self.pid, sig)
+                # on POSIX the callers always pass a signal (Windows returned above); a bare None means "end it"
+                os.killpg(self.pid, sig if sig is not None else signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
 
@@ -357,7 +358,8 @@ def replace_junction(link: Path, target: Path) -> None:
         os.rmdir(link)  # removes only the link
     elif link.exists():
         raise FileExistsError(f"{link} exists and is not a link")
-    _winapi.CreateJunction(str(target), str(link))
+    # a private API: it exists on Windows, but a type stub need not list it
+    getattr(_winapi, "CreateJunction")(str(target), str(link))
 
 
 if IS_WINDOWS:

@@ -23,6 +23,8 @@ jobs:
       - run: uv run pytest -q -ra
       - if: runner.os == 'Linux' && matrix.python == '3.12'
         run: uv run ruff check src tests
+      - if: runner.os == 'Linux' && matrix.python == '3.12'
+        run: uv run ty check src
 
   remote-watcher-python-3-6:
     runs-on: ubuntu-latest
