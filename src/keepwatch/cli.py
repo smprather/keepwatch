@@ -1027,14 +1027,19 @@ def kit_copy(source: str, destination: str, **scp) -> None:
 @click.option("--on-conflict", type=click.Choice(transfer.CONFLICTS), default="skip-identical", show_default=True,
               help="When LOCAL_DIR already has the name: skip-identical (no-op if --sha256 matches, else fail), "
               "rename (NAME-1.ext), overwrite.")
+@click.option("--resume", is_flag=True,
+              help="Continue an unfinished .NAME.part from an earlier attempt (needs protocol=sftp), instead of "
+              "discarding it.")
 @_scp_options
-def kit_pull(remote: str, local_dir: str, size: int | None, sha256: str | None, on_conflict: str, **scp) -> None:
+def kit_pull(remote: str, local_dir: str, size: int | None, sha256: str | None, on_conflict: str, resume: bool,
+             **scp) -> None:
     """Copy REMOTE into LOCAL_DIR through a hidden .NAME.part file, verify it, then rename it. Prints the final path.
 
     Exit status: 0, 1 if the copy or a check failed (nothing is left behind), 2 for bad usage.
     """
     options = _scp(**scp)
-    _kit_run(lambda: transfer.pull(remote, local_dir, size=size, sha256=sha256, on_conflict=on_conflict, options=options))
+    _kit_run(lambda: transfer.pull(remote, local_dir, size=size, sha256=sha256, on_conflict=on_conflict,
+                                  resume=resume, options=options))
 
 
 @kit.command(name="push")
@@ -1042,14 +1047,17 @@ def kit_pull(remote: str, local_dir: str, size: int | None, sha256: str | None, 
 @click.argument("remote_dir")
 @click.option("--marker", type=click.Choice(transfer.MARKERS), default="sha256", show_default=True,
               help="After the file, upload NAME.sha256 (sha256sum format) as a completion marker, or none.")
+@click.option("--resume", is_flag=True,
+              help="Continue a partial file an earlier attempt left on the destination (needs protocol=sftp), "
+              "for a server that refuses to overwrite it.")
 @_scp_options
-def kit_push(path: str, remote_dir: str, marker: str, **scp) -> None:
+def kit_push(path: str, remote_dir: str, marker: str, resume: bool, **scp) -> None:
     """Upload PATH into REMOTE_DIR (user@host:dir), then its .sha256 marker. Prints the remote path.
 
     Exit status: 0, 1 if scp failed, 2 for bad usage.
     """
     options = _scp(**scp)
-    _kit_run(lambda: transfer.push(path, remote_dir, marker=marker, options=options))
+    _kit_run(lambda: transfer.push(path, remote_dir, marker=marker, resume=resume, options=options))
 
 
 @kit.command(name="tcp-open")

@@ -106,6 +106,14 @@ WATCH_KEYS = (
         True,
     ),
     Key("retry_after", "interval", None, "While offline, make one trial poll this often.", True),
+    Key(
+        "retry_base",
+        "interval",
+        None,
+        "While offline, the first trial poll waits this long and every failed trial doubles it, up to "
+        "`retry_after`, which it never exceeds. Default: `retry_after` flat, the fixed cadence keepwatch had.",
+        True,
+    ),
     Key("python_dependencies", "str_list", (), "PEP 508 requirements for watch.py, installed by uv."),
     Key(
         "shell",
@@ -395,6 +403,14 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
             "`askpass` (the password goes through SSH_ASKPASS) or `conpty` (type it at a Windows pseudo-console, "
             "for servers that refuse askpass; needs `password_env` and the keepwatch[conpty] extra).",
         ),
+        Key(
+            "resume",
+            "bool",
+            False,
+            "Continue a partial file an earlier attempt left on the destination, with sftp's reput, when its "
+            "server refuses to overwrite: needs `protocol = \"sftp\"` and `marker = \"sha256\"` (the marker is "
+            "what verifies the finished file on the receiving side).",
+        ),
         *_SSH_SETTINGS,
         Key("marker", "str", "sha256", "`sha256`: upload NAME.sha256 after each file as a completion marker; `none`."),
         Key("after", "str", "delete", "After a push: `delete` the local file, `archive` it, or `keep` it (a ledger remembers it)."),
@@ -475,6 +491,23 @@ def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any],
                 table="settings",
                 topic="recipes",
             )
+        if values["resume"]:
+            if values["protocol"] != "sftp":
+                collector.add(
+                    'resume = true needs protocol = "sftp": scp cannot continue a partial upload, and a server '
+                    'without SFTP cannot either',
+                    key="resume",
+                    table="settings",
+                    topic="recipes",
+                )
+            if values["marker"] != "sha256":
+                collector.add(
+                    'resume = true needs marker = "sha256": the marker is what verifies a continued upload on '
+                    "the receiving side",
+                    key="resume",
+                    table="settings",
+                    topic="recipes",
+                )
         try:
             dest_remote = not values["dest"] or parse_endpoint(values["dest"]).remote
         except ValueError as exc:
@@ -544,6 +577,7 @@ class WatchConfig:
     action_timeout: float = 60.0
     max_failures: int = 5
     retry_after: float | None = None
+    retry_base: float | None = None
     python_dependencies: tuple[str, ...] = ()
     shell: tuple[str, ...] | None = None
     recipe: str | None = None

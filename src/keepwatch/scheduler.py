@@ -44,9 +44,22 @@ def _failure_summary(report: PollReport) -> str:
     return f"check {report.outcome.value}: {report.reason}"
 
 
+def trial_delay(retry_after: float, retry_base: float | None, failures: int) -> float:
+    """How long before the next trial poll: an accordion that reaches `retry_after` and stays there.
+
+    The k-th consecutive failed trial waits `min(retry_after, retry_base * 2^(k-1))` — the shape of the failure
+    backoff above — so a blip is retried quickly and a long outage is probed rarely. A poll in which the check
+    answered resets the failure count, and with it the accordion. Without `retry_base` the wait is `retry_after`
+    flat, which is what keepwatch did before.
+    """
+    if retry_base is None:
+        return retry_after
+    return min(retry_after, retry_base * 2 ** (max(failures, 1) - 1))
+
+
 class WatchRunner:
     """Owns one watch's state. poll_once() is synchronous; start() runs it on a thread."""
-
+    """Owns one watch's state. poll_once() is synchronous; start() runs it on a thread."""
     def __init__(
         self,
         config: WatchConfig,
@@ -196,11 +209,15 @@ class WatchRunner:
             if self.offline.by_user or config.retry_after is None:
                 return None
             base = self.last_trial if self.last_trial is not None else self.offline.since_epoch()
-            return max(base + config.retry_after - now, 0.0)
+            return max(base + self._trial_delay(config) - now, 0.0)
         if self._wake_requested and self.state.failures == 0:
             earliest = now if self._last_end is None else self._last_end + WAKE_GAP
             return max(min(self.next_due, max(earliest, self._hold_until)) - now, 0.0)
         return max(self.next_due - now, 0.0)
+
+    def _trial_delay(self, config: WatchConfig) -> float:
+        """This watch's next trial-poll wait (see `trial_delay`)."""
+        return trial_delay(float(config.retry_after or 0.0), config.retry_base, self.state.failures)
 
     def poll_once(self, now: float) -> PollReport | None:
         """Poll if due (a trial poll when offline with retry_after). Returns None when not due."""

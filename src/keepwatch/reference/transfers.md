@@ -77,6 +77,22 @@ A last trap for the same destination: **mod_sftp may ignore a server-side `autho
 administrator sets `SFTPAuthorizedUserKeys` (or the equivalent for that build), so a key path that "should"
 work may still be refused — check the server's SFTP configuration before concluding the key is wrong.
 
+### A destination that refuses to overwrite
+
+Some destinations (mod_sftp again) refuse to overwrite a file that already exists. That turns one failed push
+into a trap: the partial `NAME` left by a dropped connection **poisons that name**, and every retry fails with a
+bare `Permission denied` that reads like a wrong password. keepwatch now says what it is:
+
+```
+WARNING psg-export-2026.10.6_1 is already on the destination and its server refuses to overwrite it (a partial
+file from an earlier attempt?); remove it there and the next attempt pushes cleanly
+```
+
+With `resume = true` (needs `protocol = "sftp"` and `marker = "sha256"`) it goes further and **continues the
+partial** with sftp's `reput` instead of failing, then uploads the marker as usual — the marker is what verifies
+the finished file on the receiving side, so a continued upload that ended up wrong is caught there. `keepwatch
+kit push --resume` does the same by hand, and `ctx.transfer.push(..., resume=True)` for watch authors.
+
 ## Errors
 
 - **Remote login scripts must print nothing** for non-interactive sessions: an `echo` in the remote `.cshrc`/`.bashrc` corrupts scp in both protocols ("Received message too long"). Guard it: `if ($?prompt) then … endif` in csh/tcsh, `case $- in *i*) … ;; esac` in sh/bash. (The remote watcher of `remote_files` tolerates such output; scp cannot.) File names with spaces or shell characters work: keepwatch writes remote paths the way each scp needs them (backslash escapes with the classic protocol on Linux; on Windows, where Windows' scp turns backslashes into slashes, `?` wildcards for pulls and quotes for pushes; plain names with SFTP). A name holding both kinds of quotes cannot be pushed with the classic protocol from Windows; use `protocol = "sftp"` or rename it.

@@ -17,6 +17,21 @@ min(max(interval, 60s) * 2^(k-1), max(interval, 1h))
 
 With the default `max_failures = 5` the waits are 1m, 2m, 4m and 8m, so a watch goes offline after about 15 minutes of continuous failure whatever its interval. The slow retry also keeps a failing `scp` from producing a burst of failed ssh logins, which tools like fail2ban punish with an IP ban.
 
+## Trial polls
+
+An offline watch with `retry_after` keeps making trial polls, and their spacing is an accordion of the same
+shape: the k-th consecutive failed trial waits
+
+```
+min(retry_after, retry_base * 2^(k-1))
+```
+
+With `retry_after = "10m"` and `retry_base = "1m"`: 1m, 2m, 4m, 8m, 10m, 10m, … A blip is retried within a
+minute, and a destination that is away for a day is probed minutes apart instead of 144 times. A poll in which
+the check answered resets the failure count, and with it the accordion. Without `retry_base` the spacing is
+`retry_after` flat, which is what keepwatch did before, and a watch taken offline by hand
+(`keepwatch disable`, or `by_user`) is never probed at all.
+
 ## Going offline
 
 When the failure count reaches `max_failures` (default 5; `0` means never):

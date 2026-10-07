@@ -232,8 +232,8 @@ def _quoted_for_sftp(path: str) -> str:
     return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def sftp_reget_argv(source: Endpoint, options: ScpOptions, batch: Path) -> list[str]:
-    """The sftp command line that continues a partial file (scp itself cannot resume).
+def sftp_argv(host: Endpoint, options: ScpOptions, batch: Path) -> list[str]:
+    """The sftp command line for one batch run (reget continues a pull, reput a push; scp does neither).
 
     sftp takes the scp options it shares (-o, -i, -P, -F is part of ssh_options) and reads its commands from
     `batch`. The program is the `sftp` beside `scp_command[0]`, so a watch that names its scp names its sftp.
@@ -244,17 +244,32 @@ def sftp_reget_argv(source: Endpoint, options: ScpOptions, batch: Path) -> list[
         argv += known_hosts_option(options.known_hosts)
     if options.identity is not None:
         argv += ["-i", str(options.identity), "-o", "IdentitiesOnly=yes"]
-    port = options.port if options.port is not None else source.port
+    port = options.port if options.port is not None else host.port
     if port is not None:
         argv += ["-P", str(port)]
     argv += ["-q", "-b", str(batch)]
-    host = f"{source.user}@{source.host}" if source.user else str(source.host)
-    return [*argv, host]
+    name = f"{host.user}@{host.host}" if host.user else str(host.host)
+    return [*argv, name]
 
 
 def sftp_reget_batch(source: Endpoint, part: Path) -> str:
     """The sftp batch that continues `part` from the remote file (reget resumes from the local size)."""
     return f"reget {_quoted_for_sftp(source.path)} {_quoted_for_sftp(str(part))}\n"
+
+
+def sftp_reput_batch(local: Path, target: Endpoint) -> str:
+    """The sftp batch that continues `target` on the destination from `local` (reput resumes from its size)."""
+    return f"reput {_quoted_for_sftp(str(local))} {_quoted_for_sftp(target.path)}\n"
+
+
+def _refused_overwrite(exc: CommandFailed, name: str) -> bool:
+    """Whether scp failed because the destination holds NAME and refuses to overwrite it.
+
+    The signature is `<path>/NAME: Permission denied`. That is not the authentication failure
+    (`Permission denied (publickey,password)`, no path) it is so easily mistaken for; see `keepwatch docs
+    transfers` for the whole trap.
+    """
+    return f"{name}: Permission denied" in (exc.stderr or "")
 
 
 @dataclass(frozen=True)
@@ -461,7 +476,7 @@ def _sftp_reget(source: Endpoint, part: Path, options: ScpOptions, report: Repor
     with tempfile.TemporaryDirectory(prefix="keepwatch-sftp-", dir=_askpass_dir()) as work:
         batch = Path(work) / "reget.batch"
         batch.write_text(sftp_reget_batch(source, part), encoding="utf-8")
-        argv = sftp_reget_argv(source, options, batch)
+        argv = sftp_argv(source, options, batch)
         started = time.monotonic()
         with _transfer_env(options) as env:
             returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options)
@@ -469,6 +484,24 @@ def _sftp_reget(source: Endpoint, part: Path, options: ScpOptions, report: Repor
         report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
     if timed_out:
         raise TransferFailed(f"sftp timed out after {format_duration(limit or 0)}: {source.scp_arg()} -> {part}")
+    if returncode != 0:
+        raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
+
+
+def _sftp_reput(local: Path, target: Endpoint, options: ScpOptions, report: Report | None) -> None:
+    """Continue a partial upload with sftp's reput, for a destination that refuses to overwrite (see `resume`)."""
+    limit = _deadline_limit(options, "sftp", f"{local} -> {target.scp_arg()}")
+    with tempfile.TemporaryDirectory(prefix="keepwatch-sftp-", dir=_askpass_dir()) as work:
+        batch = Path(work) / "reput.batch"
+        batch.write_text(sftp_reput_batch(local, target), encoding="utf-8")
+        argv = sftp_argv(target, options, batch)
+        started = time.monotonic()
+        with _transfer_env(options) as env:
+            returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options)
+    if report is not None:
+        report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
+    if timed_out:
+        raise TransferFailed(f"sftp timed out after {format_duration(limit or 0)}: {local} -> {target.scp_arg()}")
     if returncode != 0:
         raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
 
@@ -746,9 +779,18 @@ def push(
     *,
     marker: str = "sha256",
     options: ScpOptions = ScpOptions(),
+    resume: bool = False,
     report: Report | None = None,
+    warn: Callable[[str], None] | None = None,
 ) -> str:
-    """Upload a file into remote_dir, then (marker="sha256") NAME.sha256 in sha256sum format once the data succeeded. Returns the remote path."""
+    """Upload a file into remote_dir, then (marker="sha256") NAME.sha256 in sha256sum format once the data succeeded. Returns the remote path.
+
+    A destination that already holds NAME and refuses to overwrite it is a trap: a partial file from a failed
+    attempt poisons that name until someone removes it, and the bare `Permission denied` reads like an auth
+    failure. `warn` is told what it probably means; with `resume` (needs the sftp protocol) keepwatch continues
+    the partial with sftp's reput instead of failing. The marker is still written afterwards, so the receiving
+    side verifies the finished file.
+    """
     local = Path(path)
     if not local.is_file():
         raise TransferFailed(f"{local} is not a file")
@@ -763,10 +805,23 @@ def push(
     except OSError:
         size = None
     with _activity(name=local.name, size=size):  # status.json and the TUI read this
-        if marker == "none":
+        try:
             copy(local, target, options=options, report=report)
+        except CommandFailed as exc:
+            if not _refused_overwrite(exc, local.name):
+                raise
+            if warn is not None:
+                warn(
+                    f"{local.name} is already on the destination and its server refuses to overwrite it (a partial "
+                    "file from an earlier attempt?); remove it there and the next attempt pushes cleanly"
+                )
+            if not resume:
+                raise
+            if warn is not None:
+                warn(f"continuing that partial {local.name} with sftp (its marker still verifies the result)")
+            _sftp_reput(local, target, options, report)
+        if marker == "none":
             return target.scp_arg()
-        copy(local, target, options=options, report=report)
         with tempfile.TemporaryDirectory(prefix="keepwatch-marker-") as work:
             marker_file = Path(work) / f"{local.name}.sha256"
             marker_file.write_bytes(f"{sha256_file(local)}  {local.name}\n".encode())
@@ -862,13 +917,18 @@ class Transfer:
         return pull(remote, directory, size=size, sha256=sha256, on_conflict=on_conflict, options=scp,
                     resume=resume, warn=self._warn, report=self._report)
 
-    def push(self, path: str | os.PathLike[str], remote_dir: str, *, marker: str = "sha256", **options: Any) -> str:
-        """Upload a file into remote_dir, then NAME.sha256 (sha256sum format) unless marker="none"; returns the remote path."""
+    def push(self, path: str | os.PathLike[str], remote_dir: str, *, marker: str = "sha256", resume: bool = False,
+             **options: Any) -> str:
+        """Upload a file into remote_dir, then NAME.sha256 (sha256sum format) unless marker="none"; returns the remote path.
+
+        With `resume` (needs protocol="sftp"), a destination that refuses to overwrite a partial file from an
+        earlier attempt is continued with sftp's reput instead of failing.
+        """
         scp = self._options(options)
         local = Path(path)
         if not local.is_absolute():
             local = self._base / local
-        return push(local, remote_dir, marker=marker, options=scp, report=self._report)
+        return push(local, remote_dir, marker=marker, options=scp, resume=resume, warn=self._warn, report=self._report)
 
     def tcp_open(self, host: str, port: int = 22, timeout: float = 5.0) -> bool:
         """True when host:port accepts a TCP connection within `timeout` seconds (allowed in a check)."""

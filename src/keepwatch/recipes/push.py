@@ -114,7 +114,7 @@ def on_true(ctx: Ctx) -> None:
             budget = file_budget(ctx.remaining, len(files) - index, settings["file_timeout"])
             try:
                 remote = ctx.transfer.push(path, settings["dest"], marker=settings["marker"],
-                                           deadline=time.time() + budget, **options)
+                                           resume=settings["resume"], deadline=time.time() + budget, **options)
             except (TransferFailed, CommandFailed, OSError) as exc:
                 error = error or exc
                 ctx.log.warning("pushing %s failed (%s); the rest of the queue is still tried", path.name, exc)

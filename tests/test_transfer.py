@@ -235,7 +235,7 @@ def test_the_resume_command_is_the_sftp_beside_scp(tmp_path):
     options = ScpOptions(protocol="sftp", identity="/k/id", known_hosts="/k/hosts",
                          ssh_options=["-F", "/k/config"], scp_command=[scp])
     batch = tmp_path / "b.batch"
-    argv = transfer.sftp_reget_argv(parse_endpoint("scp://u@host:2222/a.gz"), options, batch)
+    argv = transfer.sftp_argv(parse_endpoint("scp://u@host:2222/a.gz"), options, batch)
     assert argv[0] == str(Path(scp).with_name("sftp"))  # the sftp next to the scp a watch configured
     assert argv[1:3] == ["-F", "/k/config"]
     assert ["-o", "BatchMode=yes"] == argv[3:5]
@@ -343,6 +343,41 @@ def test_the_conpty_mode_hands_the_password_to_the_pty(monkeypatch):
     code, out, err, timed_out = transfer._run(["scp", "a", "b"], {"KW_PW": "s3cret"}, 30.0, options=options)
     assert calls == [(["scp", "a", "b"], "s3cret", 30.0)]
     assert (code, out, err, timed_out) == (0, "typed\n", "", False)
+
+
+def test_the_sftp_batch_continues_a_push():
+    batch = transfer.sftp_reput_batch(Path(".a b.gz"), parse_endpoint("u@host:/in/a b.gz"))
+    assert batch == 'reput ".a b.gz" "/in/a b.gz"\n'  # reput takes the local path first
+
+
+def test_the_overwrite_refusal_is_told_apart_from_a_bad_password():
+    refused = transfer.CommandFailed(["scp"], 1, "/in/a.bin: Permission denied\n")
+    assert transfer._refused_overwrite(refused, "a.bin") is True
+    auth = transfer.CommandFailed(["scp"], 255, "u@host: Permission denied (publickey,password).\n")
+    assert transfer._refused_overwrite(auth, "a.bin") is False
+
+
+def test_a_refused_overwrite_is_explained_and_can_be_continued(monkeypatch, tmp_path):
+    """A partial file on an overwrite-refusing destination: say what it is, and (with resume) reput into it."""
+    local = tmp_path / "a.bin"
+    local.write_bytes(b"data")
+    refused = transfer.CommandFailed(["scp"], 1, "/in/a.bin: Permission denied\n")
+    warnings: list[str] = []
+    resumed: list[str] = []
+
+    def fake_copy(source, destination, *, options=None, report=None):
+        if destination.path.endswith("a.bin"):  # the upload itself; the marker that follows succeeds
+            raise refused
+
+    monkeypatch.setattr(transfer, "copy", fake_copy)
+    monkeypatch.setattr(transfer, "_sftp_reput", lambda *a, **k: resumed.append("reput"))
+    options = ScpOptions(protocol="sftp")
+    with pytest.raises(transfer.CommandFailed):
+        transfer.push(local, "u@host:/in", options=options, warn=warnings.append)
+    assert warnings and "refuses to overwrite" in warnings[0] and "remove it there" in warnings[0]
+    assert resumed == []
+    transfer.push(local, "u@host:/in", options=options, resume=True, warn=warnings.append)
+    assert resumed == ["reput"] and any("continuing that partial" in warning for warning in warnings)
 
 
 def test_a_one_letter_host_with_a_slash_is_a_drive():
