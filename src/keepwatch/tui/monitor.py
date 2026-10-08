@@ -259,7 +259,8 @@ class Monitor:
             observers=_observers(merged),
             pending_events=_count(merged.get("pending_events")),
             note=_note(merged),
-            interval=float(interval) if isinstance(interval, (int, float)) else None,
+            # a duration keepwatch itself wrote into status.json, already guarded by the isinstance above
+            interval=float(interval) if isinstance(interval, (int, float)) else None,  # pi-lens-ignore: unchecked-numeric-parse-python
             description=description if isinstance(description, str) else None,
             watch_dir=merged_dir if isinstance(merged_dir, str) else directory,
             offline=offline if isinstance(offline, dict) else None,
@@ -354,7 +355,7 @@ def _count(value: Any) -> int:
 
 def _whole(seconds: float) -> int:
     """Whole seconds for display, never negative (a backwards clock must not print "-3s")."""
-    return max(int(seconds), 0)
+    return max(int(seconds), 0)  # pi-lens-ignore: unchecked-numeric-parse-python -- a float this module computed
 
 
 def _state(entry: dict[str, Any], poll: InFlight | None) -> str:
@@ -445,7 +446,7 @@ def transfer_line(activity: dict[str, Any], rate: float | None = None) -> str:
     """The transfer part of the header: what is moving, how far, and (with two samples) how fast."""
     text = transfer.activity_text(activity)
     if isinstance(rate, float) and rate > 0:
-        text += f", {transfer.format_bytes(int(rate))}/s"
+        text += f", {transfer.format_bytes(int(rate))}/s"  # pi-lens-ignore: unchecked-numeric-parse-python -- our own float
     return text
 
 

@@ -3,6 +3,10 @@
 The rest of keepwatch calls these functions instead of OS-specific APIs.
 """
 
+# pyright: reportAttributeAccessIssue=false, reportPossiblyUnboundVariable=false
+# Two rules are unavoidably wrong in this one file: it is where keepwatch imports Windows-only modules
+# (ctypes, msvcrt, wintypes, _winapi) inside `if IS_WINDOWS:` and calls them inside Windows-only functions, so
+# a non-Windows analyzer sees every use as possibly unbound or as a missing attribute. Everything else stays on.
 from __future__ import annotations
 
 import os
@@ -262,12 +266,12 @@ def start_process(
     except OSError:
         popen.kill()
         raise
-    if not _kernel32.AssignProcessToJobObject(job, int(popen._handle)):
+    if not _kernel32.AssignProcessToJobObject(job, int(popen._handle)):  # pi-lens-ignore: unchecked-numeric-parse-python -- a handle we just opened
         error = ctypes.get_last_error()
         popen.kill()
         _kernel32.CloseHandle(job)
         raise ctypes.WinError(error)
-    status = _ntdll.NtResumeProcess(int(popen._handle))
+    status = _ntdll.NtResumeProcess(int(popen._handle))  # pi-lens-ignore: unchecked-numeric-parse-python -- a handle we just opened
     if status != 0:
         popen.kill()
         _kernel32.CloseHandle(job)
@@ -355,7 +359,7 @@ def replace_junction(link: Path, target: Path) -> None:
     import _winapi
 
     if link.is_junction() or link.is_symlink():
-        os.rmdir(link)  # removes only the link
+        os.rmdir(link)  # pi-lens-ignore: unchecked-throwing-call-python -- removes only the link; the caller decides if it fails
     elif link.exists():
         raise FileExistsError(f"{link} exists and is not a link")
     # a private API: it exists on Windows, but a type stub need not list it
@@ -377,7 +381,7 @@ if IS_WINDOWS:
 def open_shared(path: Path) -> BinaryIO:
     """Open a file for reading without stopping others from renaming or deleting it (matters on Windows)."""
     if not IS_WINDOWS:
-        return open(path, "rb")
+        return open(path, "rb")  # pi-lens-ignore: unchecked-throwing-call-python -- the caller decides what an unreadable file means
     handle = _kernel32.CreateFileW(
         str(path), _GENERIC_READ, _FILE_SHARE_ALL, None, _OPEN_EXISTING, _FILE_ATTRIBUTE_NORMAL, None
     )

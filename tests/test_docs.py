@@ -31,26 +31,30 @@ def test_render_all_contains_every_topic_in_order():
     assert positions == sorted(positions)
 
 
-def test_docs_without_topic_lists_topics(xdg):
+@pytest.mark.usefixtures("xdg")
+def test_docs_without_topic_lists_topics():
     result = run("docs")
     assert result.exit_code == 0
     assert "keepwatch docs agent" in result.output
 
 
-def test_docs_topic_is_raw_markdown_when_piped(xdg):
+@pytest.mark.usefixtures("xdg")
+def test_docs_topic_is_raw_markdown_when_piped():
     result = run("docs", "agent")
     assert result.exit_code == 0
     assert result.output == render_topic("agent") + "\n"
     assert "\x1b[" not in result.output
 
 
-def test_unknown_topic_suggests(xdg):
+@pytest.mark.usefixtures("xdg")
+def test_unknown_topic_suggests():
     result = run("docs", "agnet")
     assert result.exit_code == 1
     assert "did you mean 'agent'" in result.output
 
 
-def test_help_points_agents_at_the_docs(xdg):
+@pytest.mark.usefixtures("xdg")
+def test_help_points_agents_at_the_docs():
     assert "keepwatch docs agent" in run("--help").output
 
 

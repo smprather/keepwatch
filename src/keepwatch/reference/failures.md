@@ -11,7 +11,7 @@ An `unknown` outcome neither fails nor succeeds a poll. A poll in which the chec
 
 After the k-th consecutive failed poll, the wait before the next poll is
 
-```
+```text
 min(max(interval, 60s) * 2^(k-1), max(interval, 1h))
 ```
 
@@ -22,7 +22,7 @@ With the default `max_failures = 5` the waits are 1m, 2m, 4m and 8m, so a watch 
 An offline watch with `retry_after` keeps making trial polls, and their spacing is an accordion of the same
 shape: the k-th consecutive failed trial waits
 
-```
+```text
 min(retry_after, retry_base * 2^(k-1))
 ```
 

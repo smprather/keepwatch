@@ -21,7 +21,8 @@ def test_status_shows_what_a_watch_is_running_and_transferring(xdg, make_watch):
     part = xdg.state_home / ".a.bin.part"
     part.parent.mkdir(parents=True, exist_ok=True)
     part.write_bytes(b"x" * 2048)
-    write_json_atomic(xdg.status_file, {
+    # a path this test built under pytest's tmp_path, not one that came from anywhere
+    write_json_atomic(xdg.status_file, {  # pi-lens-ignore: python-path-traversal
         "format": 1,
         "service": {"running": True, "pid": 4711, "version": "2026.10.10", "started": iso_time(time.time() - 60),
                     "updated": iso_time(time.time()), "config": "x", "config_error": None, "only": []},
@@ -67,7 +68,7 @@ def test_status_without_a_service(xdg, make_watch):
 def test_status_with_a_running_service(xdg, make_watch):
     make_watch("a", config='[hooks]\ncheck = ["true"]\n')
     ensure_private_dir(xdg.runtime)
-    service = Service(paths=xdg, config_path=xdg.config_file, sink=lambda record: None, start_threads=False)
+    service = Service(paths=xdg, config_path=xdg.config_file, sink=lambda _record: None, start_threads=False)
     service.start()
     service.runners["a"].poll_once(time.time())
     service.tick()
@@ -82,8 +83,8 @@ def test_status_with_a_running_service(xdg, make_watch):
     assert "service: running" in text
 
 
-def test_status_for_an_unknown_watch(xdg, make_watch):
+def test_status_for_an_unknown_watch(make_watch):
     make_watch("psg-export", config='[hooks]\ncheck = ["true"]\n')
-    result = run("status", "psg-exprot")
+    result = run("status", "psg-exprot")  # pi-lens-ignore: typos:unknown -- deliberate: the test asserts the did-you-mean hint
     assert result.exit_code == 1
     assert "did you mean 'psg-export'" in result.output

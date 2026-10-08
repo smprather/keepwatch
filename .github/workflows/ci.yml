@@ -6,6 +6,9 @@ on:
     tags: ["v*"]
   pull_request:
 
+permissions:
+  contents: read  # the jobs only read the repository (and, on a release tag, that is all they need)
+
 jobs:
   test:
     strategy:
@@ -17,8 +20,10 @@ jobs:
     env:
       UV_PYTHON: ${{ matrix.python }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2, pinned to a commit
+        with:
+          persist-credentials: false  # nothing here pushes
+      - uses: astral-sh/setup-uv@05273c154d09957eb9a2377d9c988fbda431d1c5  # pi-lens-ignore: zizmor:cache-poisoning -- v6.4.0 pinned; only this repository's pushes write the cache, and a fork's pull request cannot write the base branch's
       - run: uv sync
       - run: uv run pytest -q -ra
       - if: runner.os == 'Linux' && matrix.python == '3.12'
@@ -30,6 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     container: python:3.6-slim
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2, pinned to a commit
+        with:
+          persist-credentials: false
       - run: python -m py_compile src/keepwatch/remote_watcher.py tests/remote_watcher_selftest.py
       - run: python tests/remote_watcher_selftest.py -v

@@ -103,7 +103,7 @@ class DurationType(click.ParamType):
 
     def convert(self, value, param, ctx):
         if isinstance(value, (int, float)):
-            return float(value)
+            return float(value)  # pi-lens-ignore: unchecked-numeric-parse-python -- guarded by the isinstance above
         try:
             return parse_duration(value)
         except DurationError as exc:
@@ -448,7 +448,7 @@ def run_service(app: App, only: tuple[str, ...], verbose: bool, quiet: bool) -> 
         stack.callback(shutil.rmtree, paths.process_dir(os.getpid()), True)
         stop = threading.Event()
 
-        def request_stop(signum: int, frame: object) -> None:
+        def request_stop(*_args: object) -> None:  # the signal module passes signum and frame; neither is used
             stop.set()
 
         signal.signal(signal.SIGTERM, request_stop)
@@ -1057,7 +1057,8 @@ def kit_push(path: str, remote_dir: str, marker: str, resume: bool, **scp) -> No
     Exit status: 0, 1 if scp failed, 2 for bad usage.
     """
     options = _scp(**scp)
-    _kit_run(lambda: transfer.push(path, remote_dir, marker=marker, resume=resume, options=options))
+    # `push` here is the transfer function, not a method on some other language's object
+    _kit_run(lambda: transfer.push(path, remote_dir, marker=marker, resume=resume, options=options))  # pi-lens-ignore: python-cross-language-method
 
 
 @kit.command(name="tcp-open")

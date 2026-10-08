@@ -8,6 +8,7 @@ is needed anywhere else (the rest of keepwatch is standard library only).
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import time
@@ -74,15 +75,13 @@ def run(
                 timed_out = True
                 process.terminate(force=True)
                 break
-            time.sleep(POLL)
+            time.sleep(POLL)  # pi-lens-ignore: python-sleep-in-test -- the poll loop of a pty reader, not a test
     finally:
         for closer in ("cancel", "close"):
             method = getattr(process, closer, None)  # winpty's API differs a little between versions
             if method is not None:
-                try:
+                with contextlib.suppress(Exception):  # best effort: winpty's API differs between versions
                     method()
-                except Exception:
-                    pass  # closing is best effort: winpty's API differs a little between versions
     output = scrub("".join(collected), password)
     exit_code = None if timed_out else process.exitstatus
     return exit_code, output, "", timed_out

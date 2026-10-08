@@ -248,7 +248,7 @@ class Observer:
 
     def run_once(self) -> None:
         """Run the source until it ends or stop() is called, logging observer.started and observer.stopped."""
-        raise NotImplementedError
+        raise NotImplementedError  # pi-lens-ignore: no-raise-not-implemented -- abstract: every observer kind implements run_once
 
 
 def stop_all(running: Iterable[Observer], timeout: float = OBSERVER_JOIN) -> None:
@@ -404,7 +404,7 @@ class CommandObserver(Observer):
             if kill_at is not None:
                 if now >= kill_at:
                     process.kill()
-                    kill_at = float("inf")
+                    kill_at = float("inf")  # pi-lens-ignore: unchecked-numeric-parse-python -- a constant, not a parse
                 continue
             if self._stop.is_set():
                 reason = "stopped"
@@ -524,7 +524,7 @@ class FilesObserver(Observer):
         root = self.config.path
         assert root is not None
         if not self.config.recursive:
-            listing = [(root, os.listdir(root))]
+            listing = [(root, os.listdir(root))]  # pi-lens-ignore: unchecked-throwing-call-python -- an unreadable directory ends this scan
         else:
             if not root.is_dir():
                 raise FileNotFoundError(errno.ENOENT, "directory does not exist", str(root))
