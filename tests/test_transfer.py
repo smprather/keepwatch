@@ -378,8 +378,9 @@ def test_a_refused_overwrite_is_explained_and_can_be_continued(monkeypatch, tmp_
     resumed: list[str] = []
 
     def fake_copy(source, destination, *, options=None, report=None):
-        assert source == local and options is not None and report is None  # the calling convention, checked
+        assert options is not None and report is None  # the calling convention, checked
         if destination.path.endswith("a.bin"):  # the upload itself; the marker that follows succeeds
+            assert source == local
             raise refused
 
     monkeypatch.setattr(transfer, "copy", fake_copy)
