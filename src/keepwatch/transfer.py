@@ -265,11 +265,13 @@ def sftp_reput_batch(local: Path, target: Endpoint) -> str:
 def _refused_overwrite(exc: CommandFailed, name: str) -> bool:
     """Whether scp failed because the destination holds NAME and refuses to overwrite it.
 
-    The signature is `<path>/NAME: Permission denied`. That is not the authentication failure
-    (`Permission denied (publickey,password)`, no path) it is so easily mistaken for; see `keepwatch docs
-    transfers` for the whole trap.
+    Two shapes, one anchored on the name: the classic protocol says `<path>/NAME: Permission denied`, while the
+    SFTP protocol (the one `resume` needs) says `dest open "<path>/NAME": Permission denied` — quoted, which a
+    plain substring test walks straight past. Neither is the authentication failure (`Permission denied
+    (publickey,password)`, which names no file); see `keepwatch docs transfers` for the whole trap.
     """
-    return f"{name}: Permission denied" in (exc.stderr or "")
+    pattern = rf"{re.escape(name)}\"?:\s*Permission denied"
+    return re.search(pattern, exc.stderr or "", re.IGNORECASE) is not None
 
 
 @dataclass(frozen=True)

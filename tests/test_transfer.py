@@ -351,33 +351,46 @@ def test_the_sftp_batch_continues_a_push():
 
 
 def test_the_overwrite_refusal_is_told_apart_from_a_bad_password():
-    refused = transfer.CommandFailed(["scp"], 1, "/in/a.bin: Permission denied\n")
-    assert transfer._refused_overwrite(refused, "a.bin") is True
+    classic = transfer.CommandFailed(["scp"], 1, "/in/a.bin: Permission denied\n")
+    assert transfer._refused_overwrite(classic, "a.bin") is True
+    sftp = transfer.CommandFailed(
+        ["scp"], 1,
+        'C:\\OpenSSH\\scp.EXE: dest open "/in/a.bin": Permission denied\n'
+        "C:\\OpenSSH\\scp.EXE: failed to upload file C:/tmp/a.bin to /in/a.bin\n",
+    )
+    assert transfer._refused_overwrite(sftp, "a.bin") is True  # the quoted form (issue 10)
     auth = transfer.CommandFailed(["scp"], 255, "u@host: Permission denied (publickey,password).\n")
     assert transfer._refused_overwrite(auth, "a.bin") is False
+    other = transfer.CommandFailed(["scp"], 1, "/in/b.bin: Permission denied\n")
+    assert transfer._refused_overwrite(other, "a.bin") is False  # anchored on this file's name
 
 
 def test_a_refused_overwrite_is_explained_and_can_be_continued(monkeypatch, tmp_path):
     """A partial file on an overwrite-refusing destination: say what it is, and (with resume) reput into it."""
     local = tmp_path / "a.bin"
     local.write_bytes(b"data")
-    refused = transfer.CommandFailed(["scp"], 1, "/in/a.bin: Permission denied\n")
+    refused = transfer.CommandFailed(
+        ["scp"], 1,
+        'C:\\OpenSSH\\scp.EXE: dest open "/in/a.bin": Permission denied\n'
+        "C:\\OpenSSH\\scp.EXE: failed to upload file C:/tmp/a.bin to /in/a.bin\n",
+    )
     warnings: list[str] = []
     resumed: list[str] = []
 
     def fake_copy(source, destination, *, options=None, report=None):
+        assert source == local and options is not None and report is None  # the calling convention, checked
         if destination.path.endswith("a.bin"):  # the upload itself; the marker that follows succeeds
             raise refused
 
     monkeypatch.setattr(transfer, "copy", fake_copy)
-    monkeypatch.setattr(transfer, "_sftp_reput", lambda *a, **k: resumed.append("reput"))
+    monkeypatch.setattr(transfer, "_sftp_reput", lambda *args, **_: resumed.append(args[0].name))
     options = ScpOptions(protocol="sftp")
     with pytest.raises(transfer.CommandFailed):
         transfer.push(local, "u@host:/in", options=options, warn=warnings.append)
     assert warnings and "refuses to overwrite" in warnings[0] and "remove it there" in warnings[0]
     assert resumed == []
     transfer.push(local, "u@host:/in", options=options, resume=True, warn=warnings.append)
-    assert resumed == ["reput"] and any("continuing that partial" in warning for warning in warnings)
+    assert resumed == ["a.bin"] and any("continuing that partial" in warning for warning in warnings)
 
 
 def test_a_one_letter_host_with_a_slash_is_a_drive():
@@ -474,7 +487,7 @@ def test_ssh_options_must_be_a_list_of_arguments():
 def test_unknown_versions_are_not_cached(monkeypatch):
     calls = []
 
-    def fake_run(argv, **kwargs):
+    def fake_run(argv, **_):
         calls.append(argv)
         if len(calls) == 1:
             raise OSError("busy")
