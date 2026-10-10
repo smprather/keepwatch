@@ -296,6 +296,7 @@ class ObserverConfig:
     ssh_options: tuple[str, ...] = ()
     ssh_command: tuple[str, ...] | None = None
     skip_ledger: str | None = None
+    skip_checkpoint: str | None = None  # kind = remote_tree: the checkpoint (ctx.checkpoint) holding its expected state
     marker: str = "none"
 
 

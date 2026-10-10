@@ -30,7 +30,7 @@ from watchdog.observers import Observer as NativeObserver
 
 from keepwatch import platform
 from keepwatch.config import Command, ObserverConfig, WatchConfig
-from keepwatch.ctx import Ledger, LedgerCorrupt, ledger_file
+from keepwatch.ctx import Ledger, LedgerCorrupt, checkpoint_file, ledger_file
 from keepwatch.durations import format_duration
 from keepwatch.logstore import Sink, make_record
 from keepwatch.offline import iso_time
@@ -41,7 +41,7 @@ from keepwatch.remote import ssh_argv, watcher_source
 from keepwatch.runner import DRAIN_GRACE, KILL_GRACE, base_environment
 from keepwatch.transfer import sha256_file
 
-Deliver = Callable[[dict[str, Any]], None]
+Deliver = Callable[[dict[str, Any]], "int | None"]  # the queued-event drop count, or None when it queues nothing
 
 BACKOFF_START = 5.0
 BACKOFF_CAP = 300.0
@@ -670,6 +670,19 @@ def watcher_options(config: ObserverConfig) -> dict[str, Any]:
     }
 
 
+def tree_watcher_options(config: ObserverConfig) -> dict[str, Any]:
+    """The watcher's tree-mode options; the expected state joins them at every (re)connect (see RemoteTreeObserver)."""
+    return {
+        "mode": "tree",
+        "dir": config.dir,
+        "ignore": list(config.ignore),
+        "settle": config.settle,
+        "interval": config.interval,
+        "rescan": FILES_RESCAN,
+        "heartbeat": config.heartbeat,
+    }
+
+
 class RemoteFilesObserver(CommandObserver):
     """A command observer running the remote watcher over ssh; only file events are delivered."""
 
@@ -735,6 +748,107 @@ class RemoteFilesObserver(CommandObserver):
         super().emit({**event, "remote": self.config.remote})
 
 
+def _remote_path(directory: str, relative: str) -> str:
+    """A checkpoint path (relative, POSIX) as the remote watcher sees it (its side joins with "/")."""
+    if directory.endswith("/"):
+        return directory + relative
+    return directory + "/" + relative
+
+
+class RemoteTreeObserver(RemoteFilesObserver):
+    """The remote watcher's tree mode, its expected state read from the watch's checkpoint.
+
+    The checkpoint is the caller's record of what it has already handled, so the walk on the remote host is
+    the difference and the wire carries only that. `files`, `dirs` and `gone` are delivered; `hello` and
+    `ready` become observer records. When the event queue drops one (its cap is 10 000 events or 64 MiB),
+    the observer drops the connection: the supervisor reconnects, the walk runs again from the current
+    checkpoint, and the missing delta is re-sent. Duplicates are harmless — every event is diffed against the
+    checkpoint by the recipe, which is idempotent.
+    """
+
+    kind = "remote_tree"
+
+    def __init__(
+        self,
+        watch: WatchConfig,
+        config: ObserverConfig,
+        *,
+        deliver: Deliver,
+        sink: Sink,
+        env: Mapping[str, str],
+        data_dir: Path | None = None,
+    ) -> None:
+        super().__init__(watch, config, deliver=deliver, sink=sink, env=env, data_dir=data_dir)
+        self._checkpoint = (
+            None
+            if config.skip_checkpoint is None or data_dir is None
+            else checkpoint_file(data_dir, config.skip_checkpoint)
+        )
+        self._options = tree_watcher_options(config)
+        self.config = replace(self.config, stdin=watcher_source({**self._options, **self._expected()}))
+
+    def _expected(self) -> dict[str, Any]:
+        """The watcher's expected state, from the checkpoint (the shape is the mirror's document, spec 5.3)."""
+        empty: dict[str, Any] = {"expected_files": [], "expected_dirs": []}
+        if self._checkpoint is None:
+            return empty
+        try:
+            document = json.loads(self._checkpoint.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return empty
+        except (OSError, ValueError) as exc:
+            self._output.line(f"cannot read checkpoint {self._checkpoint}: {exc}")
+            return empty
+        if not isinstance(document, dict):
+            return empty
+        directory = str(self.config.dir or "")
+        entries = []
+        for path, state in sorted((document.get("files") or {}).items()):
+            try:
+                size, mtime = state
+                entries.append({"path": _remote_path(directory, str(path)), "size": int(size), "mtime": float(mtime)})
+            except (TypeError, ValueError):
+                continue
+        dirs = [_remote_path(directory, str(path)) for path in (document.get("dirs") or [])]
+        return {"expected_files": entries, "expected_dirs": dirs}
+
+    def run_once(self) -> None:
+        # Rebuilt at every connect: an action promotes the checkpoint while a connection is open, and the
+        # reconnect after a dropped event depends on reading the current one.
+        self.config = replace(self.config, stdin=watcher_source({**self._options, **self._expected()}))
+        super(RemoteFilesObserver, self).run_once()
+
+    def emit(self, event: dict[str, Any]) -> None:
+        kind = event.get("event")
+        if kind in ("hello", "ready"):
+            named = "observer.connected" if kind == "hello" else "observer.ready"
+            fields = {key: value for key, value in event.items() if key != "event"}
+            self._sink(make_record(named, **self._tag(), remote=self.config.remote, **fields))
+            return
+        if kind not in ("files", "dirs", "gone"):
+            super().emit(event)  # anything else on stdout (a login script's banner, say) is logged, not delivered
+            return
+        if self._stop.is_set():
+            return  # a source being stopped: its last lines are not delivered
+        now = time.time()
+        self.last_event = now
+        batch = event.get("entries") if kind == "files" else event.get("paths")
+        self._sink(make_record("observer.event", level="DEBUG", **self._tag(), data={"event": kind, "count": len(batch or [])}))
+        dropped = self._deliver({**event, "observer": self.name, "received": iso_time(now)}) or 0
+        if dropped:
+            self._output.line(
+                f"the event queue dropped {dropped}; reconnecting so the walk re-reports from the checkpoint",
+                stream="stdout",
+            )
+            self.reconnect()
+
+    def reconnect(self) -> None:
+        """Drop the connection: the supervisor connects again and the next walk re-reports from the checkpoint."""
+        with self._process_lock:
+            if self._process is not None:
+                self._process.terminate()
+
+
 def build_observer(
     watch: WatchConfig,
     config: ObserverConfig,
@@ -745,12 +859,14 @@ def build_observer(
     data_dir: Path,
 ) -> Observer:
     """The Observer for one [observe.<name>] table (not started)."""
-    if config.kind in ("command", "remote_files"):
+    if config.kind in ("command", "remote_files", "remote_tree"):
         with contextlib.suppress(OSError):
             data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         env = observer_environment(watch, config.name, environment=environment, data_dir=data_dir)
         if config.kind == "command":
             return CommandObserver(watch, config, deliver=deliver, sink=sink, env=env)
+        if config.kind == "remote_tree":
+            return RemoteTreeObserver(watch, config, deliver=deliver, sink=sink, env=env, data_dir=data_dir)
         return RemoteFilesObserver(watch, config, deliver=deliver, sink=sink, env=env, data_dir=data_dir)
     if config.kind == "files":
         return FilesObserver(watch, config, deliver=deliver, sink=sink)

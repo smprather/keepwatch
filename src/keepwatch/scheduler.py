@@ -108,8 +108,12 @@ class WatchRunner:
             self._pending = config
         self._wake.set()
 
-    def add_event(self, event: dict[str, Any], *, wake: bool = True) -> None:
-        """Queue an observer event for the next poll; with wake, poll as soon as the schedule allows. Thread-safe."""
+    def add_event(self, event: dict[str, Any], *, wake: bool = True) -> int:
+        """Queue an observer event for the next poll; with wake, poll as soon as the schedule allows. Thread-safe.
+
+        Returns how many of the oldest events had to be dropped to make room: a source that can re-report
+        (the remote watcher's tree mode) reconnects instead of leaving a hole in what the check sees.
+        """
         with self._lock:
             dropped = self.events.put(event)
             total = self.events.dropped
@@ -129,6 +133,7 @@ class WatchRunner:
             )
         if wake:
             self._wake.set()
+        return dropped
 
     def _observers_wanted(self) -> Any:
         """What the running observers depend on, or None when none should run."""
