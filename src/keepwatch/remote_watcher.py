@@ -14,6 +14,20 @@ Output, one JSON object per line, flushed at once:
   {"event": "file", "path", "name", "size", "mtime", "sha256"}  once per settled file (sha256 with checksum)
   {"event": "heartbeat"}                                         after `heartbeat` seconds without output
 
+Tree mode ({"mode": "tree", "dir", "ignore", "settle", "expected_files": [{"path", "size", "mtime"}],
+"expected_dirs": [path]}): walks `dir` recursively and reports only the difference against the caller's expected
+state: the caller's own record of what it has already handled (its checkpoint). A path that matches its expected
+size and mtime is not mentioned; a new or changed one is; and an expected path the walk does not find is reported
+`gone`, so a deletion that happened while keepwatch was away is still heard. Symlinks are not followed. Output:
+
+  {"event": "hello", ..., "mode": "tree", "dir"}
+  {"event": "files", "entries": [[path, size, mtime], ...]}   new or changed, in chunks of TREE_CHUNK
+  {"event": "dirs", "paths": [path, ...]}                     directories not in expected_dirs
+  {"event": "gone", "paths": [path, ...]}                     expected or reported paths the walk did not find
+  {"event": "heartbeat"}
+  {"event": "ready", "files", "dirs", "sent", "new_dirs", "gone", "skipped", "settling", "walk_ms"}
+                                                                 after every complete walk (not delivered to hooks)
+
 Delete mode ({"mode": "delete", "dir", "files": [{"path", "size", "mtime"}]}): deletes each file only if it is
 a regular file directly in `dir` (resolved, never through a symlink) whose size and mtime still match (and
 sha256, when the item carries one); prints
@@ -36,7 +50,7 @@ import time
 
 # Do not import `platform` (or any name keepwatch uses for a module): run as a script from src/keepwatch/,
 # keepwatch's own platform.py would shadow the standard library's.
-WATCHER_VERSION = 1
+WATCHER_VERSION = 2
 DEFAULTS = {
     "dir": None,
     "pattern": "*",
@@ -49,10 +63,14 @@ DEFAULTS = {
     "skip": [],
     "mode": "watch",
     "files": [],
+    "expected_files": [],
+    "expected_dirs": [],
 }
 SETTLE_STEP = 1.0  # rescan this often while a file is settling
 MIN_RESCAN = 0.5  # at most two scans a second, however many notifications arrive
 CHUNK = 1024 * 1024
+TREE_ONLY = ("expected_files", "expected_dirs")  # mode "tree" only, so watch mode cannot silently ignore them
+TREE_CHUNK = 500  # entries or paths per event: a line stays far under keepwatch's 1 MiB MAX_LINE
 # IN_MODIFY | IN_ATTRIB | IN_CLOSE_WRITE | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE | IN_DELETE
 IN_MASK = 0x2 | 0x4 | 0x8 | 0x40 | 0x80 | 0x100 | 0x200
 
@@ -95,17 +113,33 @@ def open_inotify(directory):
 
         libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
         init = libc.inotify_init
-        add = libc.inotify_add_watch
     except (ImportError, OSError, AttributeError):
         return None
-    add.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
     fd = init()
     if fd < 0:
         return None
-    if add(fd, directory, IN_MASK) < 0:
+    if not inotify_add(fd, directory):
         os.close(fd)
         return None
     return fd
+
+
+_LIBC = []  # the loaded libc, once: tree mode adds a watch per directory as the walk finds them
+
+
+def inotify_add(fd, directory):
+    """Watch another directory on an existing inotify fd (inotify is not recursive); False when it did not take."""
+    try:
+        if not _LIBC:
+            import ctypes
+            import ctypes.util
+
+            libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+            libc.inotify_add_watch.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+            _LIBC.append(libc)
+        return _LIBC[0].inotify_add_watch(fd, directory, IN_MASK) >= 0
+    except (ImportError, OSError, AttributeError):
+        return False
 
 
 def wanted(name, options):
@@ -115,6 +149,13 @@ def wanted(name, options):
         if fnmatch.fnmatch(name, pattern):
             return False
     return True
+
+
+def ignored(name, patterns):
+    for pattern in patterns:
+        if fnmatch.fnmatch(name, pattern):
+            return True
+    return False
 
 
 def sha256_of(path, output=None, heartbeat=None):
@@ -267,6 +308,185 @@ class Watcher(object):
                 pass
 
 
+class TreeWatcher(object):
+    """mode = "tree": walk `dir` recursively and report the difference against the caller's expected state.
+
+    The expected state is the caller's checkpoint: what it last recorded as handled. Nothing is inferred from
+    silence, so a walk that cannot read a subtree reports a problem on stderr instead of a `gone`.
+    """
+
+    def __init__(self, options, output):
+        self.options = options
+        self.output = output
+        self.directory = os.path.abspath(os.path.expanduser(options["dir"])).encode("utf-8", "surrogateescape")
+        self.expected_files = {}
+        for item in options["expected_files"]:
+            self.expected_files[os.fsencode(item["path"])] = (int(item["size"]), float(item["mtime"]))
+        self.expected_dirs = set(os.fsencode(path) for path in options["expected_dirs"])
+        self.reported = {}  # path -> (size, mtime): what this connection has already told
+        self.reported_dirs = set()
+        self.watched = set()
+        self.inotify = None
+        self.noted = set()
+
+    def note(self, message):
+        if message in self.noted:
+            return
+        self.noted.add(message)
+        sys.stderr.write("keepwatch remote watcher: " + message + "\n")
+        sys.stderr.flush()
+
+    def walk(self):
+        """(files, dirs, held, fresh): the whole tree. `held` are files still inside `settle`, not gone."""
+        files = {}
+        dirs = set()
+        held = set()
+        fresh = False
+        settle = self.options["settle"]
+        now = time.time()
+        for root, dirnames, filenames in os.walk(self.directory):
+            keep = []
+            for name in sorted(dirnames):
+                path = os.path.join(root, name)
+                if os.path.islink(path):
+                    self.note("not following the symlink to a directory: " + decode(path))
+                    continue
+                if ignored(decode(name), self.options["ignore"]):
+                    continue
+                dirs.add(path)
+                keep.append(name)
+            dirnames[:] = keep
+            for name in sorted(filenames):
+                if ignored(decode(name), self.options["ignore"]):
+                    continue
+                path = os.path.join(root, name)
+                try:
+                    info = os.lstat(path)
+                except OSError as exc:
+                    self.note("cannot read " + decode(path) + ": " + (exc.strerror or str(exc)))
+                    continue
+                if not stat.S_ISREG(info.st_mode):
+                    if stat.S_ISLNK(info.st_mode):
+                        self.note("not following the symlink: " + decode(path))
+                    continue
+                if settle and now - info.st_mtime < settle:
+                    held.add(path)
+                    fresh = True
+                    continue
+                files[path] = (info.st_size, info.st_mtime)
+        return files, dirs, held, fresh
+
+    def add_watches(self, dirs):
+        """Watch each directory the walk found: inotify is not recursive, and the rescan covers a refused one."""
+        if self.inotify is None:
+            return
+        for path in sorted(dirs):
+            if path in self.watched:
+                continue
+            self.watched.add(path)  # one attempt each: a subtree that cannot be watched is polled instead
+            if not inotify_add(self.inotify, path):
+                self.note("cannot watch " + decode(path) + " (its changes are picked up by the rescan)")
+
+    def report(self, files, dirs, held, started):
+        """Deliver one walk (files, dirs, gone, ready) and forget what it accounted for."""
+        sent = 0
+        skipped = 0
+        entries = []
+        for path in sorted(files):
+            state = files[path]
+            if self.expected_files.get(path) == state:
+                skipped += 1
+                self.reported[path] = state
+                continue
+            if self.reported.get(path) == state:
+                continue
+            self.reported[path] = state
+            self.expected_files.pop(path, None)
+            entries.append([decode(path), state[0], state[1]])
+            sent += 1
+        for index in range(0, len(entries), TREE_CHUNK):
+            self.output.send({"event": "files", "entries": entries[index : index + TREE_CHUNK]})
+        new_dirs = []
+        for path in sorted(dirs):
+            if path in self.expected_dirs or path in self.reported_dirs:
+                continue
+            self.reported_dirs.add(path)
+            new_dirs.append(decode(path))
+        for index in range(0, len(new_dirs), TREE_CHUNK):
+            self.output.send({"event": "dirs", "paths": new_dirs[index : index + TREE_CHUNK]})
+        missing = set()
+        for path in sorted(self.expected_files):
+            if path not in files and path not in held:
+                missing.add(path)
+        for path in missing:
+            del self.expected_files[path]
+        for path in sorted(self.reported):
+            if path not in files and path not in held:
+                missing.add(path)
+        for path in missing:
+            self.reported.pop(path, None)
+        missing_dirs = set()
+        for path in sorted(self.expected_dirs):
+            if path not in dirs:
+                missing_dirs.add(path)
+        for path in sorted(self.reported_dirs):
+            if path not in dirs:
+                missing_dirs.add(path)
+        self.expected_dirs -= missing_dirs
+        self.reported_dirs -= missing_dirs
+        gone = [decode(path) for path in sorted(missing | missing_dirs)]
+        for index in range(0, len(gone), TREE_CHUNK):
+            self.output.send({"event": "gone", "paths": gone[index : index + TREE_CHUNK]})
+        self.output.send(
+            {
+                "event": "ready",
+                "files": len(files),
+                "dirs": len(dirs),
+                "sent": sent,
+                "new_dirs": len(new_dirs),
+                "gone": len(gone),
+                "skipped": skipped,
+                "settling": bool(held),
+                "walk_ms": int((time.monotonic() - started) * 1000),
+            }
+        )
+
+    @staticmethod
+    def wait(inotify, seconds):
+        return Watcher.wait(inotify, seconds)
+
+    def run(self):
+        self.inotify = open_inotify(self.directory)
+        self.output.send(
+            {
+                "event": "hello",
+                "version": WATCHER_VERSION,
+                "python": "%d.%d.%d" % sys.version_info[:3],
+                "inotify": self.inotify is not None,
+                "mode": "tree",
+                "dir": decode(self.directory),
+            }
+        )
+        interval = self.options["interval"] if self.inotify is None else max(
+            self.options["interval"], self.options["rescan"]
+        )
+        heartbeat = self.options["heartbeat"]
+        last_scan = 0.0
+        while True:
+            pause = last_scan + MIN_RESCAN - time.monotonic()
+            if pause > 0:
+                time.sleep(pause)
+            last_scan = time.monotonic()
+            started = time.monotonic()
+            files, dirs, held, fresh = self.walk()
+            self.add_watches(dirs)
+            self.report(files, dirs, held, started)
+            wait = min(interval, SETTLE_STEP) if fresh else interval
+            wait = max(min(wait, heartbeat - (time.monotonic() - self.output.last)), 0.0)
+            self.wait(self.inotify, wait)
+            self.output.heartbeat_if_due(heartbeat)
+
+
 def delete_one(item, directory):
     """Delete one pulled file if it is still exactly what was pulled: size, mtime and sha256 (required)."""
     raw = str(item.get("path", "")).encode("utf-8", "surrogateescape")
@@ -325,8 +545,12 @@ def parse_options(text):
         raise ValueError("unknown option(s): " + ", ".join(unknown))
     options = dict(DEFAULTS)
     options.update(given)
-    if options["mode"] not in ("watch", "delete"):
-        raise ValueError("option 'mode' must be watch or delete")
+    if options["mode"] not in ("watch", "delete", "tree"):
+        raise ValueError("option 'mode' must be watch, delete or tree")
+    if options["mode"] != "tree":
+        tree_only = sorted(set(given) & set(TREE_ONLY))
+        if tree_only:
+            raise ValueError("option(s) need mode 'tree': " + ", ".join(tree_only))
     if not options["dir"]:
         raise ValueError("option 'dir' is required")
     return options
@@ -359,7 +583,10 @@ def main(argv):
         except Closed:
             silence_stdout()
             return 0
-    watcher = Watcher(options, Output(sys.stdout))
+    if options["mode"] == "tree":
+        watcher = TreeWatcher(options, Output(sys.stdout))
+    else:
+        watcher = Watcher(options, Output(sys.stdout))
     if not os.path.isdir(watcher.directory):
         return fail("directory " + decode(watcher.directory) + " does not exist")
     try:

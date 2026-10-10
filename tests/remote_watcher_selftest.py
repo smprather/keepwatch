@@ -144,7 +144,7 @@ class WatcherTests(unittest.TestCase):
     def test_hello_comes_first(self):
         hello = self.start().next()
         self.assertEqual(hello["event"], "hello")
-        self.assertEqual(hello["version"], 1)
+        self.assertEqual(hello["version"], 2)
         self.assertEqual(hello["python"].split(".")[0], "3")
         self.assertIsInstance(hello["inotify"], bool)
         if sys.platform.startswith("linux"):
@@ -290,6 +290,16 @@ class WatcherTests(unittest.TestCase):
         running = self.start(skip=[key], heartbeat=0.5)
         self.assertEqual(running.file_names_for(3.0), ["new.gz"])
 
+    def test_tree_only_options_need_tree_mode(self):
+        code, _, err = self.run_once({"dir": self.dir, "expected_files": []})
+        self.assertEqual(code, 2)
+        self.assertIn(b"need mode 'tree'", err)
+
+    def test_tree_mode_rejects_an_unknown_option(self):
+        code, _, err = self.run_once({"mode": "tree", "dir": self.dir, "colour": 1})
+        self.assertEqual(code, 2)
+        self.assertIn(b"unknown option(s): colour", err)
+
     def delete(self, files, directory=None):
         options = {"mode": "delete", "dir": directory or self.dir, "files": files}
         code, out, err = self.run_once(options)
@@ -386,9 +396,155 @@ class WatcherTests(unittest.TestCase):
         first = self.write("a.gz")
         second = os.path.join(self.dir, "never.gz")
         options = {"mode": "delete", "dir": self.dir, "files": [self.item(first), {"path": second, "size": 1, "mtime": 1.5}]}
-        code, out, err = self.run_once(options)
+        _, out, _ = self.run_once(options)
         lines = [json.loads(line) for line in out.decode("ascii").splitlines()]
         self.assertEqual([(line["index"], line["event"]) for line in lines[:-1]], [(0, "deleted"), (1, "gone")])
+
+
+class TreeTests(unittest.TestCase):
+    """mode = "tree": a recursive walk against an expected state, with chunked deltas (issue 11)."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.running = []
+
+    def tearDown(self):
+        for item in self.running:
+            item.stop()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def start(self, **options):
+        merged = dict(FAST, dir=self.dir, mode="tree")
+        merged.update(options)
+        item = Running(merged)
+        self.running.append(item)
+        return item
+
+    def write(self, name, data=b"x", old=True):
+        path = os.path.join(self.dir, name)
+        directory = os.path.dirname(path)
+        if not os.path.isdir(directory):
+            os.makedirs(directory)
+        with open(path, "wb") as handle:
+            handle.write(data)
+        if old:
+            age(path)
+        return path
+
+    def collect(self, running, seconds=10.0):
+        """Every line for `seconds`, ending at the ready that closes a walk."""
+        events = []
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            try:
+                message = running.next(0.3)
+            except queue.Empty:
+                continue
+            if message is None:
+                break
+            events.append(message)
+            if message.get("event") == "ready":
+                break
+        return events
+
+    def entries(self, events):
+        out = []
+        for event in events:
+            if event.get("event") == "files":
+                out.extend(event["entries"])
+        return out
+
+    def paths(self, events, kind):
+        out = []
+        for event in events:
+            if event.get("event") == kind:
+                out.extend(event["paths"])
+        return out
+
+    def expected(self, path):
+        info = os.stat(path)
+        return {"path": os.path.abspath(path), "size": info.st_size, "mtime": info.st_mtime}
+
+    def test_tree_reports_new_files_and_directories(self):
+        path = self.write("sub/a.txt", b"hello")
+        info = os.stat(path)
+        events = self.collect(self.start())
+        self.assertEqual(events[0]["event"], "hello")
+        self.assertIn(os.path.abspath(os.path.join(self.dir, "sub")), self.paths(events, "dirs"))
+        entries = self.entries(events)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(tuple(entries[0]), (os.path.abspath(path), 5, info.st_mtime))
+
+    def test_tree_skips_an_unchanged_expected_file(self):
+        path = self.write("a.txt", b"same")
+        running = self.start(expected_files=[self.expected(path)])
+        ready = self.collect(running)
+        self.assertEqual(self.entries(ready), [])
+        self.assertEqual(ready[-1]["skipped"], 1)
+
+    def test_tree_reports_an_expected_file_that_is_gone(self):
+        path = self.write("a.txt")
+        running = self.start(expected_files=[self.expected(path)])
+        self.collect(running)
+        os.unlink(path)
+        self.assertIn(os.path.abspath(path), self.paths(self.collect(running), "gone"))
+
+    def test_tree_reports_a_changed_expected_file(self):
+        path = self.write("a.txt", b"one")
+        item = self.expected(path)
+        item["size"] = 99
+        self.assertEqual(len(self.entries(self.collect(self.start(expected_files=[item])))), 1)
+
+    def test_tree_reports_an_expected_directory_that_is_gone(self):
+        missing = os.path.abspath(os.path.join(self.dir, "gone-dir"))
+        self.assertIn(missing, self.paths(self.collect(self.start(expected_dirs=[missing])), "gone"))
+
+    def test_tree_prunes_ignored_names(self):
+        self.write(".git/config")
+        self.write("keep/a.txt")
+        self.write("skip.txt")
+        events = self.collect(self.start(ignore=[".git", "skip.txt"]))
+        self.assertEqual([os.path.basename(entry[0]) for entry in self.entries(events)], ["a.txt"])
+        self.assertNotIn(os.path.abspath(os.path.join(self.dir, ".git")), self.paths(events, "dirs"))
+
+    def test_tree_chunks_a_large_walk(self):
+        for index in range(1200):
+            self.write("many/f%04d.txt" % index, b"x", old=False)
+        many = os.path.join(self.dir, "many")
+        for name in os.listdir(many):
+            age(os.path.join(many, name))
+        events = self.collect(self.start(), seconds=30.0)
+        chunks = [event for event in events if event.get("event") == "files"]
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual(len(self.entries(events)), 1200)
+        self.assertTrue(all(len(chunk["entries"]) <= 500 for chunk in chunks))
+
+    def test_tree_ready_reports_its_counts(self):
+        self.write("sub/a.txt")
+        ready = self.collect(self.start())[-1]
+        self.assertEqual(ready["event"], "ready")
+        self.assertEqual((ready["files"], ready["dirs"], ready["sent"]), (1, 1, 1))
+
+    def test_tree_settle_defers_a_fresh_file(self):
+        self.write("fresh.txt", b"x", old=False)
+        self.assertEqual(self.entries(self.collect(self.start(settle=60))), [])
+
+    @unittest.skipIf(os.name == "nt", "symlinks are a POSIX matter here")
+    def test_tree_skips_symlinks_and_notes_them(self):
+        outside = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(outside, "x.txt"), "wb") as handle:
+                handle.write(b"x")
+            os.symlink(os.path.join(outside, "x.txt"), os.path.join(self.dir, "link.txt"))
+            os.symlink(outside, os.path.join(self.dir, "linkdir"))
+            self.write("real.txt")
+            running = self.start()
+            names = [os.path.basename(entry[0]) for entry in self.entries(self.collect(running))]
+            self.assertEqual(names, ["real.txt"])
+            running.stop()
+            self.assertIn(b"symlink", running.stderr_text)
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
 
 
 if __name__ == "__main__":
