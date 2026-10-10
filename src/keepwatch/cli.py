@@ -955,6 +955,10 @@ def _scp_options(function):
         click.option("--known-hosts", type=click.Path(dir_okay=False),
                      help="known_hosts file to check the host key against. Unknown host keys are always refused."),
         click.option("--port", type=click.IntRange(1, 65535), help="ssh port for user@host:path endpoints (scp -P)."),
+        click.option("--preserve-mtime", is_flag=True,
+                     help="scp -p: the destination carries the source's modification and access times, and its "
+                          "mode bits. Needed by anything that diffs two trees by mtime; a destination that refuses "
+                          "the times only warns. Default: the destination gets the transfer time."),
         click.option("--ssh-option", "ssh_options", multiple=True, metavar="OPTION",
                      help='An ssh option passed as -o OPTION, e.g. "ProxyJump=bastion" (repeatable).'),
         click.option("--timeout", type=DURATION, metavar="DURATION", help='Give up after this long, e.g. "10m". Default: no limit (a command hook\'s own timeout still stops it).'),
@@ -964,7 +968,7 @@ def _scp_options(function):
     return function
 
 
-def _scp(protocol, password_env, password_mode, identity, known_hosts, port, ssh_options, timeout) -> transfer.ScpOptions:
+def _scp(protocol, password_env, password_mode, identity, known_hosts, port, ssh_options, preserve_mtime, timeout) -> transfer.ScpOptions:
     extra = tuple(item for option in ssh_options for item in ("-o", option))
     try:
         return transfer.ScpOptions(
@@ -975,6 +979,7 @@ def _scp(protocol, password_env, password_mode, identity, known_hosts, port, ssh
             known_hosts=known_hosts,
             port=port,
             ssh_options=extra,
+            preserve_mtime=preserve_mtime,
             timeout=timeout,
         )
     except ValueError as exc:

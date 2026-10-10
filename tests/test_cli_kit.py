@@ -1,3 +1,4 @@
+import os
 import shutil
 import socket
 
@@ -53,6 +54,26 @@ def test_kit_failure_exits_1_with_the_reason(tmp_path, server, xdg):
     result = run("kit", "pull", "u@127.0.0.1:nothere.gz", str(tmp_path / "stage"), *common(server, tmp_path))
     assert result.exit_code == 1
     assert "scp" in result.stderr
+
+
+@needs_scp
+def test_kit_preserves_mtime_with_the_flag(tmp_path, server, xdg):
+    source = tmp_path / "a.txt"
+    source.write_bytes(b"payload")
+    os.utime(source, (1_700_000_000.0, 1_700_000_000.0))
+    result = run("kit", "push", str(source), "u@127.0.0.1:", "--preserve-mtime", *common(server, tmp_path))
+    assert result.exit_code == 0, result.output
+    assert (server.root / "a.txt").stat().st_mtime == 1_700_000_000.0
+
+
+@needs_scp
+def test_kit_without_the_flag_leaves_the_transfer_time(tmp_path, server, xdg):
+    source = tmp_path / "a.txt"
+    source.write_bytes(b"payload")
+    os.utime(source, (1_700_000_000.0, 1_700_000_000.0))
+    result = run("kit", "push", str(source), "u@127.0.0.1:", *common(server, tmp_path))
+    assert result.exit_code == 0, result.output
+    assert (server.root / "a.txt").stat().st_mtime != 1_700_000_000.0
 
 
 def test_kit_tcp_open(xdg):
