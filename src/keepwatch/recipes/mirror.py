@@ -22,6 +22,7 @@ from typing import Any
 
 from keepwatch.ctx import CommandFailed, Ctx, Unknown
 from keepwatch.recipes import file_budget
+from keepwatch.recipes.pull import cleanup_parts
 from keepwatch.remote import ssh_run_argv
 from keepwatch.transfer import TransferFailed
 
@@ -256,7 +257,14 @@ def run_ssh(ctx: Ctx, settings: Mapping[str, Any], command: str) -> None:
     )
 
 
-def check(ctx: Ctx) -> tuple[bool, dict[str, list[str]]]:
+def check(ctx: Ctx) -> tuple[bool, dict[str, Any]]:
+    """Plan the tree's sync: `push` walks the local side, `pull` plans from the watcher's events."""
+    if ctx.settings["direction"] == "pull":
+        return check_pull(ctx)
+    return check_push(ctx)
+
+
+def check_push(ctx: Ctx) -> tuple[bool, dict[str, Any]]:
     """Push: walk the local tree, diff it against the checkpoint, and answer with the plan. No ssh at all.
 
     The host is probed first: no answer is `Unknown` (no failure count, the tree waits). A walk that could not
@@ -275,7 +283,51 @@ def check(ctx: Ctx) -> tuple[bool, dict[str, list[str]]]:
     return (not plan.empty()), plan.as_dict()
 
 
+def check_pull(ctx: Ctx) -> tuple[bool, dict[str, Any]]:
+    """Pull: plan from the watcher's deltas. A quiet stream is silence, never a deletion (spec 5.6).
+
+    The payload carries the source mtime of every file to copy (`times`), because scp -p cannot always set it
+    (Windows' local set times failure) and the action repairs it with os.utime (spec 5.7).
+    """
+    settings = ctx.settings
+    host, port = reachable(settings)
+    if not ctx.transfer.tcp_open(host, port, settings["reachable_timeout"]):
+        raise Unknown(f"{host}:{port} is not reachable; the tree waits")
+    document = ctx.checkpoint(CHECKPOINT).value or {}
+    remote_dir = str(settings["remote_dir"])
+    plan = plan_pull(
+        ctx.events,
+        files_of(document),
+        dirs_of(document),
+        remote_dir=remote_dir,
+        tolerance=settings["mtime_tolerance"],
+    )
+    return (not plan.empty()), {**plan.as_dict(), "times": times_from(ctx.events, remote_dir=remote_dir)}
+
+
+def times_from(events: Iterable[Mapping[str, Any]], *, remote_dir: str) -> dict[str, float]:
+    """The source mtime of every file a `files` event offers: what repairs a local mtime scp -p could not set."""
+    root = remote_dir.rstrip("/")
+    times: dict[str, float] = {}
+    for event in events:
+        if event.get("event") != "files":
+            continue
+        for entry in event.get("entries") or ():
+            relative = _relative(root, str(entry[0]))
+            if relative is not None:
+                times[relative] = float(entry[2])
+    return times
+
+
 def on_true(ctx: Ctx) -> None:
+    """Do the plan: `push` uploads, `pull` downloads (see both below)."""
+    if ctx.settings["direction"] == "pull":
+        on_true_pull(ctx)
+    else:
+        on_true_push(ctx)
+
+
+def on_true_push(ctx: Ctx) -> None:
     """Push the plan: directories, then each changed file, then deletions, promoting the checkpoint as work lands.
 
     A file that fails is logged and the rest of the plan carries on; the first failure is raised at the end, and
@@ -344,3 +396,103 @@ def on_true(ctx: Ctx) -> None:
     promote(force=True)
     if error is not None:
         raise error
+
+
+def on_true_pull(ctx: Ctx) -> None:
+    """Pull the plan: create directories, copy each changed file (repairing its mtime), then delete.
+
+    Only a `gone` the watcher stated deletes anything, and only with `delete = true`; a `gone` path leaves the
+    checkpoint either way, so a reconnect does not report it again (spec 5.6). A file that fails is logged and
+    the rest of the plan carries on; its entry stays out of the checkpoint for the next poll to retry.
+    """
+    settings = ctx.settings
+    payload = ctx.payload if isinstance(ctx.payload, Mapping) else {}
+    plan = Plan.from_payload(payload)
+    times = {str(path): float(mtime) for path, mtime in (payload.get("times") or {}).items()}
+    state = ctx.checkpoint(CHECKPOINT)
+    document = state.value or {}
+    files = files_of(document)
+    dirs = set(dirs_of(document))
+    options = transfer_options(settings)
+    local = Path(settings["local_dir"])
+    pending: list[tuple[str, int]] = []
+    error: Exception | None = None
+    pulled = 0
+
+    def promote(force: bool = False) -> None:
+        if force or should_promote(pending):
+            state.save(as_document(files, dirs))
+            pending.clear()
+
+    try:
+        for relative in plan.mkdir:
+            try:
+                (local / relative).mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                error = error or exc
+                ctx.log.warning("cannot create %s (%s)", local / relative, exc)
+                continue
+            dirs.add(relative)
+        if plan.mkdir:
+            promote()
+        for index, relative in enumerate(plan.copy):
+            if ctx.remaining <= 0:
+                error = error or TransferFailed("no time left for the rest of this queue (raise action_timeout)")
+                break
+            budget = file_budget(ctx.remaining, len(plan.copy) - index, settings["file_timeout"])
+            try:
+                final = ctx.transfer.pull(
+                    f"{settings['remote']}:{remote_path(settings, relative)}",
+                    str((local / relative).parent),
+                    on_conflict="overwrite",
+                    deadline=time.time() + budget,
+                    **options,
+                )
+                info = _repair_mtime(ctx, final, times.get(relative), settings["mtime_tolerance"])
+            except (CommandFailed, TransferFailed, OSError) as exc:
+                error = error or exc
+                ctx.log.warning("pulling %s failed (%s); the rest of the queue is still tried", relative, exc)
+                continue
+            files[relative] = [info.st_size, info.st_mtime]
+            pending.append((relative, info.st_size))
+            pulled += 1
+            promote()
+        if plan.deleted:
+            lost_dirs = [path for path in plan.deleted if path in dirs]
+            lost_files = [path for path in plan.deleted if path not in lost_dirs]
+            for relative in plan.deleted:
+                files.pop(relative, None)
+                dirs.discard(relative)
+            if settings["delete"]:
+                for relative in sorted(lost_files, key=lambda path: (-_depth(path), path)):
+                    try:
+                        (local / relative).unlink(missing_ok=True)
+                    except OSError as exc:
+                        error = error or exc
+                        ctx.log.warning("cannot delete %s (%s)", local / relative, exc)
+                for relative in sorted(lost_dirs, key=lambda path: (-_depth(path), path)):
+                    try:
+                        (local / relative).rmdir()  # empty now, or it holds something that is not ours
+                    except OSError:
+                        pass
+            promote()
+        if pulled:
+            cleanup_parts(ctx, local, settings["part_max_age"])
+    except Exception as exc:
+        error = error or exc
+    promote(force=True)
+    if error is not None:
+        raise error
+
+
+def _repair_mtime(ctx: Ctx, path: Path, wanted: float | None, tolerance: float) -> os.stat_result:
+    """Set the mtime scp -p could not (Windows' local set times failure): the watcher's mtime is the truth."""
+    info = path.stat()
+    if wanted is None or abs(info.st_mtime - wanted) <= tolerance:
+        return info
+    try:
+        os.utime(path, (wanted, wanted))
+    except OSError as exc:
+        ctx.log.warning("cannot set the times of %s (%s); it carries the transfer time", path, exc)
+        return info
+    return path.stat()

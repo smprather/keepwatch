@@ -29,12 +29,13 @@ SSH_OPTIONS = ("-F", "/dev/null", "-o", "IdentityAgent=none")
 
 
 class FakeTransfer:
-    """ctx.transfer, recording what the action asked it to push."""
+    """ctx.transfer, recording what the action asked it to push or pull (and writing the pulled bytes)."""
 
     def __init__(self, *, reachable=True, fail=()):
         self.reachable = reachable
         self.fail = {str(name) for name in fail}
         self.pushes = []
+        self.pulls = []
 
     def tcp_open(self, host, port, timeout):
         return self.reachable
@@ -44,6 +45,16 @@ class FakeTransfer:
             raise TransferFailed(f"cannot push {Path(path).name}")
         self.pushes.append((str(path), remote_dir, options))
         return f"{remote_dir}/{Path(path).name}"
+
+    def pull(self, source, local_dir, **options):
+        name = str(source).rsplit(":", 1)[-1].rsplit("/", 1)[-1]
+        if name in self.fail:
+            raise TransferFailed(f"cannot pull {name}")
+        self.pulls.append((str(source), str(local_dir), options))
+        target = Path(local_dir) / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"payload")  # a fresh mtime: the recipe must repair it from the event
+        return target
 
 
 class CountingCheckpoint:
@@ -275,6 +286,95 @@ def test_ssh_run_argv_ends_with_the_remote_command():
     assert argv[-3:] == ["--", "me@host", "mkdir -p '/a b'"]
     assert argv[:1] == ["ssh"] and "-T" in argv and "BatchMode=yes" in argv
     assert argv[argv.index("-p") + 1] == "2222"
+
+
+def pull_settings(tmp_path, **overrides):
+    return settings(tmp_path, direction="pull", **overrides)
+
+
+def file_event(*paths):
+    """A watcher `files` event: (path, size, mtime) triples under the watch's remote_dir."""
+    return {"event": "files", "entries": [[path, 7, 1700000000.0] for path in paths]}
+
+
+def test_a_quiet_stream_never_deletes(tmp_path):
+    """No events means "nothing to do", never "everything was deleted" (spec 5.6)."""
+    ctx = FakeCtx(tmp_path, pull_settings(tmp_path, delete=True))
+    ctx.checkpoint("mirror").save(saved(["b.txt"]))
+    condition, payload = mirror.check(ctx)
+    assert condition is False
+    assert payload["deleted"] == []
+    ctx.payload = payload
+    mirror.on_true(ctx)
+    assert "b.txt" in mirror.files_of(ctx.checkpoint("mirror").value)
+
+
+def test_pull_copies_from_the_events_and_repairs_the_mtime(tmp_path):
+    """scp -p may not set the times (Windows); the event's mtime is the repair."""
+    ctx = FakeCtx(tmp_path, pull_settings(tmp_path), events=[file_event("/tree/sub/a.txt")])
+    condition, payload = mirror.check(ctx)
+    assert condition is True and payload["copy"] == ["sub/a.txt"]
+    assert payload["times"] == {"sub/a.txt": 1700000000.0}
+    ctx.payload = payload
+    mirror.on_true(ctx)
+    target = Path(ctx.settings["local_dir"]) / "sub" / "a.txt"
+    assert target.read_bytes() == b"payload"
+    assert target.stat().st_mtime == 1700000000.0
+    assert mirror.files_of(ctx.checkpoint("mirror").value) == {"sub/a.txt": [7, 1700000000.0]}
+    assert ctx.transfer.pulls[0][2]["preserve_mtime"] is True
+    assert ctx.transfer.pulls[0][2]["on_conflict"] == "overwrite"
+
+
+def test_pull_creates_the_directories_the_watcher_reported(tmp_path):
+    ctx = FakeCtx(tmp_path, pull_settings(tmp_path), events=[{"event": "dirs", "paths": ["/tree/new"]}])
+    condition, payload = mirror.check(ctx)
+    assert condition is True and payload["mkdir"] == ["new"]
+    ctx.payload = payload
+    mirror.on_true(ctx)
+    assert (Path(ctx.settings["local_dir"]) / "new").is_dir()
+    assert mirror.dirs_of(ctx.checkpoint("mirror").value) == ["new"]
+
+
+def test_pull_deletes_gone_paths_and_the_directories_they_emptied(tmp_path):
+    local = Path(pull_settings(tmp_path)["local_dir"])
+    (local / "sub").mkdir(parents=True)
+    (local / "sub" / "b.txt").write_bytes(b"x")
+    events = [{"event": "gone", "paths": ["/tree/sub/b.txt", "/tree/sub"]}]
+    ctx = FakeCtx(tmp_path, pull_settings(tmp_path, delete=True), events=events)
+    ctx.checkpoint("mirror").save(mirror.as_document({"sub/b.txt": [1, 5.0]}, {"sub"}))
+    condition, payload = mirror.check(ctx)
+    assert condition is True and set(payload["deleted"]) == {"sub", "sub/b.txt"}
+    ctx.payload = payload
+    mirror.on_true(ctx)
+    assert not (local / "sub" / "b.txt").exists()
+    assert not (local / "sub").exists()  # emptied, so it goes too
+    assert mirror.files_of(ctx.checkpoint("mirror").value) == {}
+    assert mirror.dirs_of(ctx.checkpoint("mirror").value) == []
+
+
+def test_delete_off_forgets_a_gone_path_but_keeps_the_local_file(tmp_path):
+    local = Path(pull_settings(tmp_path)["local_dir"])
+    local.mkdir(parents=True, exist_ok=True)
+    (local / "b.txt").write_bytes(b"x")
+    events = [{"event": "gone", "paths": ["/tree/b.txt"]}]
+    ctx = FakeCtx(tmp_path, pull_settings(tmp_path, delete=False), events=events)
+    ctx.checkpoint("mirror").save(saved(["b.txt"]))
+    condition, payload = mirror.check(ctx)
+    assert condition is True and payload["deleted"] == ["b.txt"]
+    ctx.payload = payload
+    mirror.on_true(ctx)
+    assert (local / "b.txt").exists()  # kept: delete is off
+    assert "b.txt" not in mirror.files_of(ctx.checkpoint("mirror").value)  # forgotten either way
+
+
+def test_a_failed_pull_is_not_promoted(tmp_path):
+    events = [file_event("/tree/a.txt", "/tree/c.txt")]
+    ctx = FakeCtx(tmp_path, pull_settings(tmp_path), fail=["a.txt"], events=events)
+    condition, payload = mirror.check(ctx)
+    ctx.payload = payload
+    with pytest.raises(TransferFailed, match="a.txt"):
+        mirror.on_true(ctx)
+    assert sorted(mirror.files_of(ctx.checkpoint("mirror").value)) == ["c.txt"]
 
 
 @pytest.fixture
