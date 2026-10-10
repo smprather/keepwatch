@@ -67,7 +67,74 @@ def test_push_recipe_settings_and_observer(make_watch):
 
 def test_unknown_recipe(make_watch):
     [problem] = problems(make_watch, 'recipe = "relay"\n')
-    assert "'recipe' must be one of pull, push, got 'relay'" in problem
+    assert "'recipe' must be one of pull, push, mirror, got 'relay'" in problem
+
+
+MIRROR = """
+recipe = "mirror"
+[settings]
+direction = "push"
+remote = "me@linux1"
+remote_dir = "/data/tree"
+local_dir = "tree"
+ignore = [".git"]
+"""
+
+
+def test_mirror_push_settings_and_observer(make_watch):
+    config = load(make_watch, MIRROR)
+    settings = config.settings
+    assert (settings["direction"], settings["remote"], settings["remote_dir"]) == ("push", "me@linux1", "/data/tree")
+    assert settings["local_dir"] == str(config.watch_dir / "tree")
+    assert (settings["delete"], settings["ignore"], settings["mtime_tolerance"], settings["settle"]) == (
+        False,
+        [".git"],
+        2.0,
+        0.0,
+    )
+    [observer] = config.observers.values()
+    assert (observer.name, observer.kind, observer.path, observer.recursive) == (
+        "local",
+        "files",
+        config.watch_dir / "tree",
+        True,
+    )
+    assert observer.marker == "none" and observer.ignore == (".git",)
+
+
+def test_mirror_pull_gets_the_tree_observer(make_watch):
+    config = load(make_watch, MIRROR.replace('direction = "push"', 'direction = "pull"'))
+    [observer] = config.observers.values()
+    assert (observer.name, observer.kind, observer.remote, observer.dir) == (
+        "remote",
+        "remote_tree",
+        "me@linux1",
+        "/data/tree",
+    )
+    assert observer.skip_checkpoint == "mirror" and observer.ignore == (".git",)
+
+
+def test_mirror_requires_its_settings(make_watch):
+    found = problems(make_watch, 'recipe = "mirror"\n[settings]\ndirection = "push"\n')
+    assert any("needs 'remote' in [settings]" in problem for problem in found)
+    assert any("needs 'remote_dir' in [settings]" in problem for problem in found)
+    assert any("needs 'local_dir' in [settings]" in problem for problem in found)
+
+
+def test_mirror_direction_must_be_a_choice(make_watch):
+    found = problems(make_watch, MIRROR.replace('"push"', '"sideways"'))
+    assert any("'direction' must be one of push, pull" in problem for problem in found)
+
+
+def test_mirror_mtime_tolerance_must_not_be_negative(make_watch):
+    """The shared duration converter owns this: no mirror-specific check is needed."""
+    found = problems(make_watch, MIRROR + "mtime_tolerance = -1.0\n")
+    assert any("'mtime_tolerance': duration must not be negative" in problem for problem in found)
+
+
+def test_mirror_password_mode_needs_password_env(make_watch):
+    found = problems(make_watch, MIRROR + 'password_mode = "conpty"\n')
+    assert any('password_mode = "conpty" needs password_env' in problem for problem in found)
 
 
 def test_missing_and_unknown_settings(make_watch):

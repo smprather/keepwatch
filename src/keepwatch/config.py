@@ -300,8 +300,9 @@ class ObserverConfig:
     marker: str = "none"
 
 
-RECIPES = ("pull", "push")
+RECIPES = ("pull", "push", "mirror")
 RECIPE_AFTER = ("delete", "archive", "keep")
+DIRECTIONS = ("push", "pull")  # the mirror recipe: push = local_dir -> remote:remote_dir, pull = the reverse
 _SSH_SETTINGS = (
     Key("port", "int", None, "ssh port (default: ssh's own, normally 22)."),
     Key("identity", "str", None, "Private key file (ssh -i; only this key is offered). Relative to the watch directory."),
@@ -421,10 +422,71 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
         Key("reachable_port", "int", None, "Port to probe (default: `port`, else 22)."),
         Key("reachable_timeout", "duration", 5.0, "How long the probe waits. No answer means unknown: files wait, nothing fails."),
     ),
+    "mirror": (
+        Key("direction", "str", None, "Required. `push`: `local_dir` is the source and `remote:remote_dir` the destination; `pull`: the reverse."),
+        Key("remote", "str", None, "Required. The other side's host: `user@host` or a Host alias from ~/.ssh/config."),
+        Key("remote_dir", "str", None, "Required. The directory on `remote` (`~` and relative paths start at the remote home)."),
+        Key(
+            "local_dir",
+            "str",
+            None,
+            "Required. The local directory. Relative to the watch directory; `~` and environment variables are expanded.",
+        ),
+        Key(
+            "delete",
+            "bool",
+            False,
+            "Propagate the source's deletions: a path the mirror synced that the source no longer has is removed "
+            "from the destination. The destination is never scanned, so a file that pre-dated the mirror is never "
+            "removed; and a walk that did not finish never deletes anything.",
+        ),
+        Key("ignore", "str_list", (), "Never mirror names matching any of these globs; a matching directory is pruned at the walk."),
+        Key(
+            "mtime_tolerance",
+            "duration",
+            2.0,
+            "Two files whose sizes match and whose mtimes differ by no more than this are the same file "
+            "(FAT and NTFS round mtimes to two seconds).",
+        ),
+        Key("settle", "duration", 0.0, "Skip files modified this recently: 0 mirrors what is there now."),
+        Key(
+            "file_timeout",
+            "duration",
+            0.0,
+            "Cap one file's transfer. 0 gives each file an equal share of what is left of `action_timeout`, so "
+            "one slow file cannot starve the rest; a positive value caps every file harder.",
+        ),
+        Key("protocol", "str", "scp", "`scp` (classic; scp-only servers accept it) or `sftp`."),
+        Key("password_env", "str", None, "Name of the environment variable holding the destination password."),
+        Key(
+            "password_mode",
+            "str",
+            "askpass",
+            "`askpass` (the password goes through SSH_ASKPASS) or `conpty` (type it at a Windows pseudo-console, "
+            "for servers that refuse askpass; needs `password_env` and the keepwatch[conpty] extra).",
+        ),
+        Key(
+            "part_max_age",
+            "duration",
+            7 * 86400.0,
+            "Delete `.NAME.part` files older than this from `local_dir` after a successful pull (a killed "
+            "transfer leaves one); 0 disables the cleanup.",
+        ),
+        Key("remote_python", "str", "auto", "The remote host's Python 3.6+ (see `keepwatch docs observers`)."),
+        *_SSH_SETTINGS,
+        Key("ssh_command", "argv", None, 'The ssh program for the remote watcher. Default: ["ssh"].'),
+        Key("reachable_host", "str", None, "Host to probe (default: `remote`; set it when `remote` is a Host alias)."),
+        Key("reachable_port", "int", None, "Port to probe (default: `port`, else 22)."),
+        Key("reachable_timeout", "duration", 5.0, "How long the probe waits. No answer means unknown: files wait, nothing fails."),
+    ),
 }
-_RECIPE_REQUIRED = {"pull": ("remote", "remote_dir", "local_dir"), "push": ("local_dir", "dest")}
+_RECIPE_REQUIRED = {
+    "pull": ("remote", "remote_dir", "local_dir"),
+    "push": ("local_dir", "dest"),
+    "mirror": ("direction", "remote", "remote_dir", "local_dir"),
+}
 _RECIPE_PATHS = ("local_dir", "identity", "known_hosts", "archive_dir")
-_RECIPE_CHOICES = {"protocol": PROTOCOLS, "marker": MARKERS, "after": RECIPE_AFTER, "on_conflict": CONFLICTS}
+_RECIPE_CHOICES = {"protocol": PROTOCOLS, "marker": MARKERS, "after": RECIPE_AFTER, "on_conflict": CONFLICTS, "direction": DIRECTIONS}
 
 
 def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any], watch_dir: Path) -> dict[str, Any]:
@@ -484,6 +546,14 @@ def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any],
                 table="settings",
                 topic="recipes",
             )
+    if recipe == "mirror":
+        if values["password_mode"] == "conpty" and not values["password_env"]:
+            collector.add(
+                'password_mode = "conpty" needs password_env in [settings]: there is no password to type otherwise',
+                key="password_mode",
+                table="settings",
+                topic="recipes",
+            )
     if recipe == "push":
         if values["password_mode"] == "conpty" and not values["password_env"]:
             collector.add(
@@ -533,7 +603,50 @@ def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any],
     return {name: list(value) if isinstance(value, tuple) else value for name, value in values.items()}
 
 
+def _mirror_observers(settings: Mapping[str, Any]) -> dict[str, ObserverConfig]:
+    """The mirror's own observer: the source side, so a poll costs nothing when it is quiet.
+
+    push: the local tree, recursively (a waker only; the check walks it itself).
+    pull: the remote tree over one live ssh, its expected state read from the checkpoint at every connect.
+    """
+    if settings["direction"] == "push":
+        return {
+            "local": ObserverConfig(
+                name="local",
+                kind="files",
+                path=Path(settings["local_dir"]),
+                pattern="*",
+                ignore=tuple(settings["ignore"]),
+                recursive=True,
+                settle=settings["settle"],
+                marker="none",
+            )
+        }
+    ssh_options = with_known_hosts(settings["ssh_options"], settings["known_hosts"])
+    return {
+        "remote": ObserverConfig(
+            name="remote",
+            kind="remote_tree",
+            remote=settings["remote"],
+            dir=settings["remote_dir"],
+            ignore=tuple(settings["ignore"]),
+            settle=settings["settle"],
+            interval=60.0,
+            checksum=False,
+            heartbeat=30.0,
+            remote_python=settings["remote_python"],
+            port=settings["port"],
+            identity=Path(settings["identity"]) if settings["identity"] else None,
+            ssh_options=tuple(ssh_options),
+            ssh_command=tuple(settings["ssh_command"]) if settings["ssh_command"] else None,
+            skip_checkpoint="mirror",
+        )
+    }
+
+
 def _recipe_observers(recipe: str, settings: Mapping[str, Any]) -> dict[str, ObserverConfig]:
+    if recipe == "mirror":
+        return _mirror_observers(settings)
     if recipe == "push":
         return {
             "local": ObserverConfig(
