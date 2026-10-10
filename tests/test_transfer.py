@@ -377,8 +377,8 @@ def test_a_refused_overwrite_is_explained_and_can_be_continued(monkeypatch, tmp_
     warnings: list[str] = []
     resumed: list[str] = []
 
-    def fake_copy(source, destination, *, options=None, report=None):
-        assert options is not None and report is None  # the calling convention, checked
+    def fake_copy(source, destination, *, options=None, report=None, warn=None):
+        assert options is not None and report is None and warn is not None  # the calling convention, checked
         if destination.path.endswith("a.bin"):  # the upload itself; the marker that follows succeeds
             assert source == local
             raise refused
@@ -532,3 +532,70 @@ def test_pull_refuses_names_windows_cannot_store(tmp_path):
 def test_with_known_hosts():
     assert with_known_hosts(["-o", "X=1"], None) == ["-o", "X=1"]
     assert with_known_hosts([], "C:/k h/kh") == ["-o", 'UserKnownHostsFile="C:/k h/kh"']
+
+
+def test_preserve_mtime_adds_dash_p():
+    """scp -p carries the source's times (and mode bits), in either protocol mode (issue 12)."""
+    assert "-p" in argv_for("a.gz", "me@h:in/", preserve_mtime=True)
+    assert "-p" not in argv_for("a.gz", "me@h:in/")
+    assert "-p" in argv_for("a.gz", "me@h:in/", protocol="sftp", preserve_mtime=True)
+
+
+def test_the_sftp_resume_command_preserves_times(tmp_path):
+    """The resume path drives sftp itself, so it needs sftp(1)'s own -p."""
+    batch = tmp_path / "b.batch"
+    host = parse_endpoint("me@h:/a.gz")
+    assert "-p" in transfer.sftp_argv(host, ScpOptions(protocol="sftp", preserve_mtime=True), batch)
+    assert "-p" not in transfer.sftp_argv(host, ScpOptions(protocol="sftp"), batch)
+
+
+def fake_scp(monkeypatch, *, writes, returncode=1, stderr="local set times: Input/output error"):
+    """A stand-in for scp's process: optionally writes the destination, then reports exit code and stderr."""
+
+    def run(argv, env, timeout, *, options):
+        if writes is not None:
+            writes.write_bytes(b"data")
+        return returncode, "", stderr, False
+
+    monkeypatch.setattr(transfer, "_run", run)
+
+
+def test_a_set_times_failure_after_the_data_is_a_warning(tmp_path, monkeypatch):
+    """Windows' scp -p pull transfers the file and then fails on setting its times: not a failed transfer."""
+    target = tmp_path / "x"
+    fake_scp(monkeypatch, writes=target)
+    warnings = []
+    copy("me@h:/x", target, options=ScpOptions(preserve_mtime=True), warn=warnings.append)
+    assert target.read_bytes() == b"data"
+    assert warnings and "x" in warnings[0] and "times" in warnings[0]
+
+
+def test_a_set_times_failure_without_preserve_mtime_still_fails(tmp_path, monkeypatch):
+    target = tmp_path / "x"
+    fake_scp(monkeypatch, writes=target)
+    with pytest.raises(transfer.CommandFailed, match="set times"):
+        copy("me@h:/x", target, options=ScpOptions())
+
+
+def test_a_set_times_failure_with_nothing_written_still_fails(tmp_path, monkeypatch):
+    """A local destination is evidence: when it is not there, the transfer did not land."""
+    fake_scp(monkeypatch, writes=None)
+    with pytest.raises(transfer.CommandFailed):
+        copy("me@h:/x", tmp_path / "x", options=ScpOptions(preserve_mtime=True))
+
+
+def test_pull_tolerates_set_times_when_the_part_verifies(tmp_path, monkeypatch):
+    """The pull path verifies the .part afterwards, so the times failure cannot hide a broken transfer."""
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    fake_scp(monkeypatch, writes=stage / ".x.part")
+    final = pull("me@h:/x", stage, size=4, options=ScpOptions(preserve_mtime=True))
+    assert final.read_bytes() == b"data"
+
+
+def test_pull_still_fails_when_the_part_does_not_verify(tmp_path, monkeypatch):
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    fake_scp(monkeypatch, writes=stage / ".x.part")
+    with pytest.raises(TransferFailed, match="expected 99"):
+        pull("me@h:/x", stage, size=99, options=ScpOptions(preserve_mtime=True))

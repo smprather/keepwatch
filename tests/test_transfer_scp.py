@@ -1,4 +1,5 @@
 import hashlib
+import os
 import shutil
 import socket
 
@@ -221,3 +222,27 @@ def test_pull_mismatches_raise_transfer_mismatch(tmp_path, server, ssh_config):
         pull(REMOTE + "b.gz", tmp_path / "stage", size=99, options=key_options(server, ssh_config))
     with pytest.raises(TransferMismatch):
         pull(REMOTE + "b.gz", tmp_path / "stage", sha256="0" * 64, options=key_options(server, ssh_config))
+
+
+def test_push_preserves_the_mtime(tmp_path, server, ssh_config):
+    """scp -p carries the source's mtime to the destination (issue 12)."""
+    local = tmp_path / "a.tar.gz"
+    local.write_bytes(b"payload")
+    os.utime(local, (1_700_000_000.0, 1_700_000_000.0))
+    push(local, REMOTE, marker="none", options=key_options(server, ssh_config, preserve_mtime=True))
+    assert (server.root / "a.tar.gz").stat().st_mtime == 1_700_000_000.0
+
+
+def test_pull_preserves_the_mtime(tmp_path, server, ssh_config):
+    (server.root / "b.gz").write_bytes(b"remote data")
+    os.utime(server.root / "b.gz", (1_700_000_000.0, 1_700_000_000.0))
+    final = pull(REMOTE + "b.gz", tmp_path / "stage", options=key_options(server, ssh_config, preserve_mtime=True))
+    assert final.stat().st_mtime == 1_700_000_000.0
+
+
+def test_without_preserve_mtime_the_destination_carries_the_transfer_time(tmp_path, server, ssh_config):
+    """The default stays exactly what it was: the destination gets the transfer's own time."""
+    (server.root / "b.gz").write_bytes(b"remote data")
+    os.utime(server.root / "b.gz", (1_700_000_000.0, 1_700_000_000.0))
+    final = pull(REMOTE + "b.gz", tmp_path / "stage", options=key_options(server, ssh_config))
+    assert final.stat().st_mtime != 1_700_000_000.0

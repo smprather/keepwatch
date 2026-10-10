@@ -247,6 +247,8 @@ def sftp_argv(host: Endpoint, options: ScpOptions, batch: Path) -> list[str]:
     port = options.port if options.port is not None else host.port
     if port is not None:
         argv += ["-P", str(port)]
+    if options.preserve_mtime:
+        argv.append("-p")
     argv += ["-q", "-b", str(batch)]
     name = f"{host.user}@{host.host}" if host.user else str(host.host)
     return [*argv, name]
@@ -260,6 +262,16 @@ def sftp_reget_batch(source: Endpoint, part: Path) -> str:
 def sftp_reput_batch(local: Path, target: Endpoint) -> str:
     """The sftp batch that continues `target` on the destination from `local` (reput resumes from its size)."""
     return f"reput {_quoted_for_sftp(str(local))} {_quoted_for_sftp(target.path)}\n"
+
+
+def _set_times_only(stderr: str) -> bool:
+    """Whether scp failed only on the times it sets after the data (the data itself arrived).
+
+    Two shapes: Windows' OpenSSH says `local set times: Input/output error` after a pull whose bytes arrived,
+    and a server that will not set them says `set times: Operation not permitted`. scp sets the times last, so
+    either text means the transfer itself completed.
+    """
+    return re.search(r"set times:", stderr or "", re.IGNORECASE) is not None
 
 
 def _refused_overwrite(exc: CommandFailed, name: str) -> bool:
@@ -288,6 +300,7 @@ class ScpOptions:
     deadline: float | None = None
     scp_command: Sequence[str] = ("scp",)
     password_mode: str = "askpass"
+    preserve_mtime: bool = False
 
     def __post_init__(self) -> None:
         if self.protocol not in PROTOCOLS:
@@ -365,6 +378,8 @@ def scp_argv(
         port = ports.pop() if ports else None
     if port is not None:
         argv += ["-P", str(port)]
+    if options.preserve_mtime:
+        argv.append("-p")
     if options.protocol == "scp" and version is not None and version >= (9, 0):
         argv.append("-O")
     if both:
@@ -635,8 +650,16 @@ def copy(
     *,
     options: ScpOptions = ScpOptions(),
     report: Report | None = None,
+    warn: Callable[[str], None] | None = None,
 ) -> None:
-    """Copy one file with scp. Raises CommandFailed when scp fails, TransferFailed when it cannot be attempted."""
+    """Copy one file with scp. Raises CommandFailed when scp fails, TransferFailed when it cannot be attempted.
+
+    With `preserve_mtime`, scp's `-p` carries the source's times and mode bits. A destination that refuses the
+    times (`set times:` in scp's stderr, as Windows' OpenSSH does after a pull whose bytes arrived) is a warning
+    rather than a failure when the data is known to have landed: for a local destination that means the file is
+    there, and a remote destination cannot be checked without another ssh call — scp sets the times last, so the
+    shape is the evidence. `warn` is told; the copy is kept.
+    """
     src, dst = _endpoint(source), _endpoint(destination)
     argv = scp_argv(src, dst, options, openssh_version(_ssh_beside(options.scp_command[0])))
     limit = options.timeout
@@ -654,6 +677,14 @@ def copy(
         shown = format_duration(limit or 0)
         raise TransferFailed(f"scp timed out after {shown}: {src.scp_arg()} -> {dst.scp_arg()}")
     if returncode != 0:
+        if options.preserve_mtime and _set_times_only(stderr) and (dst.remote or Path(dst.path).exists()):
+            if warn is not None:
+                tail = (stderr or "").strip().splitlines()
+                warn(
+                    f"{dst.scp_arg()} arrived, but its times could not be set ({tail[-1] if tail else 'set times'}); "
+                    "it now carries the transfer time"
+                )
+            return
         raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
 
 
@@ -759,7 +790,7 @@ def pull(
                     if offset:
                         _sftp_reget(src, part, options, report)
                     else:
-                        copy(src, Endpoint(path=str(part)), options=options, report=report)
+                        copy(src, Endpoint(path=str(part)), options=options, report=report, warn=warn)
                     _verify_part(part, src, size, sha256)
                     platform.replace(part, final)
                     break
@@ -808,7 +839,7 @@ def push(
         size = None
     with _activity(name=local.name, size=size):  # status.json and the TUI read this
         try:
-            copy(local, target, options=options, report=report)
+            copy(local, target, options=options, report=report, warn=warn)
         except CommandFailed as exc:
             if not _refused_overwrite(exc, local.name):
                 raise
@@ -829,7 +860,7 @@ def push(
             marker_file.write_bytes(f"{sha256_file(local)}  {local.name}\n".encode())
             # A second run, only after the data succeeded: one scp run carries on past a failed source, which
             # could put the marker beside a truncated file.
-            copy(marker_file, directory.child(marker_file.name), options=options, report=report)
+            copy(marker_file, directory.child(marker_file.name), options=options, report=report, warn=warn)
     return target.scp_arg()
 
 
@@ -852,7 +883,8 @@ class Transfer:
     identity (a private key file), known_hosts (a known_hosts file), port, ssh_options (extra scp arguments),
     timeout (seconds, per scp run) and deadline (the epoch after which this call's scp must not run; the hook's
     remaining time by default). A check may only use tcp_open: transferring files changes things, which a check
-    must not do.
+    must not do. `preserve_mtime` adds scp's `-p`, so the destination carries the source's times and mode bits;
+    a destination that refuses the times is a warning, not a failed transfer (see `keepwatch docs transfers`).
 
     `pull` also takes `resume=True` (needs protocol="sftp" and a known size and sha256): an unfinished
     `.NAME.part` from an earlier attempt is continued with the sftp client instead of being discarded.
@@ -893,7 +925,7 @@ class Transfer:
     def copy(self, source: str | os.PathLike[str], destination: str | os.PathLike[str], **options: Any) -> None:
         """Copy one file with scp; one side must be remote (user@host:path or scp://user@host:port/path)."""
         scp = self._options(options)
-        copy(self._local(source), self._local(destination), options=scp, report=self._report)
+        copy(self._local(source), self._local(destination), options=scp, report=self._report, warn=self._warn)
 
     def pull(
         self,

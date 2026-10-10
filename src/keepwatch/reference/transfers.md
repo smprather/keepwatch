@@ -48,6 +48,7 @@ Keyword arguments of `copy`, `pull` and `push` (`--option` for `keepwatch kit`):
 | `known_hosts` | A known_hosts file to check host keys against (default: ssh's own, `~/.ssh/known_hosts`). |
 | `port` | ssh port for `user@host:path` endpoints. |
 | `protocol` | `"scp"` (default): the classic protocol, which scp-only servers accept; keepwatch adds `-O` on OpenSSH 9 and newer, where scp otherwise speaks SFTP. `"sftp"`: needs OpenSSH 9+. |
+| `preserve_mtime` | `scp -p`: the destination carries the source's modification and access times **and its mode bits**. Default off. Needed by anything that later diffs the two trees by mtime (the `mirror` recipe), and by anyone who wants a copy to look like the original. See *Times a destination refuses*. |
 | `ssh_options` | Extra scp arguments, placed before keepwatch's own (ssh keeps the first value given): a list such as `["-o", "ProxyJump=bastion"]`, never a string. (`keepwatch kit --ssh-option ProxyJump=bastion` adds the `-o` itself.) |
 | `timeout` | Give up after this many seconds. In `ctx.transfer` each scp run also stops at the hook's deadline (so a push's marker never gets more than what is left). Running out of time raises `TransferFailed`, not `subprocess.TimeoutExpired` (unlike `ctx.run`). |
 
@@ -92,6 +93,24 @@ With `resume = true` (needs `protocol = "sftp"` and `marker = "sha256"`) it goes
 partial** with sftp's `reput` instead of failing, then uploads the marker as usual — the marker is what verifies
 the finished file on the receiving side, so a continued upload that ended up wrong is caught there. `keepwatch
 kit push --resume` does the same by hand, and `ctx.transfer.push(..., resume=True)` for watch authors.
+
+### Times a destination refuses
+
+`preserve_mtime` asks scp to copy the times after the data. Two things can refuse that, and both come **after**
+the bytes are there:
+
+- Windows' OpenSSH reports `local set times: Input/output error` on a **pull** whose transfer succeeded.
+- A server that will not set them reports `set times: Operation not permitted` on a push.
+
+Because the times step is last, keepwatch treats that stderr as a **warning, not a failure** when
+`preserve_mtime` is on: the copy is kept and the log says its times could not be set, so it carries the transfer
+time. For a local destination the file must actually be there (if scp wrote nothing, the transfer still fails),
+and a pull's `.NAME.part` must still pass its size/sha256 checks — so the tolerance cannot hide a broken
+transfer. Without `preserve_mtime` the same stderr is a plain failure, as before.
+
+If what you need is the times and nothing else, a caller that knows the source's mtime can set them itself:
+`os.utime(path, (mtime, mtime))` after a pull. That is what `recipe = "mirror"` does when a pull could not carry
+them.
 
 ## Errors
 
