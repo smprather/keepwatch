@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from keepwatch.transfer import Transfer
 
 Emit = Callable[[dict[str, Any]], None]
-LEDGER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+LEDGER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")  # ledger and checkpoint names (config.py validates skip_ledger with it)
 
 
 class Unknown(Exception):
@@ -59,9 +59,22 @@ class LedgerCorrupt(Exception):
     """A ledger file exists but cannot be read. The message names the file to fix or delete."""
 
 
+class CheckpointReadOnly(Exception):
+    """Raised when a check tries to save or clear a checkpoint. Checks must only observe."""
+
+
+class CheckpointCorrupt(Exception):
+    """A checkpoint file exists but cannot be read. The message names the file to fix or delete."""
+
+
 def ledger_file(data_dir: Path, name: str) -> Path:
     """Where ledger `name` of a watch is stored (data_dir is the watch's persistent data directory)."""
     return data_dir / "ledgers" / f"{name}.json"
+
+
+def checkpoint_file(data_dir: Path, name: str) -> Path:
+    """Where checkpoint `name` of a watch is stored (data_dir is the watch's persistent data directory)."""
+    return data_dir / "checkpoints" / f"{name}.json"
 
 
 def as_text(value: str | bytes | None) -> str:
@@ -161,6 +174,62 @@ class Ledger:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(temp)
             raise
+
+
+class Checkpoint:
+    """A persistent JSON document a check may read and only an action may replace.
+
+    The whole document is rewritten by save() — right for a listing or a cursor, wrong for per-key churn
+    (a ledger is for that). Values must be JSON: anything else raises TypeError and leaves the old document
+    untouched. With `writable=False` (a check) save() and clear() raise CheckpointReadOnly. The usual
+    pattern is *promote on success*: the check reads the document and proposes work, and the action saves it
+    as each unit succeeds, so an interrupted action repeats nothing and a restart only retries what is left.
+    """
+
+    def __init__(self, path: Path, *, writable: bool = True) -> None:
+        self.path = path
+        self.writable = writable
+        self.value: Any = self._load()
+
+    def _load(self) -> Any:
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        try:
+            return json.loads(text)
+        except ValueError as exc:
+            raise CheckpointCorrupt(
+                f"checkpoint file {self.path} is unreadable ({type(exc).__name__}: {exc}); "
+                "fix it, or delete it to start with no checkpoint"
+            ) from exc
+
+    def save(self, document: Any) -> None:
+        """Replace the document and save it immediately (JSON; the whole file is rewritten)."""
+        self._check_writable()
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd, temp = tempfile.mkstemp(dir=self.path.parent, prefix=f".{self.path.name}.")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(document, handle, indent=1, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            platform.replace(temp, self.path)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temp)
+            raise
+        self.value = document
+
+    def clear(self) -> None:
+        """Forget the checkpoint (delete its file)."""
+        self._check_writable()
+        self.path.unlink(missing_ok=True)
+        self.value = None
+
+    def _check_writable(self) -> None:
+        if not self.writable:
+            raise CheckpointReadOnly(f"{self.path.name}: a check must not change a checkpoint; do it in an action")
 
 
 class Ctx:
@@ -328,6 +397,17 @@ class Ctx:
             raise ValueError(f"invalid ledger name {name!r}: use letters, digits, '_', '.', '-'")
         seconds = None if expire is None else parse_duration(expire)
         return Ledger(ledger_file(self._data_dir, name), expire=seconds, writable=self.hook != "check")
+
+    def checkpoint(self, name: str) -> Checkpoint:
+        """Open the persistent checkpoint `name` (letters, digits, '_', '.', '-').
+
+        A JSON document that survives the process: a check reads it, and only an action saves or clears it.
+        Save it as each unit of work succeeds, so a killed poll retries only what is left. Read-only inside
+        check().
+        """
+        if not LEDGER_NAME.fullmatch(name):
+            raise ValueError(f"invalid checkpoint name {name!r}: use letters, digits, '_', '.', '-'")
+        return Checkpoint(checkpoint_file(self._data_dir, name), writable=self.hook != "check")
 
     def file_key(self, path: str | os.PathLike[str]) -> str:
         """"<absolute path>|<size>|<mtime_ns>": a new file reusing a name gets a new key."""

@@ -2,7 +2,29 @@
 
 __version__ = "2026.10.18"
 
-from keepwatch.ctx import CommandFailed, Ctx, Ledger, LedgerCorrupt, LedgerReadOnly, Unknown  # noqa: E402
+from keepwatch.ctx import (  # noqa: E402
+    Checkpoint,
+    CheckpointCorrupt,
+    CheckpointReadOnly,
+    CommandFailed,
+    Ctx,
+    Ledger,
+    LedgerCorrupt,
+    LedgerReadOnly,
+    Unknown,
+)
 from keepwatch.transfer import TransferFailed  # noqa: E402
 
-__all__ = ["CommandFailed", "Ctx", "Ledger", "LedgerCorrupt", "LedgerReadOnly", "TransferFailed", "Unknown", "__version__"]
+__all__ = [
+    "Checkpoint",
+    "CheckpointCorrupt",
+    "CheckpointReadOnly",
+    "CommandFailed",
+    "Ctx",
+    "Ledger",
+    "LedgerCorrupt",
+    "LedgerReadOnly",
+    "TransferFailed",
+    "Unknown",
+    "__version__",
+]

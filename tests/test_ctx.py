@@ -7,7 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch import CommandFailed, Ctx, Ledger, LedgerCorrupt, LedgerReadOnly
+from keepwatch import (
+    CheckpointCorrupt,
+    CheckpointReadOnly,
+    CommandFailed,
+    Ctx,
+    Ledger,
+    LedgerCorrupt,
+    LedgerReadOnly,
+)
 
 
 def make_ctx(tmp_path, hook="on_true", emitted=None, deadline_in=30.0, shell=None):
@@ -152,6 +160,62 @@ def test_corrupt_ledger_names_the_file(tmp_path, content):
     path.write_text(content)
     with pytest.raises(LedgerCorrupt, match=re.escape(str(path))):
         Ledger(path)
+
+
+def test_checkpoint_round_trips_a_document(tmp_path):
+    """A checkpoint holds any JSON document, and the next process reads it back (issue 13)."""
+    make_ctx(tmp_path).checkpoint("mirror").save({"files": {"a/b.txt": [4, 1700000000.0]}, "dirs": ["a"]})
+    assert make_ctx(tmp_path).checkpoint("mirror").value == {"files": {"a/b.txt": [4, 1700000000.0]}, "dirs": ["a"]}
+
+
+def test_an_unsaved_checkpoint_is_none(tmp_path):
+    assert make_ctx(tmp_path).checkpoint("mirror").value is None
+
+
+def test_ctx_checkpoint_is_read_only_in_check(tmp_path):
+    """Checks only observe: anything a check wrote would outlive the --dry-run it ran under."""
+    ctx = make_ctx(tmp_path, hook="check")
+    with pytest.raises(CheckpointReadOnly):
+        ctx.checkpoint("mirror").save({"a": 1})
+    with pytest.raises(CheckpointReadOnly):
+        ctx.checkpoint("mirror").clear()
+
+
+def test_checkpoint_clear_forgets_the_document(tmp_path):
+    ctx = make_ctx(tmp_path)
+    ctx.checkpoint("mirror").save({"a": 1})
+    ctx.checkpoint("mirror").clear()
+    assert make_ctx(tmp_path).checkpoint("mirror").value is None
+
+
+@pytest.mark.parametrize("content", ["{", '{"a": }', ""])
+def test_a_corrupt_checkpoint_names_the_file(tmp_path, content):
+    path = tmp_path / "data" / "checkpoints" / "mirror.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(CheckpointCorrupt, match="mirror.json"):
+        make_ctx(tmp_path).checkpoint("mirror")
+
+
+def test_a_bad_checkpoint_name_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="invalid checkpoint name"):
+        make_ctx(tmp_path).checkpoint("a/b")
+
+
+def test_checkpoint_save_is_atomic_and_leaves_no_temp_file(tmp_path):
+    ctx = make_ctx(tmp_path)
+    for index in range(3):
+        ctx.checkpoint("mirror").save({"n": index})
+    directory = tmp_path / "data" / "checkpoints"
+    assert sorted(path.name for path in directory.iterdir()) == ["mirror.json"]
+    assert make_ctx(tmp_path).checkpoint("mirror").value == {"n": 2}
+
+
+def test_a_checkpoint_that_cannot_be_written_leaves_no_temp_file(tmp_path):
+    with pytest.raises(TypeError):
+        make_ctx(tmp_path).checkpoint("mirror").save({"when": object()})
+    directory = tmp_path / "data" / "checkpoints"
+    assert not directory.exists() or list(directory.iterdir()) == []
 
 
 def test_ledger_lookup_does_not_scan_the_whole_ledger(tmp_path, monkeypatch):
