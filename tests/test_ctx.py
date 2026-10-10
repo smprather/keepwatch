@@ -1,3 +1,5 @@
+"""Tests for Ctx: the plugin API — ledgers, checkpoints, run, transfers (see `keepwatch docs ctx`)."""
+
 import os
 import re
 import subprocess
@@ -222,7 +224,7 @@ def test_ledger_lookup_does_not_scan_the_whole_ledger(tmp_path, monkeypatch):
     ledger = Ledger(tmp_path / "x.json", expire=3600)
     ledger.add("k")
 
-    def scanned(self):
+    def scanned(_self):
         raise AssertionError("the whole ledger was scanned")
 
     monkeypatch.setattr(Ledger, "_live", scanned)
