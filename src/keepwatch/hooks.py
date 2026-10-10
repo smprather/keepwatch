@@ -46,7 +46,11 @@ def resolve_hooks(watch_dir: Path, command_hooks: Collection[str]) -> tuple[froz
     return python | commands, None
 
 
-RECIPE_HOOKS = {"pull": frozenset({CHECK, "on_true"}), "push": frozenset({CHECK, "on_true"})}
+RECIPE_HOOKS = {
+    "pull": frozenset({CHECK, "on_true"}),
+    "push": frozenset({CHECK, "on_true"}),
+    "mirror": frozenset({CHECK, "on_true"}),
+}
 
 
 def watch_hooks(watch_dir: Path, command_hooks: Collection[str], recipe: str | None) -> tuple[frozenset[str], str | None]:

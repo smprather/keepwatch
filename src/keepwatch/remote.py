@@ -34,6 +34,22 @@ SSH_DEFAULTS = (
 )
 
 
+def _ssh_base(
+    *,
+    port: int | None,
+    identity: str | os.PathLike[str] | None,
+    ssh_options: Sequence[str],
+    ssh_command: Sequence[str] | None,
+) -> list[str]:
+    """The ssh options every remote call shares (the helper launcher and a batched command alike)."""
+    argv = [*(ssh_command or ("ssh",)), *ssh_options, *SSH_DEFAULTS]
+    if port is not None:
+        argv += ["-p", str(port)]
+    if identity is not None:
+        argv += ["-i", str(identity), "-o", "IdentitiesOnly=yes"]
+    return argv
+
+
 def ssh_argv(
     remote: str,
     *,
@@ -44,13 +60,26 @@ def ssh_argv(
     remote_python: str = "auto",
 ) -> list[str]:
     """The ssh command line that runs the remote helper (its source comes on stdin). User ssh_options come first."""
-    argv = [*(ssh_command or ("ssh",)), *ssh_options, *SSH_DEFAULTS]
-    if port is not None:
-        argv += ["-p", str(port)]
-    if identity is not None:
-        argv += ["-i", str(identity), "-o", "IdentitiesOnly=yes"]
     python = AUTO_PYTHON if remote_python == "auto" else f"{shlex.quote(remote_python)} -u -"
-    return [*argv, "--", remote, python]
+    base = _ssh_base(port=port, identity=identity, ssh_options=ssh_options, ssh_command=ssh_command)
+    return [*base, "--", remote, python]
+
+
+def ssh_run_argv(
+    remote: str,
+    command: str,
+    *,
+    port: int | None = None,
+    identity: str | os.PathLike[str] | None = None,
+    ssh_options: Sequence[str] = (),
+    ssh_command: Sequence[str] | None = None,
+) -> list[str]:
+    """The ssh command line that runs `command` in the remote login shell: batched remote work, no helper.
+
+    Keep `command` short: one ssh argument carries it, and Windows caps a command line near 32k characters.
+    """
+    base = _ssh_base(port=port, identity=identity, ssh_options=ssh_options, ssh_command=ssh_command)
+    return [*base, "--", remote, command]
 
 
 def watcher_source(options: Mapping[str, Any]) -> str:

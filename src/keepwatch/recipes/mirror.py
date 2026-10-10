@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import shlex
 import stat
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -19,8 +20,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from keepwatch.ctx import CommandFailed, Ctx, Unknown
+from keepwatch.recipes import file_budget
+from keepwatch.remote import ssh_run_argv
+from keepwatch.transfer import TransferFailed
+
 CHECKPOINT = "mirror"
 TOLERANCE = 2.0  # seconds: FAT and NTFS round mtimes to two
+PROMOTE_FILES = 500  # entries landed since the last save ...
+PROMOTE_BYTES = 64 * 1024 * 1024  # ... or bytes of file, before the checkpoint is saved
+BATCH = 100  # paths per remote command line: Windows' ~32k command-line limit stays far away
 
 
 @dataclass(frozen=True)
@@ -187,3 +196,151 @@ def walk_local(
 
 def _problem(exc: OSError, path: str | None = None) -> str:
     return f"{path or exc.filename}: {exc.strerror or exc}"
+
+
+def batches(items: Sequence[str], size: int = BATCH) -> list[list[str]]:
+    """`items` in groups of `size`: one remote command line per group."""
+    return [list(items[index : index + size]) for index in range(0, len(items), size)]
+
+
+def should_promote(pending: Sequence[tuple[str, int]]) -> bool:
+    """Whether enough has landed since the last save: a whole-document save per file is quadratic on a big sync."""
+    return len(pending) >= PROMOTE_FILES or sum(size for _, size in pending) >= PROMOTE_BYTES
+
+
+def reachable(settings: Mapping[str, Any]) -> tuple[str, int]:
+    """The host and port to probe: reachable_host/port, else the remote host and port, else 22.
+
+    `remote` may be `user@host` (or `DOMAIN\\user@host`), and the probe wants the host alone.
+    """
+    host = str(settings["reachable_host"] or settings["remote"])
+    host = host.rpartition("@")[2] or host
+    port = settings["reachable_port"] or settings["port"] or 22
+    return host, int(port)
+
+
+def transfer_options(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """What every mirror transfer carries: the shared scp options, times preserved, no markers."""
+    names = ("protocol", "password_env", "password_mode", "port", "identity", "known_hosts")
+    options = {name: settings[name] for name in names if settings[name] is not None}
+    return {**options, "ssh_options": list(settings["ssh_options"]), "preserve_mtime": True}
+
+
+def remote_root(settings: Mapping[str, Any]) -> str:
+    """The remote tree's root as an absolute POSIX path (the watcher joins it with "/" too)."""
+    return str(settings["remote_dir"]).rstrip("/") or "/"
+
+
+def remote_path(settings: Mapping[str, Any], relative: str, *, parent: bool = False) -> str:
+    """A relative POSIX path as an absolute one on the remote host; `parent` names its directory."""
+    root = remote_root(settings)
+    if parent:
+        holder = Path(relative).parent.as_posix()
+        if holder == ".":
+            return root
+        relative = holder
+    return root + relative if root.endswith("/") else root + "/" + relative
+
+
+def run_ssh(ctx: Ctx, settings: Mapping[str, Any], command: str) -> None:
+    """Run one batched remote command (mkdir, rm, find) with the watch's ssh settings."""
+    ctx.run(
+        ssh_run_argv(
+            str(settings["remote"]),
+            command,
+            port=settings["port"],
+            identity=settings["identity"],
+            ssh_options=list(settings["ssh_options"]),
+            ssh_command=settings["ssh_command"],
+        )
+    )
+
+
+def check(ctx: Ctx) -> tuple[bool, dict[str, list[str]]]:
+    """Push: walk the local tree, diff it against the checkpoint, and answer with the plan. No ssh at all.
+
+    The host is probed first: no answer is `Unknown` (no failure count, the tree waits). A walk that could not
+    read a subtree is `Unknown` too — never a deletion, because a partial view must not look like a source that
+    lost files.
+    """
+    settings = ctx.settings
+    host, port = reachable(settings)
+    if not ctx.transfer.tcp_open(host, port, settings["reachable_timeout"]):
+        raise Unknown(f"{host}:{port} is not reachable; the tree waits")
+    files, dirs, problems = walk_local(Path(settings["local_dir"]), settings["ignore"], settings["settle"])
+    if problems:
+        raise Unknown("cannot read " + "; ".join(problems[:3]) + (" (and more)" if len(problems) > 3 else ""))
+    document = ctx.checkpoint(CHECKPOINT).value or {}
+    plan = plan_push(files, dirs, files_of(document), dirs_of(document), tolerance=settings["mtime_tolerance"])
+    return (not plan.empty()), plan.as_dict()
+
+
+def on_true(ctx: Ctx) -> None:
+    """Push the plan: directories, then each changed file, then deletions, promoting the checkpoint as work lands.
+
+    A file that fails is logged and the rest of the plan carries on; the first failure is raised at the end, and
+    its entry stays out of the checkpoint, so the next poll tries it again.
+    """
+    settings = ctx.settings
+    plan = Plan.from_payload(ctx.payload or {})
+    state = ctx.checkpoint(CHECKPOINT)
+    document = state.value or {}
+    files = files_of(document)
+    dirs = set(dirs_of(document))
+    options = transfer_options(settings)
+    pending: list[tuple[str, int]] = []
+    error: Exception | None = None
+
+    def promote(force: bool = False) -> None:
+        if force or should_promote(pending):
+            state.save(as_document(files, dirs))
+            pending.clear()
+
+    try:
+        if plan.mkdir:
+            for group in batches(plan.mkdir):
+                run_ssh(ctx, settings, "mkdir -p " + " ".join(shlex.quote(remote_path(settings, path)) for path in group))
+                dirs.update(group)
+            promote()
+        for index, relative in enumerate(plan.copy):
+            source = Path(settings["local_dir"]) / relative
+            try:
+                info = source.stat()  # recorded before the copy: a change during it is copied again next poll
+            except OSError:
+                continue  # gone since the check
+            if ctx.remaining <= 0:
+                error = error or TransferFailed("no time left for the rest of this queue (raise action_timeout)")
+                break
+            budget = file_budget(ctx.remaining, len(plan.copy) - index, settings["file_timeout"])
+            try:
+                ctx.transfer.push(
+                    str(source),
+                    f"{settings['remote']}:{remote_path(settings, relative, parent=True)}",
+                    marker="none",
+                    deadline=time.time() + budget,
+                    **options,
+                )
+            except (CommandFailed, TransferFailed, OSError) as exc:
+                error = error or exc
+                ctx.log.warning("pushing %s failed (%s); the rest of the queue is still tried", relative, exc)
+                continue
+            files[relative] = [info.st_size, info.st_mtime]
+            pending.append((relative, info.st_size))
+            promote()
+        if plan.deleted:
+            lost_dirs = [path for path in plan.deleted if path in dirs]
+            lost_files = [path for path in plan.deleted if path not in lost_dirs]
+            for relative in plan.deleted:
+                files.pop(relative, None)
+                dirs.discard(relative)
+            if settings["delete"] and (lost_files or lost_dirs):
+                for group in batches(lost_files):
+                    run_ssh(ctx, settings, "rm -f " + " ".join(shlex.quote(remote_path(settings, path)) for path in group))
+                # The sweep takes the directories that just became empty (and any other empty one).
+                run_ssh(ctx, settings, f"find {shlex.quote(remote_root(settings))} -type d -empty -delete")
+            promote()
+    except Exception as exc:
+        error = error or exc
+    promote(force=True)
+    if error is not None:
+        raise error
