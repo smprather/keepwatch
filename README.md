@@ -4,7 +4,7 @@ Poll conditions and run actions, from login onward.
 
 keepwatch runs *watches*: small directories holding a `config.toml` plus a check and some actions, written in Python, shell, Expect or anything executable. It polls each check on its own interval, remembers whether the condition is TRUE or FALSE, runs actions while it is TRUE or FALSE and when it changes, retries with backoff, takes failing watches offline, and logs everything as JSON lines, so any failure can be explained afterwards. The command line and its reference are written for AI agents as much as for people.
 
-Watches can also react to events instead of polling: observers keep commands, local directories or remote directories (over one ssh connection, with nothing installed remotely) under watch. Built-in recipes move files between machines with verified scp transfers; `keepwatch docs relay` walks through relaying files host A → this machine → host B.
+Watches can also react to events instead of polling: observers keep commands, local directories or remote directories (over one ssh connection, with nothing installed remotely) under watch. Built-in recipes move files between machines with verified scp transfers, and `recipe = "mirror"` keeps a whole tree in sync in place, the way rsync would; `keepwatch docs relay` walks through relaying files host A → this machine → host B.
 
 `keepwatch tui` watches all of it live in one screen: every watch and its state, the countdown to its next poll, and the actions it has taken with their results. It is read-only, so it is safe to leave open beside the running service.
 

@@ -59,3 +59,58 @@ pattern = "*.tar.gz"
 - **on_true** pushes each file, then its `NAME.sha256` marker (`marker = "none"` to skip), then deletes it (`after = "delete"`, the default), moves it to `archive_dir` (`"archive"`, pruning files older than `keep_for`) or keeps it (`"keep"`; the ledger `pushed` remembers it).
 
 The two chain naturally through a staging folder: pull's `local_dir` is push's `local_dir`. See `keepwatch docs relay` for the whole setup.
+
+## mirror: a tree kept in sync in place
+
+```toml
+description = "Keep the Downloads tree on linux1"
+recipe = "mirror"
+
+[settings]
+direction = "push"          # push: local_dir -> remote:remote_dir; pull: the reverse
+remote = "me@linux1"
+remote_dir = "/home/me/Downloads"
+local_dir = 'C:/Users/me/Downloads'
+delete = false              # propagate the source's deletions
+ignore = [".git", "__pycache__", "*.tmp"]
+mtime_tolerance = 2.0       # seconds; FAT and NTFS round mtimes to two
+```
+
+Where `pull` and `push` are queues — one file per unit, staged, then renamed or archived — the mirror keeps a
+**living tree equal to another one, in place**: a changed file is overwritten rather than renamed aside, and the
+difference is by size and modification time, as rsync does it. This is for the case `pull` and `push`
+deliberately do not serve: a tree that has to stay a tree, over plain ssh and scp (what is left when the network
+blocks rsync).
+
+- **The destination is mirror-owned.** The mirror never scans it: the source side is the truth, and the
+  checkpoint `mirror` (see `keepwatch docs ctx`) is its record of what has been synced. That is what makes a poll
+  cheap, and it is the one thing to be clear about before turning `delete` on: `delete = true` removes what the
+  mirror synced and the source no longer has, and it never removes a file that was already in the destination
+  before the mirror ran. Point it at a directory nothing else writes.
+- **push** walks `local_dir` itself — no ssh at all, the source is local — after probing the host
+  (`reachable_host`/`reachable_port`, else `remote`/`port`; `reachable_timeout`). **No answer means unknown**: no
+  failure, no backoff, the tree simply waits. A walk that could not read a subtree is `unknown` too, never a
+  deletion — a partial view must not look like a source that lost files.
+- **pull** is driven by one live ssh connection running keepwatch's remote watcher in tree mode: it reports the
+  difference against the checkpoint (`files`, `dirs`, `gone`) and each of those wakes the watch. A file deleted on
+  the source while keepwatch was down is still reported when the connection returns, because the checkpoint is the
+  watcher's expected list. A quiet connection means "nothing to do", never "everything was deleted"; if the event
+  queue ever drops one, the observer drops the connection, reconnects, and the walk re-reports from the
+  checkpoint.
+- **Modification times travel with the files** (`scp -p`), so the two trees agree and a file that did not change
+  is never copied twice; `mtime_tolerance` absorbs the two-second rounding of FAT and NTFS. Where scp could not
+  set the time (Windows' `local set times: Input/output error`), the pull side sets it from the time the watcher
+  reported, and says so in the log if even that fails.
+- **Work is recorded as it lands.** The checkpoint is saved in batches (500 entries or 64 MiB), so a killed poll
+  retries only what is missing and a service restart repeats nothing. A file that fails is logged, the rest of
+  the plan still runs, and the poll fails — so the watch backs off and tries again instead of quietly staying
+  behind; the failed file's entry is not recorded, so it is copied next time.
+- Remote directories are created in batches (`mkdir -p`, at most 100 paths per ssh call) and deletions are
+  batched the same way, with one `find … -type d -empty -delete` for the directories that just became empty;
+  paths with spaces or shell characters are quoted for the remote shell. Beyond Python 3.6 for the watcher,
+  nothing is installed on the other host.
+
+Not in this recipe: symlinks (skipped, and said so in the log), resuming a half-copied file (the next poll copies
+it again, since its entry was never recorded), a Windows host on the remote side, and a `verify` mode that would
+scan the destination as well. If drift on the destination ever matters, that last one is the next step — not
+something this recipe pretends to do.
