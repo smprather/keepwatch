@@ -14,13 +14,13 @@ from pathlib import Path
 import pytest
 
 from keepwatch.config import load_global_config, load_watch_config
-from keepwatch.ctx import Checkpoint, Unknown, checkpoint_file
+from keepwatch.ctx import Checkpoint, Ctx, Unknown, checkpoint_file
 from keepwatch.pollengine import PollEngine
 from keepwatch.recipes import mirror
 from keepwatch.remote import ssh_run_argv
 from keepwatch.runner import Runner
 from keepwatch.state import WatchState
-from keepwatch.transfer import TransferFailed
+from keepwatch.transfer import Transfer, TransferFailed
 from portable import toml_path
 from scp_server import ScpServer
 
@@ -28,29 +28,33 @@ pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenS
 SSH_OPTIONS = ("-F", "/dev/null", "-o", "IdentityAgent=none")
 
 
-class FakeTransfer:
-    """ctx.transfer, recording what the action asked it to push or pull (and writing the pulled bytes)."""
+class FakeTransfer(Transfer):
+    """A real Transfer with its three calls replaced: it records them, and writes the bytes a pull returns."""
 
     def __init__(self, *, reachable=True, fail=()):
+        super().__init__(base=Path("."))
         self.reachable = reachable
         self.fail = {str(name) for name in fail}
         self.pushes = []
         self.pulls = []
+        self.probes = []  # (host, port, timeout) of every probe the recipe made
 
-    def tcp_open(self, host, port, timeout):
+    def tcp_open(self, host, port=22, timeout=5.0):
+        self.probes.append((host, port, timeout))
         return self.reachable
 
-    def push(self, path, remote_dir, **options):
+    def push(self, path, remote_dir, *, marker="sha256", resume=False, **options):
         if Path(path).name in self.fail:
             raise TransferFailed(f"cannot push {Path(path).name}")
-        self.pushes.append((str(path), remote_dir, options))
+        self.pushes.append((str(path), remote_dir, {**options, "marker": marker, "resume": resume}))
         return f"{remote_dir}/{Path(path).name}"
 
-    def pull(self, source, local_dir, **options):
-        name = str(source).rsplit(":", 1)[-1].rsplit("/", 1)[-1]
+    def pull(self, remote, local_dir, *, size=None, sha256=None, on_conflict="skip-identical", resume=False, **options):
+        name = str(remote).rsplit(":", 1)[-1].rsplit("/", 1)[-1]
         if name in self.fail:
             raise TransferFailed(f"cannot pull {name}")
-        self.pulls.append((str(source), str(local_dir), options))
+        recorded = {**options, "size": size, "sha256": sha256, "on_conflict": on_conflict, "resume": resume}
+        self.pulls.append((str(remote), str(local_dir), recorded))
         target = Path(local_dir) / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"payload")  # a fresh mtime: the recipe must repair it from the event
@@ -76,28 +80,46 @@ class CountingCheckpoint:
         self.inner.clear()
 
 
-class FakeCtx:
-    """The parts of Ctx the mirror uses, with transfers and ssh runs captured instead of made."""
+class FakeCtx(Ctx):
+    """A real Ctx, with the members the mirror uses replaced by recorders.
+
+    Built without Ctx.__init__ (there is no watch or deadline to speak of here). The three properties are
+    overridden rather than assigned: they are read-only on Ctx, and a subclass may shadow them where an instance
+    could not set them.
+    """
 
     def __init__(self, tmp_path, settings, *, reachable=True, fail=(), events=()):
         self.settings = settings
-        self.transfer = FakeTransfer(reachable=reachable, fail=fail)
+        self._transfer = FakeTransfer(reachable=reachable, fail=fail)
         self.events = list(events)
         self.payload = None
-        self.remaining = 3600.0
+        self._left = 3600.0
         self.log = logging.getLogger("keepwatch.test.mirror")
         self.watch_dir = tmp_path / "watch"
         self.watch_dir.mkdir(exist_ok=True)
-        self.data_dir = tmp_path / "data"
+        self._data = tmp_path / "data"
         self.commands = []  # (argv, input) pairs of every ctx.run
         self.checkpoints = {}
 
+    @property
+    def transfer(self):
+        return self._transfer
+
+    @property
+    def remaining(self):
+        return self._left
+
+    @property
+    def data_dir(self):
+        return self._data
+
     def checkpoint(self, name):
         if name not in self.checkpoints:
-            self.checkpoints[name] = CountingCheckpoint(Checkpoint(checkpoint_file(self.data_dir, name)))
+            self.checkpoints[name] = CountingCheckpoint(Checkpoint(checkpoint_file(self._data, name)))
         return self.checkpoints[name]
 
     def run(self, argv, *, timeout=None, check=True, input=None, env=None, cwd=None):
+        del timeout, check, env, cwd  # the mirror passes only argv; the recorded command lines are the point
         self.commands.append(([str(item) for item in argv], input))
         return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -106,7 +128,7 @@ class FakeCtx:
         return [argv[-1] for argv, _ in self.commands if argv[-1].startswith(prefix)]
 
     def pushes_of(self):
-        return [Path(path).name for path, _, _ in self.transfer.pushes]
+        return [Path(path).name for path, _, _ in self._transfer.pushes]
 
 
 def settings(tmp_path, **overrides):
@@ -272,7 +294,7 @@ def test_promotion_happens_in_bounded_batches(tmp_path):
     for name in names:
         tree(tmp_path, name)
     ctx = FakeCtx(tmp_path, settings(tmp_path))
-    condition, payload = mirror.check(ctx)
+    _, payload = mirror.check(ctx)
     ctx.payload = payload
     mirror.on_true(ctx)
     assert len(ctx.transfer.pushes) == 1200
@@ -370,7 +392,7 @@ def test_delete_off_forgets_a_gone_path_but_keeps_the_local_file(tmp_path):
 def test_a_failed_pull_is_not_promoted(tmp_path):
     events = [file_event("/tree/a.txt", "/tree/c.txt")]
     ctx = FakeCtx(tmp_path, pull_settings(tmp_path), fail=["a.txt"], events=events)
-    condition, payload = mirror.check(ctx)
+    _, payload = mirror.check(ctx)
     ctx.payload = payload
     with pytest.raises(TransferFailed, match="a.txt"):
         mirror.on_true(ctx)
@@ -405,7 +427,9 @@ def mirror_watch(make_watch, server, tmp_path, extra=""):
 
 def poll(xdg, watch, state=None):
     global_config = load_global_config(xdg.config_file, xdg)
-    engine = PollEngine(runner=Runner(), paths=xdg, global_config=global_config, sink=lambda record: None, pid=os.getpid())
+    engine = PollEngine(
+        runner=Runner(), paths=xdg, global_config=global_config, sink=lambda _record: None, pid=os.getpid()
+    )
     return engine.poll(watch, state or WatchState(False))
 
 
