@@ -749,10 +749,13 @@ class RemoteFilesObserver(CommandObserver):
 
 
 def _remote_path(directory: str, relative: str) -> str:
-    """A checkpoint path (relative, POSIX) as the remote watcher sees it (its side joins with "/")."""
-    if directory.endswith("/"):
-        return directory + relative
-    return directory + "/" + relative
+    """A checkpoint path (relative, POSIX) as the watcher sees it: joined the way the watcher's host joins.
+
+    The watcher walks with os.path.join on its own host, so a POSIX remote answers to "/" and a Windows remote to
+    "\\". Following the directory rather than assuming one is also what lets these tests run the watcher locally.
+    """
+    separator = "\\" if "\\" in directory and "/" not in directory else "/"
+    return directory.rstrip("/\\") + separator + relative.replace("/", separator)
 
 
 class RemoteTreeObserver(RemoteFilesObserver):

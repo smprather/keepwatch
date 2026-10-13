@@ -12,7 +12,7 @@ import pytest
 from keepwatch import observers
 from keepwatch.config import ObserverConfig, load_watch_config
 from keepwatch.ctx import Checkpoint, checkpoint_file
-from keepwatch.observers import RemoteTreeObserver, build_observer
+from keepwatch.observers import RemoteTreeObserver, _remote_path, build_observer
 from portable import PY
 from test_remote_files_observer import FAKE_SSH, age, kinds, stop, wait_for
 
@@ -69,6 +69,18 @@ def options_of(observer):
     assert observer.config.stdin is not None
     first = observer.config.stdin.split("\n", 1)[0]
     return json.loads(json.loads(first.split(" = ", 1)[1]))
+
+
+def test_expected_paths_follow_the_watchers_own_separator():
+    """The watcher walks with os.path.join on its host: a Windows tree gets backslashes, a POSIX tree slashes.
+
+    Windows CI caught the hardcoded "/": with the wrong separator the expected state never matched the walk, so
+    every file of a checkpointed tree looked new again on every poll.
+    """
+    assert _remote_path("C:\\tree", "sub/a.txt") == "C:\\tree\\sub\\a.txt"
+    assert _remote_path("/data/tree", "sub/a.txt") == "/data/tree/sub/a.txt"
+    assert _remote_path("/", "a.txt") == "/a.txt"
+    assert _remote_path("/data/tree/", "a.txt") == "/data/tree/a.txt"
 
 
 def test_tree_options_come_from_the_checkpoint(make_watch, xdg, tmp_path):
