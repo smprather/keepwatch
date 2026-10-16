@@ -8,7 +8,7 @@ A common setup: files appear on a source host (linux1) and must reach a destinat
 | linux1 | none needed towards the hub or linux2 | produces the files (Python 3.6+ present) |
 | linux2 | accepts scp uploads from the hub (password), often away | receives the files |
 
-1. **relay-pull** (`recipe = "pull"`): one long-lived ssh connection to linux1 runs keepwatch's remote watcher, which reports every settled file with its sha256 (inotify where linux1 has it, rescans where not, catching up after every reconnect). Each new file is pulled into the staging folder through a hidden `.NAME.part` file, verified, renamed, and recorded in the ledger `pulled`.
+1. **relay-pull** (`recipe = "pull"`): one long-lived ssh connection to linux1 runs keepwatch's remote watcher, which reports every settled file with its sha256 (inotify where linux1 has it, rescans where not, catching up after every reconnect). Each new file is pulled into the staging folder through a hidden `.NAME.part` file, verified, renamed, and recorded in the ledger `pulled`. A file that is gone from linux1 by the time it is pulled (a producer's cleanup, a rename-into-place gone wrong, a second producer) is skipped with a WARNING instead of retried forever, so one withdrawal cannot park the watch offline and starve the queue (`on_missing` in `keepwatch docs recipes`).
 2. **relay-push** (`recipe = "push"`): when a file settles in the staging folder and linux2 answers on its ssh port, the file is uploaded, then `NAME.sha256`, and the staged copy is deleted. While linux2 is away the check answers **unknown**: nothing fails, nothing goes offline, files simply wait in the staging folder (the queue).
 
 Both are in `keepwatch docs examples` (`relay-pull`, `relay-push`).
