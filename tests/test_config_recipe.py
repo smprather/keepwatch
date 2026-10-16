@@ -191,6 +191,15 @@ def test_pull_on_conflict_must_be_a_choice(make_watch):
     assert "'on_conflict' must be one of skip-identical, rename, overwrite" in problem
 
 
+def test_pull_on_missing_default_and_choices(make_watch):
+    assert load(make_watch, PULL).settings["on_missing"] == "skip"
+
+
+def test_pull_on_missing_must_be_a_choice(make_watch):
+    [problem] = problems(make_watch, PULL + 'on_missing = "keep"\n')
+    assert "'on_missing' must be one of skip, fail" in problem
+
+
 def test_recipe_ssh_options_must_start_with_an_option(make_watch):
     [problem] = problems(make_watch, PUSH + 'ssh_options = ["ProxyJump=bastion"]\n')
     assert "'ssh_options' are scp arguments" in problem and "['-o', 'ProxyJump=bastion']" in problem

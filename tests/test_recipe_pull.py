@@ -10,6 +10,7 @@ from keepwatch.cli import cli
 from keepwatch.config import load_global_config, load_watch_config
 from keepwatch.ctx import Ledger
 from keepwatch.pollengine import PollEngine
+from keepwatch.recipes.pull import event_key
 from keepwatch.runner import Runner
 from keepwatch.state import Outcome, WatchState
 from portable import toml_path
@@ -76,16 +77,66 @@ def test_pull_recipe_pulls_new_files_once(make_watch, server, tmp_path, xdg):
 
 
 def test_a_failing_file_does_not_stop_the_rest_of_the_queue(make_watch, server, tmp_path, xdg):
-    """One unreachable file must not starve the queue, and the poll still fails so it is retried (issue 5)."""
+    """One file that cannot be handled must not starve the queue, and the poll still fails so it is retried (issue 5)."""
     (server.root / "good.tar.gz").write_bytes(b"data")
-    watch = load_watch_config(pull_watch(make_watch, server, tmp_path))
+    (server.root / "clash.tar.gz").write_bytes(b"new data")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "clash.tar.gz").write_bytes(b"old, not pushed yet")
+    watch = load_watch_config(pull_watch(make_watch, server, tmp_path, extra='on_conflict = "skip-identical"\n'))
     records = []
-    events = [file_event("missing.tar.gz", b"gone"), file_event("good.tar.gz", b"data")]
+    events = [file_event("clash.tar.gz", b"new data"), file_event("good.tar.gz", b"data")]
     report = engine(xdg, records).poll(watch, WatchState(False), events=events)
     assert report.failed  # reported, so the next poll retries
-    assert (tmp_path / "stage" / "good.tar.gz").read_bytes() == b"data"  # the queue carried on
+    assert (stage / "good.tar.gz").read_bytes() == b"data"  # the queue carried on
     messages = [r.get("message", "") for r in records if r["event"] == "plugin.log"]
     assert any("the rest of the queue is still tried" in message for message in messages), messages
+
+
+WITHDRAWN = b"gone before the pull"  # the size and sha of a file that is no longer on the source
+
+
+def withdrawn_key(name):
+    return event_key(file_event(name, WITHDRAWN))
+
+
+@pytest.mark.parametrize(
+    ("extra", "partials"),
+    [("", {}), ('protocol = "sftp"\nresume = true\n', {"withdrawn.bin": b"x", "good.bin": b"d"})],
+    ids=["classic-scp", "sftp-resume"],
+)
+def test_a_withdrawn_file_is_skipped_and_the_queue_behind_it_flows(make_watch, server, tmp_path, xdg, extra, partials):
+    """A file gone from the source when its pull runs is withdrawn: skip it, succeed, and keep the queue moving (issue 14)."""
+    (server.root / "good.bin").write_bytes(b"data")
+    stage = tmp_path / "stage"
+    for name, prefix in partials.items():  # an earlier attempt's partial (a true prefix): the sftp reget path
+        stage.mkdir(exist_ok=True)
+        (stage / f".{name}.part").write_bytes(prefix)
+    watch = load_watch_config(pull_watch(make_watch, server, tmp_path, extra=extra))
+    records = []
+    events = [file_event("withdrawn.bin", WITHDRAWN), file_event("good.bin", b"data")]
+    first = engine(xdg, records).poll(watch, WatchState(False), events=events)
+    assert not first.failed, records
+    assert (stage / "good.bin").read_bytes() == b"data"  # the queue behind it flowed
+    skipped = Ledger(xdg.watch_data_dir("relay-pull") / "ledgers" / "skipped.json")
+    assert withdrawn_key("withdrawn.bin") in skipped
+    messages = [r.get("message", "") for r in records if r["event"] == "plugin.log"]
+    assert any("withdrawn.bin" in message and "gone" in message for message in messages), messages
+    second = engine(xdg, []).poll(watch, first.after, events=events)
+    assert second.outcome is Outcome.FALSE  # the event was acknowledged: it is not retried
+
+
+def test_on_missing_fail_keeps_the_withdrawn_file_failing(make_watch, server, tmp_path, xdg):
+    """on_missing = "fail" keeps the strict behavior: the poll fails and the event is retried (issue 14)."""
+    watch = load_watch_config(pull_watch(make_watch, server, tmp_path, extra='on_missing = "fail"\n'))
+    records = []
+    events = [file_event("withdrawn.bin", WITHDRAWN)]
+    report = engine(xdg, records).poll(watch, WatchState(False), events=events)
+    assert report.failed
+    skipped = Ledger(xdg.watch_data_dir("relay-pull") / "ledgers" / "skipped.json")
+    assert withdrawn_key("withdrawn.bin") not in skipped
+    messages = [r.get("message", "") for r in records if r["event"] == "plugin.log"]
+    assert any("withdrawn.bin" in message and "the rest of the queue is still tried" in message for message in messages), messages
 
 
 def test_pull_recipe_resumes_a_partial_file(make_watch, server, tmp_path, xdg):

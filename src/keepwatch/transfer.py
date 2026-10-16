@@ -117,6 +117,10 @@ class TransferMismatch(TransferFailed):
     """A pulled file's size or sha256 differs from what was expected (usually: it changed after it was reported)."""
 
 
+class TransferMissing(TransferFailed):
+    """A pull's remote source is gone (withdrawn after it was listed or reported); retrying it cannot help."""
+
+
 @dataclass(frozen=True)
 class Endpoint:
     """One side of a transfer: a local path, or a path on `host` (`user@host:path` or `scp://user@host:port/path`)."""
@@ -284,6 +288,43 @@ def _refused_overwrite(exc: CommandFailed, name: str) -> bool:
     """
     pattern = rf"{re.escape(name)}\"?:\s*Permission denied"
     return re.search(pattern, exc.stderr or "", re.IGNORECASE) is not None
+
+
+_MISSING = re.compile(r"no such file or directory|the system cannot find the (?:file|path) specified", re.IGNORECASE)
+_LOCAL_OPEN = re.compile(r"\bopen local\b", re.IGNORECASE)
+_SCP_SAYS = re.compile(r"^scp:", re.MULTILINE)
+
+
+def _source_missing(stderr: str, destination: Endpoint) -> bool:
+    """Whether scp failed because the remote file it was told to read is gone, rather than the local side.
+
+    scp prefixes the source host's own diagnostics with `scp:` — `scp: <path>: No such file or directory` from
+    OpenSSH's classic protocol, `scp: No such file or directory: <path>` from some servers, and Windows'
+    `scp: The system cannot find the file specified: <path>` (its wording of ENOENT). A local-side failure
+    does not look like that: it is bare (`<local path>: No such file or directory`) or says `open local
+    "<local path>"`. The local side here is the part file we made, so its name in the text means the source
+    is not known to be gone.
+    """
+    text = stderr or ""
+    if not _MISSING.search(text) or not _SCP_SAYS.search(text) or _LOCAL_OPEN.search(text):
+        return False
+    return Path(destination.path).name not in text
+
+
+def _reget_source_missing(stderr: str, source: Endpoint) -> bool:
+    """Whether sftp's reget failed because the remote file is gone (`File "<path>" not found.`).
+
+    sftp quotes the path exactly as the batch wrote it, and the batch names the source first, so the local
+    part can never be mistaken for it.
+    """
+    pattern = rf"File\s+{re.escape(_quoted_for_sftp(source.path))}\s+not found"
+    return re.search(pattern, stderr or "", re.IGNORECASE) is not None
+
+
+def _withdrawn(source: Endpoint, stderr: str) -> TransferMissing:
+    """The error for a source file that is gone (its scp/sftp line is kept in the message)."""
+    tail = (stderr or "").strip().splitlines()
+    return TransferMissing(f"{source.scp_arg()} is gone from the source: {tail[-1] if tail else 'no such file or directory'}")
 
 
 @dataclass(frozen=True)
@@ -502,6 +543,8 @@ def _sftp_reget(source: Endpoint, part: Path, options: ScpOptions, report: Repor
     if timed_out:
         raise TransferFailed(f"sftp timed out after {format_duration(limit or 0)}: {source.scp_arg()} -> {part}")
     if returncode != 0:
+        if _reget_source_missing(stderr, source):
+            raise _withdrawn(source, stderr)
         raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
 
 
@@ -685,6 +728,8 @@ def copy(
                     "it now carries the transfer time"
                 )
             return
+        if src.remote and _source_missing(stderr, dst):
+            raise _withdrawn(src, stderr)
         raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
 
 

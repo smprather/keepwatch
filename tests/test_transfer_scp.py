@@ -6,7 +6,16 @@ import socket
 import pytest
 
 from keepwatch import CommandFailed
-from keepwatch.transfer import ScpOptions, TransferFailed, pull, push, tcp_open
+from keepwatch.transfer import (
+    Endpoint,
+    ScpOptions,
+    TransferFailed,
+    TransferMissing,
+    _source_missing,
+    pull,
+    push,
+    tcp_open,
+)
 from scp_server import PASSWORD, ScpServer
 
 pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
@@ -146,9 +155,35 @@ def test_unknown_host_key_is_refused(tmp_path, server, ssh_config):
 
 
 def test_missing_remote_file(tmp_path, server, ssh_config):
-    with pytest.raises(CommandFailed):
+    with pytest.raises(TransferMissing):
         pull(REMOTE + "nothere.gz", tmp_path / "stage", options=key_options(server, ssh_config))
     assert list((tmp_path / "stage").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "scp: No such file or directory: /remote/a.bin\n",  # OpenSSH's classic protocol on POSIX
+        "scp: /remote/a.bin: No such file or directory\r\n",  # scp in sftp mode
+        "scp: The system cannot find the file specified: C:\\remote\\a.bin\n",  # classic on Windows
+        "scp: The system cannot find the path specified: C:\\remote\\a.bin\n",
+    ],
+)
+def test_scp_says_a_source_is_gone(stderr):
+    assert _source_missing(stderr, Endpoint(path="/stage/.a.bin.part"))
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "/stage/.a.bin.part: No such file or directory\n",  # the classic protocol's local-side failure
+        'scp: open local "/stage/.a.bin.part": No such file or directory\r\n',  # its sftp mode
+        "scp: The system cannot find the file specified: C:\\stage\\.a.bin.part\n",  # the local side on Windows
+        "scp: /remote/a.bin: Permission denied\n",
+    ],
+)
+def test_other_scp_failures_are_not_a_missing_source(stderr):
+    assert not _source_missing(stderr, Endpoint(path="/stage/.a.bin.part"))
 
 
 def test_unset_password_variable(tmp_path, server, ssh_config, monkeypatch):
