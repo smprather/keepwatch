@@ -6,7 +6,7 @@ import socket
 import pytest
 
 from keepwatch import CommandFailed
-from keepwatch.transfer import ScpOptions, TransferFailed, pull, push, tcp_open
+from keepwatch.transfer import ScpOptions, TransferFailed, TransferMissing, pull, push, tcp_open
 from scp_server import PASSWORD, ScpServer
 
 pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
@@ -146,7 +146,7 @@ def test_unknown_host_key_is_refused(tmp_path, server, ssh_config):
 
 
 def test_missing_remote_file(tmp_path, server, ssh_config):
-    with pytest.raises(CommandFailed):
+    with pytest.raises(TransferMissing):
         pull(REMOTE + "nothere.gz", tmp_path / "stage", options=key_options(server, ssh_config))
     assert list((tmp_path / "stage").iterdir()) == []
 

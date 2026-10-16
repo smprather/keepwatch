@@ -4,6 +4,8 @@ import time
 import pytest
 
 from keepwatch import Ctx, TransferFailed
+from keepwatch.ctx import CommandFailed
+from keepwatch.transfer import TransferMissing
 from scp_server import ScpServer
 
 pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
@@ -67,6 +69,28 @@ def test_a_check_cannot_transfer(tmp_path, server):
     with pytest.raises(TransferFailed, match="a check must not transfer files"):
         ctx.transfer.pull("u@127.0.0.1:b.gz", "stage", **key_kwargs(server, tmp_path))
     assert ctx.transfer.tcp_open("127.0.0.1", server.port) is True
+
+
+def test_pulling_a_source_that_is_gone_is_reported_as_withdrawn(tmp_path, server):
+    ctx = make_ctx(tmp_path, [])
+    with pytest.raises(TransferMissing, match="gone"):
+        ctx.transfer.pull("u@127.0.0.1:gone.bin", "stage", **key_kwargs(server, tmp_path))
+
+
+def test_pulling_a_gone_source_with_the_sftp_protocol_is_reported_as_withdrawn(tmp_path, server):
+    """scp in sftp mode says `scp: <path>: No such file or directory`; that shape is a withdrawal too."""
+    ctx = make_ctx(tmp_path, [])
+    with pytest.raises(TransferMissing, match="gone"):
+        ctx.transfer.pull("u@127.0.0.1:gone.bin", "stage", protocol="sftp", **key_kwargs(server, tmp_path))
+
+
+def test_a_local_side_failure_is_not_reported_as_a_withdrawn_source(tmp_path, server):
+    """scp's local-side ENOENT names the local path, so it must stay an ordinary failure."""
+    (server.root / "here.bin").write_bytes(b"payload")
+    ctx = make_ctx(tmp_path, [])
+    with pytest.raises(CommandFailed) as caught:
+        ctx.transfer.copy("u@127.0.0.1:here.bin", str(tmp_path / "no-such-dir" / "x"), **key_kwargs(server, tmp_path))
+    assert not isinstance(caught.value, TransferMissing)
 
 
 def test_the_hook_deadline_caps_the_timeout(tmp_path):
