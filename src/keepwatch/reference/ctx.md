@@ -49,4 +49,4 @@ pattern.
 
 ## Exceptions
 
-`keepwatch.Unknown(reason)` (raise in `check` for "cannot tell right now"), `keepwatch.CommandFailed` (raised by `ctx.run`), `keepwatch.LedgerReadOnly` (a ledger change inside `check`), `keepwatch.LedgerCorrupt` (an unreadable ledger file), `keepwatch.CheckpointReadOnly` (a checkpoint change inside `check`) and `keepwatch.CheckpointCorrupt` (an unreadable checkpoint file) can be imported from `keepwatch`.
+`keepwatch.Unknown(reason)` (raise in `check` for "cannot tell right now"), `keepwatch.CommandFailed` (raised by `ctx.run`), `keepwatch.TransferFailed` (what `ctx.transfer` refuses or fails on; `keepwatch.transfer.TransferMismatch` and `keepwatch.transfer.TransferMissing` are its subclasses — see `keepwatch docs transfers`), `keepwatch.LedgerReadOnly` (a ledger change inside `check`), `keepwatch.LedgerCorrupt` (an unreadable ledger file), `keepwatch.CheckpointReadOnly` (a checkpoint change inside `check`) and `keepwatch.CheckpointCorrupt` (an unreadable checkpoint file) can be imported from `keepwatch`.
