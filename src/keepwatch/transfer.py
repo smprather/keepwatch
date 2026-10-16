@@ -695,7 +695,7 @@ def copy(
     report: Report | None = None,
     warn: Callable[[str], None] | None = None,
 ) -> None:
-    """Copy one file with scp. Raises CommandFailed when scp fails, TransferFailed when it cannot be attempted.
+    """Copy one file with scp. Raises CommandFailed when scp fails; a remote source that is gone raises TransferMissing (a TransferFailed), and a transfer that cannot be attempted raises TransferFailed.
 
     With `preserve_mtime`, scp's `-p` carries the source's times and mode bits. A destination that refuses the
     times (`set times:` in scp's stderr, as Windows' OpenSSH does after a pull whose bytes arrived) is a warning
