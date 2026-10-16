@@ -290,7 +290,7 @@ def _refused_overwrite(exc: CommandFailed, name: str) -> bool:
     return re.search(pattern, exc.stderr or "", re.IGNORECASE) is not None
 
 
-_MISSING = re.compile(r"no such file or directory", re.IGNORECASE)
+_MISSING = re.compile(r"no such file or directory|the system cannot find the (?:file|path) specified", re.IGNORECASE)
 _LOCAL_OPEN = re.compile(r"\bopen local\b", re.IGNORECASE)
 _SCP_SAYS = re.compile(r"^scp:", re.MULTILINE)
 
@@ -299,10 +299,11 @@ def _source_missing(stderr: str, destination: Endpoint) -> bool:
     """Whether scp failed because the remote file it was told to read is gone, rather than the local side.
 
     scp prefixes the source host's own diagnostics with `scp:` — `scp: <path>: No such file or directory` from
-    OpenSSH's classic protocol, `scp: No such file or directory: <path>` from some servers. A local-side
-    failure does not look like that: it is bare (`<local path>: No such file or directory`) or says
-    `open local "<local path>"`. The local side here is the part file we made, so its name in the text means
-    the source is not known to be gone.
+    OpenSSH's classic protocol, `scp: No such file or directory: <path>` from some servers, and Windows'
+    `scp: The system cannot find the file specified: <path>` (its wording of ENOENT). A local-side failure
+    does not look like that: it is bare (`<local path>: No such file or directory`) or says `open local
+    "<local path>"`. The local side here is the part file we made, so its name in the text means the source
+    is not known to be gone.
     """
     text = stderr or ""
     if not _MISSING.search(text) or not _SCP_SAYS.search(text) or _LOCAL_OPEN.search(text):
