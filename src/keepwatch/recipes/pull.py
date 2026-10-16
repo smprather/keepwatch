@@ -6,7 +6,7 @@ the observer which files to skip when it reconnects.
 
 With delete_remote, each verified file is queued in "to_delete" (with the sha256 it was verified with) and
 deleted from the source host by keepwatch's remote helper, which first checks that it is still exactly that
-file. Deleted or gone keys leave "pulled" for "skipped" (forgotten after 7 days; stale events for them are ignored); changed ones just leave "pulled" (the new version is pulled when reported); refused ones go to "kept". Files pulled while delete_remote was off have no recorded sha256 and are never deleted (an entry without one goes to "kept"). See keepwatch docs recipes.
+file. Deleted or gone keys leave "pulled" for "skipped" (forgotten after 7 days; stale events for them are ignored); changed ones just leave "pulled" (the new version is pulled when reported); refused ones go to "kept". Files pulled while delete_remote was off have no recorded sha256 and are never deleted (an entry without one goes to "kept"). A file that is gone from the source by the time its pull runs (the producer moved, renamed or deleted it) is withdrawn, not failed: with `on_missing = "skip"` (the default) it is recorded in "skipped" with a WARNING and the poll succeeds, so the event is acknowledged instead of failing forever behind the rest of the queue (`on_missing = "fail"` keeps the strict behavior). See keepwatch docs recipes.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from typing import Any, cast
 from keepwatch.ctx import CommandFailed, Ctx, as_text
 from keepwatch.recipes import file_budget
 from keepwatch.remote import ssh_argv, watcher_source
-from keepwatch.transfer import TransferFailed, TransferMismatch, format_bytes, with_known_hosts
+from keepwatch.transfer import TransferFailed, TransferMismatch, TransferMissing, format_bytes, with_known_hosts
 
 LEDGER = "pulled"
 TO_DELETE = "to_delete"
@@ -209,6 +209,18 @@ def on_true(ctx: Ctx) -> None:
             except TransferMismatch as exc:
                 # The file changed after it was reported; its new version comes as a new event.
                 ctx.log.warning("%s changed on %s after it was reported (%s); not pulled", item["name"], settings["remote"], exc)
+                continue
+            except TransferMissing as exc:
+                # The producer withdrew the file between the report and this pull: a permanent condition for
+                # this event, so retrying it would fail forever and starve the real queue behind it (issue 14).
+                if settings["on_missing"] == "fail":
+                    error = error or exc
+                    ctx.log.warning("pulling %s from %s failed (%s); the rest of the queue is still tried",
+                                    item["name"], settings["remote"], exc)
+                else:
+                    skipped.add(item["key"])
+                    ctx.log.warning("%s is gone from %s (withdrawn after it was reported); skipping it",
+                                    item["name"], settings["remote"])
                 continue
             except (TransferFailed, CommandFailed, OSError) as exc:
                 error = error or exc

@@ -303,6 +303,7 @@ class ObserverConfig:
 RECIPES = ("pull", "push", "mirror")
 RECIPE_AFTER = ("delete", "archive", "keep")
 DIRECTIONS = ("push", "pull")  # the mirror recipe: push = local_dir -> remote:remote_dir, pull = the reverse
+ON_MISSING = ("skip", "fail")  # the pull recipe: what a reported file that is gone from the source gets
 _SSH_SETTINGS = (
     Key("port", "int", None, "ssh port (default: ssh's own, normally 22)."),
     Key("identity", "str", None, "Private key file (ssh -i; only this key is offered). Relative to the watch directory."),
@@ -337,6 +338,15 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
             "rename",
             "When local_dir already holds a different file of that name (a newer version arrived before the old "
             "one was pushed): `rename` the new one to NAME-1.ext, `overwrite` the old one, or `skip-identical` (fail).",
+        ),
+        Key(
+            "on_missing",
+            "str",
+            "skip",
+            "When a file the watcher reported is gone from the source by the time it is pulled (the producer "
+            "moved, renamed or deleted it): `skip` logs a WARNING, records it in the ledger `skipped` and lets "
+            "the poll succeed, so the event is acknowledged and the queue behind it keeps moving; `fail` keeps "
+            "the strict behavior (the poll fails and the event is retried whenever the watch polls).",
         ),
         Key(
             "file_timeout",
@@ -486,7 +496,7 @@ _RECIPE_REQUIRED = {
     "mirror": ("direction", "remote", "remote_dir", "local_dir"),
 }
 _RECIPE_PATHS = ("local_dir", "identity", "known_hosts", "archive_dir")
-_RECIPE_CHOICES = {"protocol": PROTOCOLS, "marker": MARKERS, "after": RECIPE_AFTER, "on_conflict": CONFLICTS, "direction": DIRECTIONS}
+_RECIPE_CHOICES = {"protocol": PROTOCOLS, "marker": MARKERS, "after": RECIPE_AFTER, "on_conflict": CONFLICTS, "on_missing": ON_MISSING, "direction": DIRECTIONS}
 
 
 def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any], watch_dir: Path) -> dict[str, Any]:
