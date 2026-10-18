@@ -249,3 +249,43 @@ def test_pull_recipe_renames_on_a_name_clash(make_watch, server, tmp_path, xdg):
     assert not report.failed
     assert (stage / "a-1.tar.gz").read_bytes() == b"new data"
     assert (stage / "a.tar.gz").read_bytes() == b"old, not pushed yet"
+
+
+def test_the_delete_helper_speaks_posix_paths_and_asks_for_a_verified_delete(tmp_path):
+    """The command line is what differs on Windows (quoting, console), and it was never pinned there."""
+    import json
+    import subprocess as subprocess_module
+
+    from keepwatch.ctx import Ledger
+    from keepwatch.recipes.pull import TO_DELETE, delete_remote, queue_key
+
+    calls = []
+
+    class FakeCtx:
+        settings = {
+            "remote": "u@h", "port": 2222, "identity": None, "ssh_options": (), "known_hosts": None,
+            "ssh_command": None, "remote_python": "auto", "remote_dir": "/data/out",
+        }
+        log = logging.getLogger("test.pull.delete")
+
+        def __init__(self):
+            self.data_dir = tmp_path / "data"
+            self.settings = dict(type(self).settings)
+
+        def ledger(self, name, expire=None):
+            return Ledger(self.data_dir / "ledgers" / f"{name}.json", expire=expire)
+
+        def run(self, argv, *, input=None, check=True):
+            calls.append(([str(item) for item in argv], input))
+            return subprocess_module.CompletedProcess(argv, 0, "", "")
+
+    ctx = FakeCtx()
+    entry = queue_key("/data/out/a b.tar.gz|7|1700000000.0", "a" * 64)
+    ctx.ledger(TO_DELETE).add(entry)
+    delete_remote(ctx, [entry])
+    [(argv, payload)] = calls
+    assert argv[0] == "ssh"
+    options = json.loads(json.loads(payload.split("\n", 1)[0].split("= ", 1)[1]))
+    assert options["mode"] == "delete" and options["dir"] == "/data/out"
+    [item] = options["files"]
+    assert (item["path"], item["size"], item["sha256"]) == ("/data/out/a b.tar.gz", 7, "a" * 64)

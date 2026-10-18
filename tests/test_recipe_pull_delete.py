@@ -15,8 +15,8 @@ from portable import PY, literal, toml_path
 from scp_server import ScpServer
 
 pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
-# POSIX-only per test (chmod, symlinks), except the delete round-trip itself: the ssh command line it
-# builds is exactly what differs on Windows, so that one has to run there.
+# POSIX-only per test (chmod, symlinks, the fake_ssh shim and a real scp round trip). The ssh command line
+# the delete helper builds is pinned separately, platform-neutrally, in test_recipe_pull.py.
 FAKE_SSH = Path(__file__).resolve().with_name("fake_ssh.py")
 
 
@@ -74,6 +74,7 @@ def ledger(xdg, name):
     return Ledger(xdg.watch_data_dir("sweep") / "ledgers" / f"{name}.json")
 
 
+@pytest.mark.posix_only
 def test_a_verified_pull_deletes_the_source(linux1, make_watch, tmp_path, xdg):
     source = linux1.root / "a.tar.gz"
     source.write_bytes(b"data")
