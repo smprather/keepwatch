@@ -1,7 +1,10 @@
 import hashlib
+import json
+import logging
 import os
 import shutil
 import time
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
@@ -10,7 +13,7 @@ from keepwatch.cli import cli
 from keepwatch.config import load_global_config, load_watch_config
 from keepwatch.ctx import Ledger
 from keepwatch.pollengine import PollEngine
-from keepwatch.recipes.pull import event_key
+from keepwatch.recipes.pull import cleanup_parts, event_key
 from keepwatch.runner import Runner
 from keepwatch.state import Outcome, WatchState
 from portable import toml_path
@@ -122,8 +125,34 @@ def test_a_withdrawn_file_is_skipped_and_the_queue_behind_it_flows(make_watch, s
     assert withdrawn_key("withdrawn.bin") in skipped
     messages = [r.get("message", "") for r in records if r["event"] == "plugin.log"]
     assert any("withdrawn.bin" in message and "gone" in message for message in messages), messages
+    assert not (stage / ".withdrawn.bin.part").exists()  # a resumable partial of a withdrawn file is litter
     second = engine(xdg, []).poll(watch, first.after, events=events)
     assert second.outcome is Outcome.FALSE  # the event was acknowledged: it is not retried
+
+
+def test_cleanup_parts_reaches_the_subdirectories_mirror_stages_into(tmp_path):
+    """mirror pulls into <local>/<relative>/, so the sweeper has to look below the root a pull uses."""
+    stage = tmp_path / "stage"
+    (stage / "sub" / "deeper").mkdir(parents=True)
+    leftover = stage / "sub" / "deeper" / ".a.bin.part"
+    leftover.write_bytes(b"x")
+    old = time.time() - 3600
+    os.utime(leftover, (old, old))
+    cleanup_parts(SimpleNamespace(log=logging.getLogger("test")), stage, max_age=60)
+    assert not leftover.exists()
+
+
+def test_a_skipped_entry_older_than_seven_days_is_forgotten(make_watch, server, tmp_path, xdg):
+    """`skipped` expires, so a file reported again after a week is pulled, not skipped forever."""
+    (server.root / "good.bin").write_bytes(b"data")
+    watch = load_watch_config(pull_watch(make_watch, server, tmp_path))
+    ledger = xdg.watch_data_dir("relay-pull") / "ledgers" / "skipped.json"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    stale = event_key(file_event("good.bin", b"data"))
+    ledger.write_text(json.dumps({"version": 1, "entries": {stale: time.time() - 8 * 86400}}), encoding="utf-8")
+    report = engine(xdg, []).poll(watch, WatchState(False), events=[file_event("good.bin", b"data")])
+    assert not report.failed
+    assert (tmp_path / "stage" / "good.bin").read_bytes() == b"data"
 
 
 def test_on_missing_fail_keeps_the_withdrawn_file_failing(make_watch, server, tmp_path, xdg):
