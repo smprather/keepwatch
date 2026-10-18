@@ -76,7 +76,8 @@ def test_unknown_leaves_failures_unchanged():
 
 
 def test_initial_state():
-    assert initial_state(True) == WatchState(True, None, 0)
+    assert initial_state(True) == WatchState(True, Edge.RISE, 0)  # its edge is still to run
+    assert initial_state(False) == WatchState(False, None, 0)
 
 
 @pytest.mark.parametrize(
@@ -107,3 +108,9 @@ def test_next_delay_survives_a_watch_that_has_failed_for_months():
     """max_failures=0 lets the count grow without bound: 1025 failures is ~43 days at the one-hour cap."""
     assert next_delay(60.0, 1025) == 3600.0
     assert next_delay(30.0, 5000) == 3600.0
+
+
+def test_a_watch_that_starts_true_runs_on_rise_then_on_true():
+    """docs states: "A condition that is already TRUE then fires on_rise" - at least once, like any edge."""
+    plan = plan_poll(initial_state(True), Outcome.TRUE, {"on_rise", "on_true", "on_fall", "on_false"})
+    assert plan.actions == ("on_rise", "on_true")

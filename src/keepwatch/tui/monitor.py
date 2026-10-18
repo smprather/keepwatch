@@ -446,10 +446,13 @@ def note_text(row: WatchRow) -> str:
 
 
 def transfer_line(activity: dict[str, Any], rate: float | None = None) -> str:
-    """The transfer part of the header: what is moving, how far, and (with two samples) how fast."""
+    """The transfer part of the header: what is moving, how far, and (with two samples) how fast and how long left."""
     text = transfer.activity_text(activity)
     if isinstance(rate, float) and rate > 0:
         text += f", {transfer.format_bytes(int(rate))}/s"  # pi-lens-ignore: unchecked-numeric-parse-python -- our own float
+        size, part_size = activity.get("size"), activity.get("part_size")
+        if isinstance(size, int) and isinstance(part_size, int) and 0 <= part_size < size:
+            text += f", {format_duration(int((size - part_size) / rate))} left"
     return text
 
 

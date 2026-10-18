@@ -344,3 +344,11 @@ def test_the_banner_does_not_carry_escape_sequences_into_the_terminal():
                     stale=True, stale_since=None, follower_error="\x1b[31mboom\x1b[0m")
     text = banner_text(status, now=1000.0)
     assert "\x1b" not in text and "\\x1b[31m" in text
+
+
+def test_the_transfer_line_says_how_long_is_left_once_it_knows_the_rate():
+    """docs tui: "how fast and how long is left once there are two samples of it" - only the rate was shown."""
+    activity = {"name": "big.bin", "part": "/stage/.big.bin.part", "part_size": 2 * 1024 * 1024,
+                "size": 10 * 1024 * 1024}
+    line = pane_header_text(None, transfer_now=activity, rate=1024 * 1024.0, now=1000.0)
+    assert "1 MiB/s" in line and "8s left" in line
