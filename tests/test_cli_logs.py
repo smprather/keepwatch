@@ -16,6 +16,14 @@ RECORDS = [
 ]
 
 
+def test_a_negative_limit_is_a_usage_error(xdg):
+    """`keepwatch logs -n -5` promised exit 2 for wrong usage; it raised ValueError from deque(maxlen=-5)."""
+    seed(xdg)
+    result = run("logs", "-n", "-5")
+    assert result.exit_code == 2
+    assert "Invalid value" in result.output or "Usage" in result.output
+
+
 def run(*args):
     return CliRunner().invoke(cli, list(args))
 

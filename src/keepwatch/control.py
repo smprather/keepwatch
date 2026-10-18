@@ -16,10 +16,21 @@ class ControlError(Exception):
 
 
 def known_watch(paths: Paths, discovery: Discovery, name: str) -> bool:
+    """Whether NAME is a configured watch or has state here. A name that is not a name is never a watch.
+
+    `watch_state_dir(name)` is `state/watches/<name>`, so a name holding `..` resolves outside that directory
+    and would otherwise pass this test (and then be written to by enable/disable).
+    """
+    if not is_valid_watch_name(name):
+        return False
     return name in discovery.watches or paths.watch_state_dir(name).is_dir()
 
 
 def require_known(paths: Paths, discovery: Discovery, name: str) -> None:
+    if not is_valid_watch_name(name):
+        raise ControlError(
+            f"{name!r} is not a watch name (letters, digits, '.', '_' and '-', starting with a letter or digit)"
+        )
     if known_watch(paths, discovery, name):
         return
     try:

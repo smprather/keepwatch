@@ -430,6 +430,15 @@ def run_service(app: App, only: tuple[str, ...], verbose: bool, quiet: bool) -> 
             global_config = app.load_global()
         except ConfigError as exc:
             _fail("\n".join(str(problem) for problem in exc.problems))
+        try:
+            discovery = discover_watches(global_config)
+        except ConfigError as exc:
+            _fail("\n".join(str(problem) for problem in exc.problems))
+        unknown = sorted(name for name in only if name not in discovery.watches)
+        if unknown:
+            # A typo here used to filter every watch out and run a service that did nothing at all.
+            _fail(f"no watch named {', '.join(repr(name) for name in unknown)}; "
+                  f"known watches: {', '.join(sorted(discovery.watches)) or 'none'}")
         if quiet:
             minimum = "WARNING"
         elif verbose:
@@ -482,11 +491,10 @@ def status(app: App, name: str | None, as_json: bool) -> None:
         _fail("\n".join(str(problem) for problem in exc.problems))
     names = []
     if name is not None:
-        if name not in discovery.watches and not app.paths.watch_state_dir(name).is_dir():
-            try:
-                find_watch(discovery, name)
-            except WatchNotFound as exc:
-                _fail(str(exc))
+        try:
+            require_known(app.paths, discovery, name)
+        except ControlError as exc:
+            _fail(str(exc))
         names = [name]
     document = collect_status(app.paths, discovery, names)
     if as_json:
@@ -507,7 +515,8 @@ def status(app: App, name: str | None, as_json: bool) -> None:
               help="Only this event or event family (repeatable): hook.end, or hook for every hook.* event.")
 @click.option("--failed", is_flag=True, help="Only failures: ERROR or worse, failed hooks, failed polls and failed alerts.")
 @click.option("--poll", "poll_id", metavar="ID", help="Only records of this poll (a prefix of the poll ID is enough).")
-@click.option("-n", "--limit", type=int, default=200, show_default=True, help="Show at most the last N matching records; 0 shows all.")
+@click.option("-n", "--limit", type=click.IntRange(min=0), default=200, show_default=True,
+              help="Show at most the last N matching records; 0 shows all.")
 @click.option("-f", "--follow", is_flag=True, help="Then keep printing new matching records until interrupted.")
 @click.option("-v", "--verbose", is_flag=True, help="Show captured output and payloads for every record.")
 @click.option("--json", "as_json", is_flag=True, help="Print each record as one JSON line (the log file's own format).")

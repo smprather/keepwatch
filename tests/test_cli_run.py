@@ -33,6 +33,15 @@ def wait_for(predicate, timeout=20.0):
 
 
 @pytest.mark.posix_only
+def test_run_refuses_a_watch_name_it_does_not_know(xdg, make_watch):
+    """`--watch` with a typo used to filter every watch out and run a service that did nothing."""
+    make_watch("w", config='[hooks]\ncheck = ["true"]\n')
+    result = subprocess.run([*KEEPWATCH, "run", "--watch", "w-typo"], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1
+    assert "w-typo" in result.stdout + result.stderr
+
+
+@pytest.mark.posix_only
 def test_run_stops_on_sigterm(xdg, make_watch):
     watch_dir = make_watch("w", config='interval = "1s"\n', files={"watch.py": COUNTER})
     count = watch_dir / "count"
