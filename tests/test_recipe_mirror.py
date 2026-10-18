@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from keepwatch.config import load_global_config, load_watch_config
-from keepwatch.ctx import Checkpoint, Ctx, Unknown, checkpoint_file
+from keepwatch.ctx import Checkpoint, CommandFailed, Ctx, Unknown, checkpoint_file
 from keepwatch.pollengine import PollEngine
 from keepwatch.recipes import mirror
 from keepwatch.remote import ssh_run_argv
@@ -88,7 +88,7 @@ class FakeCtx(Ctx):
     could not set them.
     """
 
-    def __init__(self, tmp_path, settings, *, reachable=True, fail=(), events=()):
+    def __init__(self, tmp_path, settings, *, reachable=True, fail=(), fail_commands=(), events=()):
         self.settings = settings
         self._transfer = FakeTransfer(reachable=reachable, fail=fail)
         self.events = list(events)
@@ -99,6 +99,7 @@ class FakeCtx(Ctx):
         self.watch_dir.mkdir(exist_ok=True)
         self._data = tmp_path / "data"
         self.commands = []  # (argv, input) pairs of every ctx.run
+        self.fail_commands = tuple(fail_commands)  # command prefixes whose ssh run fails, as ctx.run(check=True) raises
         self.checkpoints = {}
 
     @property
@@ -121,6 +122,8 @@ class FakeCtx(Ctx):
     def run(self, argv, *, timeout=None, check=True, input=None, env=None, cwd=None):
         del timeout, check, env, cwd  # the mirror passes only argv; the recorded command lines are the point
         self.commands.append(([str(item) for item in argv], input))
+        if any(str(argv[-1]).startswith(prefix) for prefix in self.fail_commands):
+            raise CommandFailed(argv, 1, "ssh: connect to host: Connection timed out\n")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     def lines(self, prefix):
@@ -273,6 +276,21 @@ def test_delete_off_forgets_the_paths_but_removes_nothing(tmp_path):
     mirror.on_true(ctx)
     assert ctx.lines("rm -f") == []
     assert mirror.files_of(ctx.checkpoint("mirror").value) == {}
+
+
+def test_a_deletion_the_remote_refused_stays_in_the_checkpoint(tmp_path):
+    """delete=true and the `rm` fails: the paths must be planned again, not forgotten (the trees would diverge)."""
+    (tmp_path / "tree").mkdir()
+    ctx = FakeCtx(tmp_path, settings(tmp_path, delete=True), fail_commands=["rm -f"])
+    ctx.checkpoint("mirror").save(saved(["gone.txt"]))
+    condition, payload = mirror.check(ctx)
+    assert payload["deleted"] == ["gone.txt"]
+    ctx.payload = payload
+    with pytest.raises(CommandFailed):
+        mirror.on_true(ctx)
+    assert "gone.txt" in mirror.files_of(ctx.checkpoint("mirror").value)
+    condition, payload = mirror.check(ctx)  # the next poll still has work to do
+    assert condition is True and payload["deleted"] == ["gone.txt"]
 
 
 def test_a_failed_push_is_not_promoted(tmp_path):
