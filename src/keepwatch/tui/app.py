@@ -9,6 +9,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import DataTable, Footer, RichLog, Static
 
+from keepwatch.output import sanitize
 from keepwatch.tui import monitor as view
 from keepwatch.tui.monitor import Monitor, Status, WatchRow
 
@@ -67,9 +68,9 @@ class KeepwatchApp(App[None]):
     # -- layout --------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Static(id="banner")
+        yield Static(id="banner", markup=False)  # a path or a problem is data, not markup
         yield DataTable(id="watches", cursor_type="row", zebra_stripes=False, show_cursor=True)
-        yield Static(id="pane-header")
+        yield Static(id="pane-header", markup=False)
         yield RichLog(id="pane", markup=False, highlight=False, wrap=True)
         yield Footer()
 
@@ -110,7 +111,7 @@ class KeepwatchApp(App[None]):
         self.status = self.monitor.status()
         self.banner = view.banner_text(self.status, time.time())
         for problem in self.status.problems[:3]:
-            self.banner += f"\n! {problem}"
+            self.banner += f"\n! {sanitize(problem)}"
         if len(self.status.problems) > 3:
             self.banner += f"\n! … {len(self.status.problems) - 3} more problems"
         self.query_one("#banner", Static).update(self.banner)

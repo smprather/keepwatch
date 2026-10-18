@@ -305,3 +305,25 @@ def test_q_quits_the_app(xdg, make_watch):
     with running(xdg):
         monitor.refresh()
         run_app(monitor, check)
+
+
+def test_hostile_text_in_a_watch_dir_and_a_problem_is_shown_literally(xdg, make_watch):
+    """A path or problem is data, not Rich markup: `[/]` must not break the screen and ESC must not survive."""
+    make_watch("a", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry(watch_dir="/data/[red]x[/] \x1b]0;pwned\x07")}))
+    monitor = loaded(xdg)
+    monitor.refresh()
+
+    async def check(app, pilot):
+        from dataclasses import replace
+
+        hostile = replace(app.monitor.status(), problems=["[/] not markup \x1b[31mred"])
+        app.monitor.status = lambda: hostile  # the app's only source for the banner
+        app.update_status()  # must not raise MarkupError
+        assert "[red]x[/]" in app.header  # shown, not interpreted
+        assert "\x1b" not in app.header and "\x1b" not in app.banner
+        assert "[/] not markup" in app.banner
+        await pilot.pause()
+
+    with running(xdg):
+        run_app(monitor, check)
