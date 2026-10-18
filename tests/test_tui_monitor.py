@@ -9,7 +9,7 @@ from keepwatch.logstore import LogWriter, make_record
 from keepwatch.offline import OfflineMarker, iso_time, write_offline
 from keepwatch.paths import ensure_private_dir, write_json_atomic
 from keepwatch.tui import monitor as monitor_module
-from keepwatch.tui.monitor import Monitor
+from keepwatch.tui.monitor import Monitor, Status, WatchRow, banner_text, pane_header_text
 
 
 def last_poll(at, outcome="true", failed=False, reason=None):
@@ -326,3 +326,21 @@ def test_the_data_layer_does_not_import_textual():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
     assert "textual" not in imported
+
+
+def test_the_pane_header_does_not_carry_escape_sequences_into_the_terminal():
+    """A directory or transfer name is untrusted: the header must show the escape, not perform it."""
+    row = WatchRow(name="a", state="due", condition=True, failures=0, last_poll=None, next_poll=None,
+                   observers=None, pending_events=0, note="", interval=30.0, description=None,
+                   watch_dir="/data/\x1b]0;pwned\x07", offline=None, config_error=None,
+                   in_flight=None, transfer=None)
+    text = pane_header_text(row, now=1000.0)
+    assert "\x1b" not in text and "\x07" not in text
+    assert "\\x1b]0;pwned" in text
+
+
+def test_the_banner_does_not_carry_escape_sequences_into_the_terminal():
+    status = Status(service={"running": False}, watches=[], problems=[],
+                    stale=True, stale_since=None, follower_error="\x1b[31mboom\x1b[0m")
+    text = banner_text(status, now=1000.0)
+    assert "\x1b" not in text and "\\x1b[31m" in text

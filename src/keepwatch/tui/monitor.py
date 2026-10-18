@@ -18,7 +18,7 @@ from keepwatch import transfer
 from keepwatch.config import ConfigError, Discovery, discover_watches, load_global_config
 from keepwatch.durations import format_duration
 from keepwatch.logquery import LogFilter, follow_log, select_records
-from keepwatch.output import format_record
+from keepwatch.output import format_record, sanitize
 from keepwatch.paths import Paths
 from keepwatch.statusview import collect_status, read_status, service_running
 
@@ -486,7 +486,7 @@ def pane_header_text(
         text += f" · {transfer_line(transfer_now, rate)}"
     if paused_new:
         text += f" · paused · +{paused_new} new"
-    return text
+    return sanitize(text)
 
 
 def banner_text(status: Status, now: float) -> str:
@@ -504,7 +504,7 @@ def banner_text(status: Status, now: float) -> str:
             line += f" · last status {age} ago (stale)"
     if status.follower_error:
         line += f" · log follower stopped: {status.follower_error}"
-    return line
+    return sanitize(line)
 
 
 def _age_text(value: Any, now: float) -> str | None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import textwrap
 from collections.abc import Callable
@@ -16,6 +17,22 @@ from keepwatch.durations import format_duration
 from keepwatch.runner import FAILED_STATUSES
 
 LEVEL_STYLES = {"DEBUG": "dim", "INFO": "", "WARNING": "yellow", "ERROR": "red", "CRITICAL": "bold red"}
+
+# C0/C1 controls except tab and newline (which the formatter's blocks use), plus the bidi overrides that can
+# reorder a line. ESC is the one that matters: Rich keeps it, so an untrusted name or a hook's stderr could
+# move the cursor, retitle the window or drive the clipboard (OSC 52) on the operator's terminal.
+_UNSAFE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
+
+
+def sanitize(text: str) -> str:
+    """`text` as something a terminal can only display: control characters become visible escape text.
+
+    Everything keepwatch shows may come from somewhere else - a remote file name, a hook's stdout, a server's
+    error - so this is applied at the two places that print: `format_record` (the log pane and `keepwatch logs`)
+    and the TUI's banner and header. `keepwatch logs --json` stays raw: JSON already escapes these.
+    """
+    return _UNSAFE.sub(lambda match: f"\\x{ord(match.group()):02x}" if ord(match.group()) < 256
+                       else f"\\u{ord(match.group()):04x}", text)
 
 
 def plain_output(stream: TextIO | None = None) -> bool:
@@ -293,12 +310,12 @@ _FORMATTERS: dict[str, Callable[[dict[str, Any], bool], str]] = {
 
 
 def format_record(record: dict[str, Any], *, verbose: bool = False) -> str:
-    """One human-readable line (plus indented blocks) for a log record."""
+    """One human-readable line (plus indented blocks) for a log record, safe for a terminal."""
     time_part = str(record.get("ts", ""))[11:19]
     prefix = f"{time_part} {record.get('watch', '')}".strip()
     formatter = _FORMATTERS.get(str(record.get("event")))
     body = formatter(record, verbose) if formatter else _generic(record)
-    return f"{prefix} {body}" if prefix else body
+    return sanitize(f"{prefix} {body}" if prefix else body)
 
 
 class ConsolePrinter:

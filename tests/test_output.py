@@ -143,3 +143,36 @@ def test_use_utf8_output_tolerates_streams_without_reconfigure(monkeypatch):
     monkeypatch.setattr(sys, "stdout", io.StringIO())  # a test harness: no encoding, no reconfigure
     monkeypatch.setattr(sys, "stderr", None)  # pythonw: no streams at all
     use_utf8_output()
+
+
+def test_format_record_neutralises_escape_sequences_from_captured_output():
+    """Hook output is untrusted: ESC/OSC must never reach the terminal, but must stay diagnosable."""
+    record = {
+        **BASE,
+        "event": "hook.end",
+        "hook": "on_true",
+        "status": "failed",
+        "duration": 0.5,
+        "target": "watch.py:on_true",
+        "stderr": "\x1b]52;c;QQ==\x1b\\ retitled\x07 and \x1b[2Jcleared\n",
+    }
+    line = format_record(record)
+    assert "\x1b" not in line and "\x07" not in line
+    assert "\\x1b]52" in line  # shown as text, not acted on
+    assert line.endswith("\n") or "cleared" in line  # the trailing newline still renders as a block
+
+
+def test_format_record_neutralises_bidi_overrides_in_a_file_name():
+    """A right-to-left override can reorder a line so it reads as something else entirely."""
+    record = {**BASE, "event": "hook.end", "hook": "on_true", "status": "ok", "duration": 0.1,
+              "target": "/tmp/a\u202egpj.exe", "stdout": ""}
+    line = format_record(record)
+    assert "\u202e" not in line and "\\u202e" in line
+
+
+def test_verbose_blocks_keep_their_newlines():
+    """Sanitizing must not flatten the indented blocks the formatter builds."""
+    record = {**BASE, "event": "hook.end", "hook": "on_true", "status": "failed", "duration": 0.1,
+              "target": "t", "stderr": "one\ntwo\n"}
+    line = format_record(record, verbose=True)
+    assert "\n    one\n    two" in line
