@@ -14,7 +14,7 @@ import re
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -93,7 +93,8 @@ class Ledger:
     crash mid-loop keeps everything recorded so far. With `expire` (seconds),
     entries older than that are treated as absent and pruned on the next write.
     Beware: if the thing a key stands for can still be seen after its entry
-    expires, the watch will act on it again.
+    expires, the watch will act on it again. A long queue is written once
+    instead of once per key by wrapping the loop in `with ledger.batch():`.
     """
 
     def __init__(self, path: Path, *, expire: float | None = None, writable: bool = True) -> None:
@@ -101,6 +102,8 @@ class Ledger:
         self.expire = expire
         self.writable = writable
         self._entries = self._load()
+        self._deferred = 0
+        self._dirty = False
 
     def _load(self) -> dict[str, float]:
         try:
@@ -143,17 +146,40 @@ class Ledger:
         return datetime.fromtimestamp(stamp, tz=timezone.utc)
 
     def add(self, key: str) -> None:
-        """Add key (or refresh its timestamp) and save immediately."""
+        """Add key (or refresh its timestamp) and save immediately (unless a batch() is open)."""
         self._check_writable()
         if not isinstance(key, str):
             raise TypeError(f"ledger keys must be strings, got {type(key).__name__}")
         self._entries[key] = time.time()
-        self._save()
+        self._save_soon()
 
     def discard(self, key: str) -> None:
-        """Remove key if present and save immediately."""
+        """Remove key if present and save immediately (unless a batch() is open)."""
         self._check_writable()
         if self._entries.pop(key, None) is not None:
+            self._save_soon()
+
+    @contextlib.contextmanager
+    def batch(self) -> Generator[None, None, None]:
+        """Defer saving to the end of the block: one rewrite (and fsync) for a whole queue.
+
+        A crash inside the block loses only what the block recorded, which the watch re-derives: a file that
+        was already pulled and recorded again is verified and skipped. The block still saves when it raises,
+        so what it finished before the error stays recorded. Nested blocks save at the outermost exit.
+        """
+        self._deferred += 1
+        try:
+            yield
+        finally:
+            self._deferred -= 1
+            if self._deferred == 0 and self._dirty:
+                self._dirty = False
+                self._save()
+
+    def _save_soon(self) -> None:
+        if self._deferred:
+            self._dirty = True
+        else:
             self._save()
 
     def _check_writable(self) -> None:

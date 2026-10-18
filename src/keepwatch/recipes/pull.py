@@ -11,6 +11,7 @@ file. Deleted or gone keys leave "pulled" for "skipped" (forgotten after 7 days;
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 import time
@@ -166,7 +167,7 @@ def cleanup_parts(ctx: Ctx, directory: Path, max_age: float) -> None:
     if max_age <= 0:
         return
     cutoff = time.time() - max_age
-    for part in sorted(directory.glob(".*.part")):
+    for part in sorted(directory.rglob(".*.part")):
         try:
             info = part.stat()
         except OSError:
@@ -187,53 +188,63 @@ def on_true(ctx: Ctx) -> None:
     error: Exception | None = None
     try:
         items = [item for item in ctx.payload if item["key"] not in pulled and item["key"] not in skipped]
-        for index, item in enumerate(items):
-            if ctx.remaining <= 0:
-                error = error or TransferFailed("no time left for the rest of this queue (raise action_timeout)")
-                break
-            sha256 = item["sha256"] if settings["checksum"] else None
-            # A fair share of what is left, so one slow file cannot starve the rest of the queue (`file_timeout`
-            # caps it harder). A file that fails or runs out of its share is logged and the queue carries on.
-            budget = file_budget(ctx.remaining, len(items) - index, settings["file_timeout"])
-            try:
-                final = ctx.transfer.pull(
-                    f"{settings['remote']}:{item['path']}",
-                    settings["local_dir"],
-                    size=item["size"],
-                    sha256=sha256,
-                    on_conflict=settings["on_conflict"],
-                    resume=settings["resume"],
-                    deadline=time.time() + budget,
-                    **options,
-                )
-            except TransferMismatch as exc:
-                # The file changed after it was reported; its new version comes as a new event.
-                ctx.log.warning("%s changed on %s after it was reported (%s); not pulled", item["name"], settings["remote"], exc)
-                continue
-            except TransferMissing as exc:
-                # The producer withdrew the file between the report and this pull: a permanent condition for
-                # this event, so retrying it would fail forever and starve the real queue behind it (issue 14).
-                if settings["on_missing"] == "fail":
+        # One ledger rewrite for the whole queue instead of one per file: "pulled" only grows, so saving per
+        # key would rewrite (and fsync) an ever larger document N times for N files.
+        with contextlib.ExitStack() as ledgers:
+            for ledger in (pulled, skipped, queue):
+                if ledger is not None:
+                    ledgers.enter_context(ledger.batch())
+            for index, item in enumerate(items):
+                if ctx.remaining <= 0:
+                    error = error or TransferFailed("no time left for the rest of this queue (raise action_timeout)")
+                    break
+                sha256 = item["sha256"] if settings["checksum"] else None
+                # A fair share of what is left, so one slow file cannot starve the rest of the queue (`file_timeout`
+                # caps it harder). A file that fails or runs out of its share is logged and the queue carries on.
+                budget = file_budget(ctx.remaining, len(items) - index, settings["file_timeout"])
+                try:
+                    final = ctx.transfer.pull(
+                        f"{settings['remote']}:{item['path']}",
+                        settings["local_dir"],
+                        size=item["size"],
+                        sha256=sha256,
+                        on_conflict=settings["on_conflict"],
+                        resume=settings["resume"],
+                        deadline=time.time() + budget,
+                        **options,
+                    )
+                except TransferMismatch as exc:
+                    # The file changed after it was reported; its new version comes as a new event.
+                    ctx.log.warning("%s changed on %s after it was reported (%s); not pulled", item["name"], settings["remote"], exc)
+                    continue
+                except TransferMissing as exc:
+                    # The producer withdrew the file between the report and this pull: a permanent condition for
+                    # this event, so retrying it would fail forever and starve the real queue behind it (issue 14).
+                    if settings["on_missing"] == "fail":
+                        error = error or exc
+                        ctx.log.warning("pulling %s from %s failed (%s); the rest of the queue is still tried",
+                                        item["name"], settings["remote"], exc)
+                    else:
+                        skipped.add(item["key"])
+                        # A resumable attempt keeps its partial when it fails; a file that is gone never uses it.
+                        part = Path(settings["local_dir"]) / f".{Path(item['path']).name}.part"
+                        with contextlib.suppress(OSError):
+                            part.unlink(missing_ok=True)
+                        ctx.log.warning("%s is gone from %s (withdrawn after it was reported); skipping it",
+                                        item["name"], settings["remote"])
+                    continue
+                except (TransferFailed, CommandFailed, OSError) as exc:
                     error = error or exc
                     ctx.log.warning("pulling %s from %s failed (%s); the rest of the queue is still tried",
                                     item["name"], settings["remote"], exc)
-                else:
-                    skipped.add(item["key"])
-                    ctx.log.warning("%s is gone from %s (withdrawn after it was reported); skipping it",
-                                    item["name"], settings["remote"])
-                continue
-            except (TransferFailed, CommandFailed, OSError) as exc:
-                error = error or exc
-                ctx.log.warning("pulling %s from %s failed (%s); the rest of the queue is still tried",
-                                item["name"], settings["remote"], exc)
-                continue
-            if queue is not None:  # queued first: a crash before the next line still gets the file deleted
-                entry = queue_key(item["key"], sha256)
-                queue.add(entry)
-                fresh.append(entry)
-            pulled.add(item["key"])
-            pulled_now += 1
-            ctx.log.info("pulled %s", item["name"], extra={"local": str(final), "size": item["size"]})
+                    continue
+                if queue is not None:  # queued first: a crash before the next line still gets the file deleted
+                    entry = queue_key(item["key"], sha256)
+                    queue.add(entry)
+                    fresh.append(entry)
+                pulled.add(item["key"])
+                pulled_now += 1
+                ctx.log.info("pulled %s", item["name"], extra={"local": str(final), "size": item["size"]})
         if pulled_now:
             cleanup_parts(ctx, Path(settings["local_dir"]), settings["part_max_age"])
     except Exception as exc:  # deletes below still run for what was pulled; the error is raised after them

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import keepwatch.ctx as ctx_module
 from keepwatch import (
     CheckpointCorrupt,
     CheckpointReadOnly,
@@ -68,6 +69,46 @@ def test_ledger_expiry(tmp_path, monkeypatch):
     assert "old" not in ledger
     ledger.add("new")
     assert '"old"' not in path.read_text()
+
+
+def test_a_ledger_batch_rewrites_the_file_once(tmp_path, monkeypatch):
+    """A whole queue is one rewrite, not one per key: a long-lived ledger is otherwise quadratic."""
+    path = tmp_path / "pulled.json"
+    writes = []
+    real = ctx_module.platform.replace
+    monkeypatch.setattr(ctx_module.platform, "replace", lambda a, b: writes.append(b) or real(a, b))
+    ledger = Ledger(path)
+    with ledger.batch():
+        for key in ("a", "b", "c"):
+            ledger.add(key)
+    assert len(writes) == 1
+    assert sorted(Ledger(path)) == ["a", "b", "c"]
+
+
+def test_a_ledger_batch_saves_what_it_recorded_when_the_block_raises(tmp_path):
+    """The queue's already-done files stay recorded even when the rest of the action blows up."""
+    path = tmp_path / "pulled.json"
+    ledger = Ledger(path)
+    with pytest.raises(RuntimeError):
+        with ledger.batch():
+            ledger.add("a")
+            raise RuntimeError("boom")
+    assert "a" in Ledger(path)
+
+
+def test_a_nested_ledger_batch_saves_at_the_outermost_exit(tmp_path, monkeypatch):
+    path = tmp_path / "pulled.json"
+    writes = []
+    real = ctx_module.platform.replace
+    monkeypatch.setattr(ctx_module.platform, "replace", lambda a, b: writes.append(b) or real(a, b))
+    ledger = Ledger(path)
+    with ledger.batch():
+        ledger.add("a")
+        with ledger.batch():
+            ledger.add("b")
+        assert writes == []
+    assert len(writes) == 1
+    assert sorted(Ledger(path)) == ["a", "b"]
 
 
 def test_ledger_read_only_and_key_type(tmp_path):
