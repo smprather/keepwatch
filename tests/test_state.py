@@ -101,3 +101,9 @@ def test_should_go_offline():
     assert should_go_offline(5, 5) is True
     assert should_go_offline(4, 5) is False
     assert should_go_offline(100, 0) is False
+
+
+def test_next_delay_survives_a_watch_that_has_failed_for_months():
+    """max_failures=0 lets the count grow without bound: 1025 failures is ~43 days at the one-hour cap."""
+    assert next_delay(60.0, 1025) == 3600.0
+    assert next_delay(30.0, 5000) == 3600.0

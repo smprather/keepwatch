@@ -54,7 +54,9 @@ def trial_delay(retry_after: float, retry_base: float | None, failures: int) -> 
     """
     if retry_base is None:
         return retry_after
-    return min(retry_after, retry_base * 2 ** (max(failures, 1) - 1))
+    # The exponent is clamped before the power (see next_delay): an int power raises OverflowError past ~1024
+    # doublings, and so does a float one, long before a real outage is over.
+    return min(retry_after, retry_base * 2.0 ** min(max(failures, 1) - 1, 64))
 
 
 class WatchRunner:
