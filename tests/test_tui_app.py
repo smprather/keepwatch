@@ -327,3 +327,95 @@ def test_hostile_text_in_a_watch_dir_and_a_problem_is_shown_literally(xdg, make_
 
     with running(xdg):
         run_app(monitor, check)
+
+
+def pane_widget_lines(app):
+    from textual.widgets import RichLog
+
+    return len(app.query_one("#pane", RichLog).lines)
+
+
+def test_another_watch_s_record_does_not_redraw_the_selected_one(xdg, make_watch):
+    """The pane shows what was drawn once: a record for b must not append a's lines again."""
+    make_watch("a", config=WATCH_CONFIG)
+    make_watch("b", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry(), "b": entry()}))
+    write_records(xdg,
+                  make_record("hook.end", watch="a", poll_id="pa", hook="on_true", status="ok", duration=1.0,
+                              target="a.py:on_true"),
+                  make_record("hook.end", watch="b", poll_id="pb", hook="on_true", status="ok", duration=1.0,
+                              target="b.py:on_true"))
+    monitor = loaded(xdg)
+
+    async def check(app, pilot):
+        assert app.selected == "a"
+        before = pane_widget_lines(app)
+        monitor._ingest(make_record("hook.end", watch="b", poll_id="pb2", hook="on_true", status="ok",
+                                    duration=1.0, target="b.py:on_true"))
+        app.update_records()
+        await pilot.pause()
+        assert pane_widget_lines(app) == before  # b's record is not a's
+        monitor._ingest(make_record("hook.end", watch="a", poll_id="pa2", hook="on_true", status="ok",
+                                    duration=1.0, target="a.py:on_true"))
+        app.update_records()
+        await pilot.pause()
+        assert pane_widget_lines(app) == before + 1
+
+    with running(xdg):
+        monitor.refresh()
+        run_app(monitor, check)
+
+
+def test_a_full_redraw_replaces_the_pane_instead_of_appending(xdg, make_watch):
+    """Every key that redraws the pane used to append its whole content again."""
+    make_watch("a", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry()}))
+    write_records(xdg, *[make_record("hook.end", watch="a", poll_id="p1", hook="on_true", status="ok",
+                                     duration=1.0, target="a.py:on_true") for _ in range(5)])
+    monitor = loaded(xdg)
+
+    async def check(app, pilot):
+        expected = len(app.pane_lines)
+        for _ in range(3):
+            await pilot.press("j")
+            await pilot.press("k")
+            await pilot.pause()
+        assert pane_widget_lines(app) == expected
+
+    with running(xdg):
+        monitor.refresh()
+        run_app(monitor, check)
+
+
+def test_the_pane_widget_is_bounded(xdg, make_watch):
+    """A long-lived monitor must not grow the widget without limit."""
+    make_watch("a", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry()}))
+    monitor = loaded(xdg)
+
+    async def check(app, pilot):
+        for index in range(2100):
+            monitor._ingest(make_record("hook.end", watch="a", poll_id=f"p{index}", hook="on_true", status="ok",
+                                        duration=1.0, target="a.py:on_true"))
+        app.update_records()
+        await pilot.pause()
+        assert pane_widget_lines(app) <= 2000
+
+    with running(xdg):
+        monitor.refresh()
+        run_app(monitor, check)
+
+
+def test_a_removed_watch_with_state_does_not_duplicate_its_row(xdg):
+    """A stale status.json still lists the watch while its state dir makes it an orphan row: one row, no crash."""
+    (xdg.state_home / "watches" / "gone").mkdir(parents=True)
+    publish(xdg, status_document(watches={"gone": entry()}))
+    monitor = Monitor(xdg, xdg.config_file)
+
+    async def check(app, _pilot):
+        names = [cell(app, index, "WATCH") for index in range(len(rows(app)))]
+        assert names == ["gone"]
+
+    with running(xdg):
+        monitor.refresh()
+        run_app(monitor, check)

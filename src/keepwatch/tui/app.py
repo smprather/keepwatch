@@ -14,6 +14,7 @@ from keepwatch.tui import monitor as view
 from keepwatch.tui.monitor import Monitor, Status, WatchRow
 
 COLUMNS = ("WATCH", "STATE", "COND", "FAIL", "LAST", "NEXT", "OBS", "NOTE")
+PANE_LIMIT = 2000  # lines the pane widget keeps: a day-old monitor must not grow without bound
 NARROW = 80  # below this, NOTE goes; below NARROWEST, OBS follows
 NARROWEST = 68
 
@@ -64,6 +65,11 @@ class KeepwatchApp(App[None]):
         self._names: list[str] = []
         self._rendered_version = 0
         self._paused_at = 0
+        # What the pane widget actually holds: how many of `records()`' lines, from which filter, ending with
+        # which line. The widget is the thing the operator sees; `pane_lines` is only the model.
+        self._drawn = 0
+        self._drawn_last: str | None = None
+        self._drawn_key: tuple[str | None, bool] | None = None
 
     # -- layout --------------------------------------------------------------
 
@@ -71,7 +77,7 @@ class KeepwatchApp(App[None]):
         yield Static(id="banner", markup=False)  # a path or a problem is data, not markup
         yield DataTable(id="watches", cursor_type="row", zebra_stripes=False, show_cursor=True)
         yield Static(id="pane-header", markup=False)
-        yield RichLog(id="pane", markup=False, highlight=False, wrap=True)
+        yield RichLog(id="pane", markup=False, highlight=False, wrap=True, max_lines=PANE_LIMIT)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -175,15 +181,23 @@ class KeepwatchApp(App[None]):
     # -- the pane ------------------------------------------------------------
 
     def _redraw(self, *, full: bool = False) -> None:
-        """Write the pane: only the new records, unless the filter changed (`full`)."""
+        """Write the pane: only the lines it is missing, and replace it outright when what it shows changed.
+
+        `monitor.version()` counts every record of every watch, while these lines are one watch's (or all), so
+        the count drawn has to be kept per filter - otherwise another watch's record re-appends these lines.
+        """
         pane = self.query_one("#pane", RichLog)
-        lines = self.monitor.records(self._selected_name(), verbose=self.verbose)
-        fresh = len(lines) if full else self.monitor.version() - self._rendered_version
-        if fresh < 0 or fresh > len(lines):  # the window slid: what was drawn is no longer in the deque
-            pane.clear()
-            fresh = len(lines)
-        for line in lines[-fresh:] if fresh else []:
+        key = (self._selected_name(), self.verbose)
+        lines = self.monitor.records(key[0], verbose=self.verbose)
+        slid = self._drawn > 0 and (self._drawn > len(lines) or lines[self._drawn - 1] != self._drawn_last)
+        if full or key != self._drawn_key or slid:
+            pane.clear()  # the window moved under us, or the filter changed: redraw from the top
+            self._drawn = 0
+        for line in lines[self._drawn:]:
             pane.write(Text(line, style=line_style(line)))
+        self._drawn = len(lines)
+        self._drawn_last = lines[-1] if lines else None
+        self._drawn_key = key
         self.pane_lines = lines
         self._rendered_version = self.monitor.version()
 
