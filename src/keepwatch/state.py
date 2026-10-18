@@ -37,7 +37,13 @@ class WatchState:
 
 
 def initial_state(initial_condition: bool) -> WatchState:
-    return WatchState(condition=initial_condition)
+    """The state a watch starts in: `initial_condition` for the condition, and its edge still to be run.
+
+    A watch configured `initial_condition = true` starts as a TRUE condition that has not announced itself, so
+    its first successful poll runs `on_rise` and then `on_true` - the behaviour `docs states` describes, and the
+    useful one for a one-shot ("tell me now if the site is already down"). A FALSE answer replaces the edge.
+    """
+    return WatchState(condition=initial_condition, pending_edge=Edge.RISE if initial_condition else None)
 
 
 @dataclass(frozen=True)

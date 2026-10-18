@@ -2,7 +2,8 @@
 
 `keepwatch tui` is a live, read-only view of what the service is doing: every watch with its state and how long
 until its next poll, and the stream of actions with their results. It reads `status.json` once a second and
-follows the log file. It never writes anything, so it is safe beside a running service, and several monitors may
+follows the log file. It writes nothing of keepwatch's own - the only thing it touches is the service lock file
+it opens to ask whether the service is running - so it is safe beside a running service, and several monitors may
 run at once.
 
 `status.json` carries a `format` number (currently 1): new fields are added without notice, and that number goes

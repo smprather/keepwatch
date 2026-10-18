@@ -17,7 +17,7 @@ A hook defined both in `[hooks]` and in watch.py is an error.
 - **A list** runs directly. A program named with a path separator (`./notify.sh`, `.\notify.ps1`) is relative to the watch directory; a bare name (`expect`) is looked up on PATH. On Linux and macOS the file must be executable.
 - **On Windows**, list hooks are started by file type: `.ps1` with Windows PowerShell (`-File`), `.py` with keepwatch's own Python, `.cmd`/`.bat` with `cmd.exe /d /c`; `.exe` files and other programs run directly.
 
-`keepwatch validate` checks list-form programs; strings are only checked when they run. A program named with a `/` (`./notify.sh`) is relative to the watch directory and must be executable; a bare name (`expect`) is looked up on PATH. `keepwatch validate` checks list-form programs; strings are only checked when they run.
+`keepwatch validate` checks list-form programs; strings are only checked when they run. A program named with a `/` (`./notify.sh`) is relative to the watch directory and must be executable; a bare name (`expect`) is looked up on PATH.
 
 ## What the exit code means
 
