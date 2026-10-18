@@ -202,3 +202,10 @@ def test_files_marker(make_watch):
 def test_files_marker_must_be_a_choice(make_watch):
     [problem] = problems(make_watch, "[observe.in]\nkind = 'files'\npath = 'in'\nmarker = 'md5'\n")
     assert "'marker' must be none or sha256" in problem
+
+
+def test_observer_ssh_options_must_start_with_an_option(make_watch):
+    """The doc's example minus `-o` makes ssh read `ProxyJump=bastion` as the host, and the observer never connects."""
+    [problem] = problems(make_watch, "[observe.x]\nkind = 'remote_files'\nremote = 'u@h'\ndir = '/d'\n"
+                                     "ssh_options = ['ProxyJump=bastion']\n")
+    assert "ssh_options" in problem and "-o" in problem

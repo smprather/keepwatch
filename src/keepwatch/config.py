@@ -961,6 +961,16 @@ def _observer(collector: _Collector, name: str, raw: dict[str, Any], watch_dir: 
         if key_name == "marker" and converted not in ("none", "sha256"):
             collector.add(f"'marker' must be none or sha256, got {converted!r}", key="marker", table=table, topic="observers")
             continue
+        if key_name == "ssh_options" and converted and not converted[0].startswith("-"):
+            # ssh takes the first non-option as the host: "ProxyJump=bastion" (the example minus -o) silently
+            # replaces the host and the observer retries a connection it can never make.
+            collector.add(
+                f"'ssh_options' are ssh arguments and must start with an option, e.g. ['-o', {converted[0]!r}]",
+                key=key_name,
+                table=table,
+                topic="observers",
+            )
+            continue
         values[key_name] = converted
     if kind == "remote_files" and "heartbeat_timeout" in values:
         heartbeat = values.get("heartbeat", by_name["heartbeat"].default)
@@ -1060,6 +1070,21 @@ def load_watch_config(watch_dir: Path, defaults: Mapping[str, Any] | None = None
             settings = _recipe_settings(collector, recipe, settings, watch_dir)
             if not collector.problems:
                 observers = _recipe_observers(recipe, settings)
+    launcher = values.get("shell")
+    if launcher and any(hook.shell is not None for hook in hooks.values()):
+        flags = [part.lower() for part in launcher[1:]]
+        takes_a_command = any(
+            part in ("-c", "/c", "-command", "/command") or (part.startswith("-") and "c" in part) for part in flags
+        )
+        if not takes_a_command:
+            # `/bin/sh <text>` runs the text as a script *file*, reads stdin (which is /dev/null) and exits 0:
+            # every string check would answer TRUE and every string action "succeed" without running anything.
+            collector.add(
+                "'shell' must say how the shell takes a command, e.g. ['/bin/sh', '-c'] or "
+                "['pwsh', '-NoProfile', '-Command']",
+                key="shell",
+                topic="executables",
+            )
     if collector.problems:
         raise ConfigError(collector.problems)
     return WatchConfig(
