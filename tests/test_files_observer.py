@@ -274,7 +274,7 @@ def test_a_file_without_a_marker_costs_no_rescans(tmp_path, make_watch, xdg, mon
     observer, events, records = files_observer(make_watch, xdg, inbox, "marker = 'sha256'\n")
     observer.start()
     try:
-        assert wait_for(lambda: observer._held, timeout=8.0)  # settled with no marker: held
+        assert wait_for(lambda: getattr(observer, "_held", None), timeout=8.0)  # settled with no marker: held
         before = len(scans)
         time.sleep(3.0)
         assert len(scans) == before  # held until the file or its marker changes, not re-checked every second
@@ -282,3 +282,22 @@ def test_a_file_without_a_marker_costs_no_rescans(tmp_path, make_watch, xdg, mon
         assert wait_for(lambda: events, timeout=8.0)
     finally:
         stop(observer)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs symlinks")
+def test_a_symlink_to_a_file_is_reported_with_its_targets_size(tmp_path, make_watch, xdg):
+    """Documented behaviour (docs observers): this observer follows a symlink; the recipes' walkers skip them."""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "real.gz").write_text("payload")
+    age(inbox / "real.gz")
+    (inbox / "link.gz").symlink_to(inbox / "real.gz")
+    observer, events, records = files_observer(make_watch, xdg, inbox)
+    observer.start()
+    try:
+        assert wait_for(lambda: len(events) >= 1)
+        assert wait_for(lambda: any(event["name"] == "link.gz" for event in events))
+    finally:
+        stop(observer)
+    by_name = {event["name"]: event for event in events}
+    assert by_name["link.gz"]["size"] == 7
