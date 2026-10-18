@@ -1,6 +1,6 @@
 """keepwatch: poll conditions and run actions, from login onward."""
 
-__version__ = "2026.10.21"
+__version__ = "2026.10.22"
 
 from keepwatch.ctx import (  # noqa: E402
     Checkpoint,
