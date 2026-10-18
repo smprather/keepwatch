@@ -390,14 +390,17 @@ def on_true_push(ctx: Ctx) -> None:
         if plan.deleted:
             lost_dirs = [path for path in plan.deleted if path in dirs]
             lost_files = [path for path in plan.deleted if path not in lost_dirs]
-            for relative in plan.deleted:
-                files.pop(relative, None)
-                dirs.discard(relative)
             if settings["delete"] and (lost_files or lost_dirs):
                 for group in batches(lost_files):
                     run_ssh(ctx, settings, "rm -f " + " ".join(shlex.quote(remote_path(settings, path)) for path in group))
                 # The sweep takes the directories that just became empty (and any other empty one).
                 run_ssh(ctx, settings, f"find {shlex.quote(remote_root(settings))} -type d -empty -delete")
+            # Forgetting a path is only safe once the remote is rid of it: a failed `rm` raises above, so the
+            # checkpoint still holds these and the next poll plans the deletion again (no event comes back to
+            # say the file is gone: it is gone locally, which is what made it a deletion in the first place).
+            for relative in plan.deleted:
+                files.pop(relative, None)
+                dirs.discard(relative)
             promote()
     except Exception as exc:
         error = error or exc
