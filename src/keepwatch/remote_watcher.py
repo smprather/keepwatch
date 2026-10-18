@@ -336,6 +336,20 @@ class TreeWatcher(object):
         sys.stderr.write("keepwatch remote watcher: " + message + "\n")
         sys.stderr.flush()
 
+    def text(self, path):
+        """`decode(path)` when it survives a UTF-8 round trip; None (and a note, once) when it does not.
+
+        keepwatch could not log such a name, hand it to a hook, or name it to scp, and its client drops a whole
+        record it cannot encode: reporting one would cost the 499 good names it travels with.
+        """
+        name = decode(path)
+        try:
+            name.encode("utf-8")
+        except UnicodeEncodeError:
+            self.note("skipping a name that is not UTF-8: %r" % path)
+            return None
+        return name
+
     def walk(self):
         """(files, dirs, held, fresh): the whole tree. `held` are files still inside `settle`, not gone."""
         files = {}
@@ -400,9 +414,12 @@ class TreeWatcher(object):
                 continue
             if self.reported.get(path) == state:
                 continue
+            shown = self.text(path)
+            if shown is None:
+                continue
             self.reported[path] = state
             self.expected_files.pop(path, None)
-            entries.append([decode(path), state[0], state[1]])
+            entries.append([shown, state[0], state[1]])
             sent += 1
         for index in range(0, len(entries), TREE_CHUNK):
             self.output.send({"event": "files", "entries": entries[index : index + TREE_CHUNK]})
@@ -410,8 +427,11 @@ class TreeWatcher(object):
         for path in sorted(dirs):
             if path in self.expected_dirs or path in self.reported_dirs:
                 continue
+            shown = self.text(path)
+            if shown is None:
+                continue
             self.reported_dirs.add(path)
-            new_dirs.append(decode(path))
+            new_dirs.append(shown)
         for index in range(0, len(new_dirs), TREE_CHUNK):
             self.output.send({"event": "dirs", "paths": new_dirs[index : index + TREE_CHUNK]})
         missing = set()
@@ -434,7 +454,11 @@ class TreeWatcher(object):
                 missing_dirs.add(path)
         self.expected_dirs -= missing_dirs
         self.reported_dirs -= missing_dirs
-        gone = [decode(path) for path in sorted(missing | missing_dirs)]
+        gone = []
+        for path in sorted(missing | missing_dirs):
+            shown = self.text(path)
+            if shown is not None:
+                gone.append(shown)
         for index in range(0, len(gone), TREE_CHUNK):
             self.output.send({"event": "gone", "paths": gone[index : index + TREE_CHUNK]})
         self.output.send(
