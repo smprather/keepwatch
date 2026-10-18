@@ -11,6 +11,7 @@ import pytest
 
 import keepwatch.ctx as ctx_module
 from keepwatch import (
+    Checkpoint,
     CheckpointCorrupt,
     CheckpointReadOnly,
     CommandFailed,
@@ -298,3 +299,32 @@ def test_run_resolves_relative_programs_like_hooks(tmp_path):
     helper.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(int(sys.argv[1]))\n")
     helper.chmod(0o755)
     assert ctx.run(["./helper.py", "4"], check=False).returncode == 4
+
+
+@pytest.mark.posix_only
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads anything")
+def test_an_unreadable_ledger_raises_the_documented_error(tmp_path):
+    """docs storage: a ledger file that cannot be read raises LedgerCorrupt, naming the file."""
+    path = tmp_path / "ledgers" / "sent.json"
+    path.parent.mkdir()
+    path.write_text('{"version": 1, "entries": {}}')
+    path.chmod(0o000)
+    try:
+        with pytest.raises(LedgerCorrupt, match="sent.json"):
+            Ledger(path)
+    finally:
+        path.chmod(0o600)
+
+
+@pytest.mark.posix_only
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads anything")
+def test_an_unreadable_checkpoint_raises_the_documented_error(tmp_path):
+    path = tmp_path / "checkpoints" / "mirror.json"
+    path.parent.mkdir()
+    path.write_text("{}")
+    path.chmod(0o000)
+    try:
+        with pytest.raises(CheckpointCorrupt, match="mirror.json"):
+            Checkpoint(path)
+    finally:
+        path.chmod(0o600)

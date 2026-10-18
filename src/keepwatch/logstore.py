@@ -53,7 +53,7 @@ class LogWriter:
             with hold_lock(self._lock_path):
                 try:
                     size = self.path.stat().st_size
-                except FileNotFoundError:
+                except OSError:  # missing (first write) or unreadable: rotate on the next write that can
                     size = 0
                 if size and size + len(line) > self.max_bytes:
                     self._rotate()

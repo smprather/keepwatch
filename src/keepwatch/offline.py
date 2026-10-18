@@ -12,8 +12,15 @@ from keepwatch.paths import Paths, write_json_atomic
 
 
 def iso_time(epoch: float) -> str:
-    """Local time as RFC 3339 with offset and milliseconds."""
-    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="milliseconds")
+    """Local time as RFC 3339 with offset and milliseconds, clamped to the calendar's range.
+
+    A huge `interval` (whatever the parser accepts) puts `next_poll` past year 9999. Raising there would abort
+    `write_status`, freezing status.json for every watch, so the far ends of the calendar are rendered instead.
+    """
+    try:
+        return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="milliseconds")
+    except (OverflowError, OSError, ValueError):
+        return "9999-12-31T23:59:59.999+00:00" if epoch > 0 else "0001-01-01T00:00:00.000+00:00"
 
 
 @dataclass(frozen=True)

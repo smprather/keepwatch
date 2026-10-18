@@ -110,6 +110,11 @@ class Ledger:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return {}
+        except OSError as exc:  # permissions, a directory in its place, EIO: docs promise LedgerCorrupt
+            raise LedgerCorrupt(
+                f"ledger file {self.path} is unreadable ({exc.strerror or exc}); "
+                "fix its permissions, or delete it to start with an empty ledger"
+            ) from exc
         try:
             entries = json.loads(text)["entries"]
             return {str(key): float(stamp) for key, stamp in entries.items()}
@@ -222,6 +227,11 @@ class Checkpoint:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return None
+        except OSError as exc:  # as for a ledger: docs promise CheckpointCorrupt, not a bare OSError
+            raise CheckpointCorrupt(
+                f"checkpoint file {self.path} is unreadable ({exc.strerror or exc}); "
+                "fix its permissions, or delete it to start with no checkpoint"
+            ) from exc
         try:
             return json.loads(text)
         except ValueError as exc:
