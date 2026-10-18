@@ -131,10 +131,18 @@ def plan_pull(
 
 
 def _relative(root: str, path: str) -> str | None:
-    """`path` (absolute, as the watcher reports it) relative to `root`, in POSIX form; None when outside."""
+    """`path` (absolute, as the watcher reports it) relative to `root`, in POSIX form; None when outside.
+
+    The remote decides this string, and the result names a path under local_dir that is created, written or
+    deleted, so a part holding an empty, `.` or `..` component is refused: otherwise `/root/../../etc/x`
+    would climb out of the destination. A real watcher never reports one.
+    """
     if path == root or not path.startswith(root + "/"):
         return None
-    return path[len(root) + 1 :]
+    relative = path[len(root) + 1 :]
+    if any(component in ("", ".", "..") for component in relative.split("/")):
+        return None
+    return relative
 
 
 def as_document(files: Mapping[str, Sequence[float]], dirs: Iterable[str]) -> dict[str, Any]:

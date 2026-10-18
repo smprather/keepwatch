@@ -124,3 +124,34 @@ def test_walk_local_reports_an_unreadable_subtree(tmp_path):
         os.chmod(locked, 0o700)
     assert "ok.txt" in files
     assert problems and "locked" in problems[0]
+
+
+def test_plan_pull_refuses_a_watcher_path_that_climbs_out_of_remote_dir():
+    """A remote name holding `..` would drive mkdir/unlink/pull outside local_dir: never plan it."""
+    events = [
+        {"event": "files", "entries": [["/r/../etc/cron.d/x", 2, 10.0], ["/r/sub/../../etc/y", 2, 10.0]]},
+        {"event": "dirs", "paths": ["/r/../elsewhere"]},
+        {"event": "gone", "paths": ["/r/../etc/passwd", "/r/sub/../keep.txt"]},
+    ]
+    plan = mirror.plan_pull(events, {}, set(), remote_dir="/r")
+    assert plan.copy == ()
+    assert plan.mkdir == ()
+    assert plan.deleted == ()
+
+
+def test_plan_pull_refuses_an_empty_or_dot_component():
+    events = [
+        {"event": "files", "entries": [["/r//a.txt", 2, 10.0], ["/r/./b.txt", 2, 10.0]]},
+        {"event": "dirs", "paths": ["/r//", "/r/."]},
+        {"event": "gone", "paths": ["/r//c.txt"]},
+    ]
+    plan = mirror.plan_pull(events, {}, set(), remote_dir="/r")
+    assert plan.copy == ()
+    assert plan.mkdir == ()
+    assert plan.deleted == ()
+
+
+def test_plan_pull_still_reads_a_plain_nested_path():
+    """The containment check must not cost the ordinary nested case."""
+    events = [{"event": "files", "entries": [["/r/a/b.txt", 2, 10.0], ["/r/x..y/z.txt", 2, 10.0]]}]
+    assert mirror.plan_pull(events, {}, set(), remote_dir="/r").copy == ("a/b.txt", "x..y/z.txt")
