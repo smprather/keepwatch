@@ -858,15 +858,17 @@ def uninstall(app: App) -> None:
         click.echo("keepwatch will no longer start at logon")
         return
     unit_path = systemd.unit_dir(app.paths) / systemd.UNIT_NAME
-    try:
-        systemd.systemctl("disable", "--now", systemd.UNIT_NAME)
-    except OSError as exc:
-        _fail(f"cannot run systemctl: {exc}")
+    # The unit file goes first: on a machine where systemctl cannot run at all (no systemd, no session bus),
+    # failing before the unlink left the unit installed and `keepwatch uninstall` unable to remove it.
     if unit_path.exists():
         unit_path.unlink()
         click.echo(f"removed {unit_path}")
     else:
         click.echo(f"{unit_path} was not installed")
+    try:
+        systemd.systemctl("disable", "--now", systemd.UNIT_NAME)
+    except OSError as exc:
+        click.echo(f"warning: cannot run systemctl ({exc.strerror or exc}); the unit file is removed")
     _systemctl_or_fail("daemon-reload")
     click.echo("keepwatch will no longer start at login")
 
