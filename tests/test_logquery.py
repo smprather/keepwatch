@@ -61,15 +61,17 @@ def test_filters_and_limit(tmp_path):
 
 
 def follow_until(path, count, action):
+    """Follow from the current end of the file (passed in, so nothing races the follower's own seek)."""
     seen = []
+    with open(path, "rb") as handle:  # not path.stat(): a test hooks os.stat to force a rotation
+        started_at = handle.seek(0, 2)
     thread = threading.Thread(
         target=follow_log,
         args=(path, seen.append),
-        kwargs={"stop": lambda: len(seen) >= count, "interval": 0.05},
+        kwargs={"stop": lambda: len(seen) >= count, "interval": 0.05, "start": started_at},
         daemon=True,
     )
     thread.start()
-    time.sleep(0.3)
     action()
     thread.join(10)
     return seen

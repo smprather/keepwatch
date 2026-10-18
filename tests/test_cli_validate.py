@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from click.testing import CliRunner
 
 from keepwatch.cli import cli
@@ -93,3 +94,25 @@ def test_validate_reports_missing_uv(xdg, make_watch, monkeypatch):
     result = run("validate", "dep")
     assert result.exit_code == 1
     assert "python_dependencies needs uv on PATH" in result.output
+
+
+@pytest.mark.posix_only
+def test_a_hook_program_that_is_not_executable_says_how_to_fix_it(xdg, make_watch):
+    """The pre-flight for the login service: a hook the service cannot run has to be caught here."""
+    watch_dir = make_watch("noexec", config='[hooks]\ncheck = ["./check.sh"]\n')
+    (watch_dir / "check.sh").write_text("#!/bin/sh\nexit 0\n")
+    (watch_dir / "check.sh").chmod(0o644)
+    result = run("validate", "--json")
+    assert result.exit_code == 1
+    problems = json.loads(result.output)["watches"][0]["problems"]
+    assert any("is not executable (run: chmod +x" in problem for problem in problems), problems
+
+
+def test_a_recipe_watch_without_ssh_on_path_says_so(xdg, make_watch, monkeypatch):
+    """A recipe watch whose ssh is invisible to the service is the commonest production failure."""
+    make_watch("relay", config='recipe = "pull"\n[settings]\nremote = "u@h"\nremote_dir = "/d"\nlocal_dir = "stage"\n')
+    monkeypatch.setenv("PATH", "/nonexistent")
+    result = run("validate", "--json")
+    assert result.exit_code == 1
+    problems = json.loads(result.output)["watches"][0]["problems"]
+    assert any("needs OpenSSH 'ssh' on PATH" in problem for problem in problems), problems

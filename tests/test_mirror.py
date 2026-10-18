@@ -155,3 +155,16 @@ def test_plan_pull_still_reads_a_plain_nested_path():
     """The containment check must not cost the ordinary nested case."""
     events = [{"event": "files", "entries": [["/r/a/b.txt", 2, 10.0], ["/r/x..y/z.txt", 2, 10.0]]}]
     assert mirror.plan_pull(events, {}, set(), remote_dir="/r").copy == ("a/b.txt", "x..y/z.txt")
+
+
+def test_walk_local_prunes_a_symlinked_directory(tmp_path):
+    """Following it would copy a subtree twice (and a loop would never end)."""
+    import os
+
+    (tmp_path / "real").mkdir()
+    (tmp_path / "real" / "a.txt").write_text("x")
+    os.symlink(tmp_path / "real", tmp_path / "link")
+    files, dirs, problems = mirror.walk_local(tmp_path, (), 0.0)
+    assert problems == []
+    assert dirs == {"real"}
+    assert sorted(files) == ["real/a.txt"]

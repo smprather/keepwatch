@@ -32,6 +32,7 @@ packages = ["src/keepwatch"]
 dev = [
     "asyncssh>=2.24.0",
     "pytest>=8",
+    "pytest-timeout>=2",
     "ruff>=0.6",
     "ty>=0.0.85",
 ]
@@ -39,6 +40,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["network: needs network access (skipped when KEEPWATCH_SKIP_NETWORK=1 or uv is missing)"]
+# Every test is bounded: the e2e ones wait up to two minutes for a real ssh/scp, and a wedged one used
+# to burn the runner's whole limit before failing.
+timeout = 240
 
 [tool.ruff]
 line-length = 120

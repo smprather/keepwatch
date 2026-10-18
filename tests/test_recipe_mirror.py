@@ -337,6 +337,26 @@ def file_event(*paths):
     return {"event": "files", "entries": [[path, 7, 1700000000.0] for path in paths]}
 
 
+def test_a_pull_whose_times_cannot_be_set_keeps_the_file_and_says_so(tmp_path, monkeypatch):
+    """The repair exists for filesystems that refuse utime (FAT, read-only-ish dirs): the file still landed."""
+    import os as os_module
+
+    ctx = FakeCtx(tmp_path, pull_settings(tmp_path), events=[file_event("/tree/a.txt")])
+    condition, payload = mirror.check(ctx)
+    assert condition is True
+    ctx.payload = payload
+
+    def refuse(path, times):
+        raise OSError("utime is not supported here")
+
+    monkeypatch.setattr(os_module, "utime", refuse)
+    messages = []
+    monkeypatch.setattr(ctx.log, "warning", lambda message, *args: messages.append(message % args))
+    mirror.on_true(ctx)
+    assert (Path(pull_settings(tmp_path)["local_dir"]) / "a.txt").exists()
+    assert any("cannot set the times" in message for message in messages), messages
+
+
 def test_a_quiet_stream_never_deletes(tmp_path):
     """No events means "nothing to do", never "everything was deleted" (spec 5.6)."""
     ctx = FakeCtx(tmp_path, pull_settings(tmp_path, delete=True))

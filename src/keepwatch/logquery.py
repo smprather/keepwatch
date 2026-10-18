@@ -132,8 +132,13 @@ def follow_log(
     *,
     stop: Callable[[], bool],
     interval: float = 0.5,
+    start: int | None = None,
 ) -> None:
-    """Emit records appended to the log after this starts, across rotations, until stop() is true."""
+    """Emit records appended to the log after this starts, across rotations, until stop() is true.
+
+    `start` is the byte offset to begin at (the caller's backfill ended there, so nothing written between the
+    backfill and this call is lost); None means "the end of the file now".
+    """
 
     def open_current() -> tuple[Any, int | None]:
         try:
@@ -144,7 +149,10 @@ def follow_log(
 
     handle, inode = open_current()
     if handle is not None:
-        handle.seek(0, os.SEEK_END)
+        if start is None:
+            handle.seek(0, os.SEEK_END)  # from now on
+        else:
+            handle.seek(start)  # where the caller's backfill stopped
     buffer = b""
     try:
         while not stop():

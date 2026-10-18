@@ -564,11 +564,18 @@ def logs(
         else:
             printer(record)
 
+    # Where the backfill starts reading: the follower resumes from here, so a record written while the
+    # backfill was printing is read again (never lost - duplicates are the cheap side of that trade).
+    try:
+        follow_from = app.paths.log_file.stat().st_size
+    except OSError:
+        follow_from = None
     for record in select_records(app.paths.log_file, log_filter, limit):
         show(record)
     if follow:
         try:
-            follow_log(app.paths.log_file, lambda r: show(r) if log_filter.matches(r) else None, stop=lambda: False)
+            follow_log(app.paths.log_file, lambda r: show(r) if log_filter.matches(r) else None, stop=lambda: False,
+                       start=follow_from)
         except KeyboardInterrupt:
             pass
 
