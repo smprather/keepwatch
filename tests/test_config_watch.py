@@ -143,7 +143,7 @@ def test_resolve_hooks_reports_syntax_error_and_conflicts(tmp_path):
     (tmp_path / "watch.py").write_text("def check(ctx):\n    return (\n")
     hooks, problem = resolve_hooks(tmp_path, {"on_true"})
     assert hooks == frozenset({"on_true"})
-    assert problem.startswith("watch.py line 2: syntax error")
+    assert problem is not None and problem.startswith("watch.py line 2: syntax error")
 
     (tmp_path / "watch.py").write_text("def check(ctx):\n    return True\n")
     hooks, problem = resolve_hooks(tmp_path, {"check", "on_true"})
@@ -186,3 +186,15 @@ def test_settings_reject_nan(tmp_path):
 def test_zero_durations_are_rejected(tmp_path, key):
     (problem,) = problems_of(tmp_path / "w", f'{key} = "0s"\n')
     assert problem.message == f"'{key}' must be at least 1s, got '0s'"
+
+
+def test_a_shell_override_that_takes_no_command_flag_is_refused(tmp_path):
+    """`shell = ["/bin/sh"]` runs the script text as a *script file*: sh reads nothing, exits 0, and every
+    string check would answer TRUE."""
+    [problem] = problems_of(tmp_path / "w", "shell = ['/bin/sh']\n[hooks]\ncheck = 'true'\n")
+    assert "shell" in str(problem) and "-c" in str(problem)
+
+
+def test_a_shell_override_with_a_command_flag_is_accepted(tmp_path):
+    watch = load_watch_config(write(tmp_path / "w", "shell = ['/bin/sh', '-ec']\n[hooks]\ncheck = 'true'\n"))
+    assert watch.shell == ("/bin/sh", "-ec")
