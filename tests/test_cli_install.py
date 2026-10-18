@@ -167,5 +167,30 @@ def test_windows_uninstall(xdg, monkeypatch):
 def test_windows_uninstall_has_one_windows_branch():
     import inspect
 
-    source = inspect.getsource(cli_module.uninstall.callback)
+    callback = cli_module.uninstall.callback
+    assert callback is not None
+    source = inspect.getsource(callback)
     assert source.count("if _on_windows():") == 1
+
+
+@pytest.mark.posix_only
+def test_the_unit_escapes_what_systemd_would_expand():
+    """A `"` ends the quoted value, `%` is a specifier and `$` expands: a path can hold all three."""
+    text = systemd.unit_text('/opt/keep "watch" 100%/$HOME/keepwatch', '/usr/bin:/opt/$HOME/a%b')
+    exec_line = next(line for line in text.splitlines() if line.startswith("ExecStart="))
+    env_line = next(line for line in text.splitlines() if line.startswith('Environment="PATH='))
+    assert '\\"watch\\"' in exec_line  # the quote does not end the value
+    assert "100%%" in exec_line  # % is a specifier
+    assert "$$HOME" in exec_line  # $ would be expanded by systemd
+    assert "%%b" in env_line and "$HOME" in env_line and "$$" not in env_line  # no $ expansion there
+
+
+@pytest.mark.posix_only
+def test_uninstall_removes_the_unit_even_when_systemctl_cannot_run(xdg, tmp_path, monkeypatch):
+    """An uninstall that cannot reach systemctl must still remove the unit file it installed."""
+    unit_file(xdg).parent.mkdir(parents=True)
+    unit_file(xdg).write_text("[Service]\n")
+    monkeypatch.setenv("KEEPWATCH_SYSTEMCTL", str(tmp_path / "no-such-systemctl"))
+    result = run("uninstall")
+    assert not unit_file(xdg).exists()
+    assert "cannot run systemctl" in result.output

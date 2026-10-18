@@ -53,3 +53,21 @@ def test_alert_list_programs_are_relative_to_the_config_dir(tmp_path):
     run_alert(Command(argv=("./alert.py",)), event="offline", watch="w", reason="r", environment={},
               timeout=10, sink=records.append, base=tmp_path)
     assert (records[0]["status"], records[0]["exit_code"]) == ("failed", 4)
+
+
+def test_a_timeout_returns_promptly_even_when_a_grandchild_holds_the_pipe():
+    """A killed child's pipe can stay open in a grandchild: the deadline must not re-read it and hang."""
+    import time
+
+    records = []
+    code = (
+        "import subprocess, sys, time;"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']);"
+        "time.sleep(30)"
+    )
+    started = time.monotonic()
+    run_alert(Command(argv=(sys.executable, "-c", code)), event="online", watch="w", reason="r",
+              environment={}, timeout=0.5, sink=records.append)
+    assert time.monotonic() - started < 10
+    (record,) = records
+    assert (record["status"], "timed out" in record["reason"]) == ("timeout", True)
