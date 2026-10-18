@@ -232,8 +232,32 @@ def format_bytes(count: int) -> str:
 
 
 def _quoted_for_sftp(path: str) -> str:
-    """A path for sftp's batch parser, which splits on whitespace but honours double quotes and backslashes."""
+    """A path for sftp's batch parser, which splits on whitespace but honours double quotes and backslashes.
+
+    A control character in the name is refused: sftp reads its batch one command per line, so a newline would
+    smuggle in a second command, and nothing else in a name needs to reach that parser unescaped.
+    """
+    if any(ord(char) < 32 or ord(char) == 127 for char in path):
+        raise TransferFailed(
+            f"{path!r} cannot be transferred over sftp: its name holds a control character, which sftp's batch "
+            "would read as another command; use protocol = \"scp\", or rename it"
+        )
     return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _unescaped_for_sftp(path: str) -> str:
+    """`path` as sftp may print it: a backslash escapes the character after it (so `\\"` is `"`)."""
+    out: list[str] = []
+    escaped = False
+    for char in path:
+        if escaped:
+            out.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        else:
+            out.append(char)
+    return "".join(out)
 
 
 def sftp_argv(host: Endpoint, options: ScpOptions, batch: Path) -> list[str]:
@@ -293,32 +317,45 @@ def _refused_overwrite(exc: CommandFailed, name: str) -> bool:
 _MISSING = re.compile(r"no such file or directory|the system cannot find the (?:file|path) specified", re.IGNORECASE)
 _LOCAL_OPEN = re.compile(r"\bopen local\b", re.IGNORECASE)
 _SCP_SAYS = re.compile(r"^scp:", re.MULTILINE)
+_SFTP_NOT_FOUND = re.compile(r'File\s+"(.*)"\s+not found', re.IGNORECASE)
 
 
-def _source_missing(stderr: str, destination: Endpoint) -> bool:
+def _source_missing(stderr: str, destination: Endpoint, source: Endpoint) -> bool:
     """Whether scp failed because the remote file it was told to read is gone, rather than the local side.
 
     scp prefixes the source host's own diagnostics with `scp:` — `scp: <path>: No such file or directory` from
     OpenSSH's classic protocol, `scp: No such file or directory: <path>` from some servers, and Windows'
     `scp: The system cannot find the file specified: <path>` (its wording of ENOENT). A local-side failure
     does not look like that: it is bare (`<local path>: No such file or directory`) or says `open local
-    "<local path>"`. The local side here is the part file we made, so its name in the text means the source
-    is not known to be gone.
+    "<local path>"`. The local side here is the part file we made, so naming it means the source is not known
+    to be gone. Compare whole paths (scp prints the path it was handed, and a Windows one may come back with
+    backslashes), so a source and a destination that share a file name are still told apart.
     """
     text = stderr or ""
     if not _MISSING.search(text) or not _SCP_SAYS.search(text) or _LOCAL_OPEN.search(text):
         return False
-    return Path(destination.path).name not in text
+    spelled = text.replace("\\", "/")
+    for local in {destination.path, _local_arg(destination.path)}:
+        if local.replace("\\", "/") in spelled:
+            return False
+    local_name = Path(destination.path).name
+    # A local name that cannot be the source's (they differ) is the local side's evidence wherever it appears.
+    if local_name and local_name != Path(source.path).name and local_name in text:
+        return False
+    return True
 
 
 def _reget_source_missing(stderr: str, source: Endpoint) -> bool:
     """Whether sftp's reget failed because the remote file is gone (`File "<path>" not found.`).
 
-    sftp quotes the path exactly as the batch wrote it, and the batch names the source first, so the local
-    part can never be mistaken for it.
+    The batch names the source first, so the local part can never be mistaken for it. sftp prints the name it
+    parsed, which may be the raw one or a backslash-escaped one, and either is the source.
     """
-    pattern = rf"File\s+{re.escape(_quoted_for_sftp(source.path))}\s+not found"
-    return re.search(pattern, stderr or "", re.IGNORECASE) is not None
+    for match in _SFTP_NOT_FOUND.finditer(stderr or ""):
+        shown = match.group(1)
+        if shown == source.path or _unescaped_for_sftp(shown) == source.path:
+            return True
+    return False
 
 
 def _withdrawn(source: Endpoint, stderr: str) -> TransferMissing:
@@ -728,7 +765,7 @@ def copy(
                     "it now carries the transfer time"
                 )
             return
-        if src.remote and _source_missing(stderr, dst):
+        if src.remote and _source_missing(stderr, dst, src):
             raise _withdrawn(src, stderr)
         raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
 
@@ -787,9 +824,9 @@ def pull(
     """Copy a remote file into local_dir through .NAME.part, verify size and sha256 when given, rename it (an identical existing file is a no-op).
 
     A partial file from an earlier (killed) attempt is discarded, and `warn` is told how many bytes that cost.
-    With `resume` — which needs the sftp protocol, a known size and a sha256 — it is continued with sftp's
-    reget instead, and kept if this attempt fails; a resumed file that does not verify is pulled again from
-    the start, once.
+    With `resume` — which needs the sftp protocol and a sha256 — it is continued with sftp's reget instead, and
+    kept if this attempt fails; a resumed file that does not verify is pulled again from the start, once. A
+    partial with no known size cannot be continued, so it is discarded as usual.
     """
     src = _endpoint(remote)
     if not src.remote:
@@ -798,6 +835,17 @@ def pull(
         raise ValueError(f"on_conflict must be one of {', '.join(CONFLICTS)}, got {on_conflict!r}")
     if sha256 is not None and not re.fullmatch(r"[0-9A-Fa-f]{64}", sha256):
         raise ValueError(f"sha256 must be 64 hex characters, got {sha256!r}")
+    if resume:
+        missing = [
+            name
+            for name, absent in (("protocol='sftp'", options.protocol != "sftp"), ("a sha256", sha256 is None))
+            if absent
+        ]
+        if missing:
+            raise ValueError(
+                f"resume needs {', '.join(missing)}: sftp's reget continues the partial, and only the sha256 proves "
+                "the resumed bytes are the file asked for; pass them, or resume=False to start over"
+            )
     name = src.name
     if not name or name in (".", ".."):
         raise ValueError(f"{src.scp_arg()!r} does not name a file")
@@ -874,6 +922,11 @@ def push(
         raise TransferFailed(f"{local} is not a file")
     if marker not in MARKERS:
         raise ValueError(f"marker must be one of {', '.join(MARKERS)}, got {marker!r}")
+    if resume and options.protocol != "sftp":
+        raise ValueError(
+            "resume needs protocol='sftp': sftp's reput continues the partial file, and scp has no equivalent; "
+            "pass protocol='sftp', or resume=False to push the whole file again"
+        )
     directory = _endpoint(remote_dir)
     if not directory.remote:
         raise ValueError(f"push needs a remote directory (user@host:dir), got {directory.scp_arg()!r}")
@@ -987,7 +1040,8 @@ class Transfer:
 
         An existing file with the given sha256 makes this a no-op; any other existing file is an error unless
         on_conflict is "rename" (NAME-1.ext) or "overwrite". With `resume` (needs protocol="sftp" and a
-        sha256) an unfinished `.NAME.part` is continued with sftp's reget instead of starting over.
+        sha256) an unfinished `.NAME.part` is continued with sftp's reget instead of starting over; without a
+        known size there is nothing to continue from, so it starts over.
         """
         scp = self._options(options)
         directory = Path(local_dir)

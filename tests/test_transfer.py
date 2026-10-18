@@ -18,6 +18,7 @@ from keepwatch.transfer import (
     parse_endpoint,
     parse_openssh_version,
     pull,
+    push,
     remote_path_arg,
     scp_argv,
     with_known_hosts,
@@ -230,6 +231,12 @@ def test_sftp_reget_batch_quotes_both_paths():
     assert batch == 'reget "/data/a b.gz" ".a \\"b\\".part"\n'
 
 
+def test_sftp_refuses_a_path_holding_a_control_character():
+    """sftp's batch is read one command per line: a newline in a name would smuggle in a second command."""
+    with pytest.raises(TransferFailed, match="control character"):
+        transfer.sftp_reget_batch(parse_endpoint("u@host:/data/a\nb.gz"), Path(".a b.gz.part"))
+
+
 def test_the_resume_command_is_the_sftp_beside_scp(tmp_path):
     scp = str(tmp_path / "scp")
     options = ScpOptions(protocol="sftp", identity="/k/id", known_hosts="/k/hosts",
@@ -279,7 +286,7 @@ def test_resume_is_ignored_without_a_size(tmp_path):
     part = stage / ".a.gz.part"
     part.write_bytes(b"x" * 2048)
     with pytest.raises(TransferFailed, match="the deadline has passed"):
-        transfer.pull("u@host:/a.gz", stage, resume=True,
+        transfer.pull("u@host:/a.gz", stage, sha256="a" * 64, resume=True,
                       options=ScpOptions(protocol="sftp", deadline=time.time() - 1))
     assert not part.exists()
 
@@ -504,6 +511,24 @@ def test_unknown_versions_are_not_cached(monkeypatch):
 def test_pull_rejects_a_malformed_sha256(tmp_path):
     with pytest.raises(ValueError, match="64 hex"):
         pull("me@h:a.gz", tmp_path, sha256="abc123")
+
+
+def test_pull_rejects_resume_without_a_sha256(tmp_path):
+    """`resume` is documented to need a sha256; without one a resumed part is only size-checked."""
+    with pytest.raises(ValueError, match="resume needs"):
+        pull("me@h:a.gz", tmp_path, size=10, resume=True)
+
+
+def test_pull_rejects_resume_outside_the_sftp_protocol(tmp_path):
+    """reget is an sftp command: resume with protocol="scp" would quietly run sftp instead."""
+    with pytest.raises(ValueError, match="resume needs"):
+        pull("me@h:a.gz", tmp_path, size=10, sha256="a" * 64, resume=True)
+
+
+def test_push_rejects_resume_outside_the_sftp_protocol(tmp_path):
+    (tmp_path / "a.gz").write_bytes(b"payload")
+    with pytest.raises(ValueError, match="resume needs"):
+        push(tmp_path / "a.gz", "me@h:in/", resume=True)
 
 
 def test_a_past_deadline_stops_a_transfer_before_scp(tmp_path):
