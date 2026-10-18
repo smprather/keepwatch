@@ -92,7 +92,10 @@ def next_delay(interval: float, failures: int) -> float:
         return interval
     base = max(interval, BACKOFF_BASE)
     cap = max(interval, BACKOFF_CAP)
-    return min(base * 2 ** (failures - 1), cap)
+    # The exponent is clamped before the power, not after: max_failures = 0 lets the count grow for as long as
+    # the watch fails, and both 2 ** 1024 and 2.0 ** 1024 raise OverflowError (before min() could clamp). 64
+    # doublings already pass any cap (cap/base is at most 1h/60s = 60), so the clamp cannot change the result.
+    return min(base * 2.0 ** min(failures - 1, 64), cap)
 
 
 def should_go_offline(failures: int, max_failures: int) -> bool:

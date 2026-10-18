@@ -44,3 +44,10 @@ def test_a_push_recipe_that_resumes_needs_sftp_and_a_marker(xdg, make_watch):
         load_watch_config(make_watch("resume-none", config=base + 'protocol = "sftp"\nresume = true\nmarker = "none"\n'))
     watch = load_watch_config(make_watch("resume-sftp", config=base + 'protocol = "sftp"\nresume = true\n'))
     assert watch.settings["resume"] is True
+
+
+def test_a_trial_delay_survives_a_long_outage():
+    """The offline accordion must clamp, not overflow: a big failure count is an ordinary long outage."""
+    from keepwatch.scheduler import trial_delay
+
+    assert trial_delay(86400.0, 60.0, 2000) == 86400.0
