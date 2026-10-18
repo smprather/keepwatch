@@ -207,10 +207,13 @@ class Monitor:
         saved_watches = (self._status or {}).get("watches") or {}
         entries, invalid = document["watches"], document["invalid_watches"]
         dirs = discovery.watches
+        covered = set(dirs) | set(entries) | set(invalid) | set(saved_watches)
         watches = [self._row(name, entries.get(name), saved_watches.get(name), invalid.get(name), dirs.get(name),
                              stale=stale, running=running)
-                   for name in sorted(set(dirs) | set(entries) | set(invalid) | set(saved_watches))]
-        watches += [self._orphan_row(name) for name in document["orphaned_state"]]
+                   for name in sorted(covered)]
+        # A watch removed while the service was stopped is still in the last status.json and its state dir is
+        # still on disk: one row, not two (a duplicate row key crashes the table on mount).
+        watches += [self._orphan_row(name) for name in document["orphaned_state"] if name not in covered]
         now = time.time()
         for row in watches:
             self._sample_transfer(row.name, row.transfer, now)
