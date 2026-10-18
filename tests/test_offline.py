@@ -1,4 +1,5 @@
 import json
+import os
 
 from keepwatch.offline import OfflineMarker, clear_offline, iso_time, read_offline, write_offline
 from keepwatch.paths import write_json_atomic
@@ -9,6 +10,17 @@ def test_write_json_atomic(tmp_path):
     write_json_atomic(target, {"x": 1})
     assert json.loads(target.read_text()) == {"x": 1}
     assert [p.name for p in target.parent.iterdir()] == ["b.json"]
+
+
+def test_write_json_atomic_fsyncs_the_new_document_before_the_rename(tmp_path, monkeypatch):
+    """offline.json is authoritative: a marker lost to a power cut parks the watch as if a user disabled it."""
+    synced = []
+    real = os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: synced.append(fd) or real(fd))
+    target = tmp_path / "offline.json"
+    write_json_atomic(target, {"x": 1})
+    assert len(synced) == 1
+    assert json.loads(target.read_text()) == {"x": 1}
 
 
 def test_iso_time_round_trips():

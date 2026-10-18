@@ -113,18 +113,28 @@ def remove_stale_process_dirs(paths: Paths, alive: Callable[[int], bool] = pid_a
     removed = []
     for entry in paths.runtime.iterdir():
         if entry.name.isdigit() and entry.is_dir() and not entry.is_symlink() and not alive(int(entry.name)):
-            shutil.rmtree(entry, ignore_errors=True)
+            try:
+                shutil.rmtree(entry)
+            except OSError:
+                pass  # a directory a dying process still holds is swept next time
             removed.append(entry)
     return sorted(removed)
 
 
 def write_json_atomic(path: Path, document: Any) -> None:
-    """Write JSON so readers see either the old file or the complete new one."""
+    """Write JSON so readers see either the old file or the complete new one, and it is on disk before the rename.
+
+    The flush and fsync match the ledgers: status.json would self-heal after a power cut, but offline.json is
+    authoritative — a marker lost mid-write reads as unreadable, which parks the watch as if a user had
+    disabled it.
+    """
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(document, handle, indent=2, default=str)
+            handle.flush()
+            os.fsync(handle.fileno())
         platform.replace(temp, path)
     except BaseException:
         Path(temp).unlink(missing_ok=True)
