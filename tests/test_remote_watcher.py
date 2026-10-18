@@ -54,6 +54,7 @@ def test_the_watchers_defaults_match_keepwatch():
     from keepwatch.config import ObserverConfig
 
     spec = importlib.util.spec_from_file_location("keepwatch_remote_watcher_copy", SOURCE)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     defaults = ObserverConfig(name="r", kind="remote_files")
@@ -65,3 +66,51 @@ def test_the_watchers_defaults_match_keepwatch():
     )
     assert module.DEFAULTS["rescan"] == observers.FILES_RESCAN
     assert (module.SETTLE_STEP, module.MIN_RESCAN) == (observers.FILES_SETTLE_STEP, observers.FILES_MIN_RESCAN)
+
+
+def _load_watcher():
+    spec = importlib.util.spec_from_file_location("keepwatch_remote_watcher_copy", SOURCE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_tree_mode_never_emits_a_name_keepwatch_cannot_encode(capsys):
+    """A single non-UTF-8 name used to poison its whole 500-entry chunk (keepwatch drops that record)."""
+    import time
+
+    module = _load_watcher()
+    sent = []
+
+    class Output:
+        def send(self, message):
+            sent.append(message)
+
+    watcher = module.TreeWatcher({"dir": "/r", "expected_files": [], "expected_dirs": []}, Output())
+    watcher.report({b"/r/good.gz": (1, 1.0), b"/r/caf\xe9.gz": (1, 1.0)}, set(), set(), time.monotonic())
+    names = [entry[0] for event in sent if event.get("event") == "files" for entry in event["entries"]]
+    assert names == ["/r/good.gz"]
+    assert capsys.readouterr().err.count("not UTF-8") == 1
+
+
+def test_tree_mode_never_emits_an_unencodable_directory_or_gone_path(capsys):
+    import time
+
+    module = _load_watcher()
+    sent = []
+
+    class Output:
+        def send(self, message):
+            sent.append(message)
+
+    watcher = module.TreeWatcher({"dir": "/r", "expected_files": [], "expected_dirs": []}, Output())
+    watcher.reported_dirs.add(b"/r/sub")
+    watcher.report({}, {b"/r/sub", b"/r/caf\xe9"}, set(), time.monotonic())
+    watcher.expected_files[b"/r/caf\xe9.gz"] = (1, 1.0)
+    watcher.expected_dirs.add(b"/r/caf\xe9")
+    watcher.report({}, set(), set(), time.monotonic())
+    shown = [path for event in sent for path in event.get("paths", ())]
+    assert all(isinstance(path, str) for path in shown)
+    assert "/r/caf\xe9" not in shown
+    assert capsys.readouterr().err.count("not UTF-8") == 2  # the directory and the gone file, each noted once
