@@ -18,7 +18,7 @@ TOPICS: tuple[tuple[str, str], ...] = (
     ("executables", "Command hooks: exit codes, environment variables, payload files"),
     ("observers", "Event sources the service keeps running: [observe.*], ctx.events, delivery, keepwatch observe"),
     ("transfers", "scp transfers for hooks: ctx.transfer, keepwatch kit, passwords, host keys, markers"),
-    ("recipes", "Built-in watches configured in config.toml: pull and push (every setting)"),
+    ("recipes", "Built-in watches configured in config.toml: pull, push and mirror (every setting)"),
     ("relay", "Relaying files host A → this machine → host B (the relay-pull and relay-push examples), step by step"),
     ("states", "Outcomes, the state table, startup, retries and ordering"),
     ("failures", "Failed polls, backoff, offline, enable, retry_after and alert_command"),

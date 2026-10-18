@@ -40,7 +40,7 @@ Write `command = ["./feed.py"]`, not `["python", "feed.py"]`. A relative `.py` p
 
 Observes a local directory (`recursive = true` for subdirectories too) through the operating system's notifications (inotify, ReadDirectoryChangesW, FSEvents), rescanning on every notification and at least every 30 seconds. When notifications are unavailable (some network shares), it rescans every 2 seconds and says so on `observer.started` (`native = false`).
 
-A file is reported once it has **settled**: its size and modification time have not changed for `settle` (default 10s) and it was last modified at least `settle` ago. The first condition catches copies that preserve an old modification time (`cp -p`, `scp -p`, tar). Names must match `pattern` and none of `ignore` (default `.*`, `*.tmp`, `*.part`, `*~`: hidden files and files still being written by tools that rename when done).
+A file is reported once it has **settled**: its size and modification time have not changed for `settle` (default 10s) and it was last modified at least `settle` ago. The first condition catches copies that preserve an old modification time (`cp -p`, `scp -p`, tar). Names must match `pattern` and none of `ignore` (default `.*`, `*.tmp`, `*.part`, `*~`: hidden files and files still being written by tools that rename when done). A symlink to a file is reported with the size and time of what it points at (this observer follows it); the `pull` and `push` recipes and the remote watcher skip symlinks instead, and `mirror` says so in its log.
 
 Each settled file is reported once per (path, size, modification time) while the service runs:
 

@@ -127,13 +127,13 @@ WATCH_KEYS = (
         "recipe",
         "str",
         None,
-        "Use a built-in recipe (`pull` or `push`) instead of hooks of your own; it is configured in [settings]. "
-        "See `keepwatch docs recipes`.",
+        "Use a built-in recipe (`pull`, `push` or `mirror`) instead of hooks of your own; it is configured in "
+        "[settings]. See `keepwatch docs recipes`.",
     ),
 )
 
 WATCH_TABLES = {
-    "hooks": "Hooks implemented as commands: hook name = string (run via /bin/sh -c) or list (run directly).",
+    "hooks": "Hooks implemented as commands: hook name = string (run by the shell: /bin/sh -c, or Windows PowerShell) or list (run directly).",
     "check_exit_codes": "Exit-code mapping for a command check: true, false, unknown (lists of 0-255).",
     "environment": "Extra environment variables for this watch's hooks.",
     "settings": "Free-form plugin parameters: ctx.settings in Python, KEEPWATCH_SETTING_* for commands.",

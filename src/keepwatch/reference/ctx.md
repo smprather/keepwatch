@@ -16,6 +16,28 @@ Every Python hook receives one argument, `ctx`, a `keepwatch.Ctx`. The package s
 | `ctx.watch_dir` | `Path` | The watch directory, which is also the working directory. |
 | `ctx.log` | `logging.Logger` | Logs into keepwatch's log; see `keepwatch docs logging`. |
 
+## Ledgers
+
+`ctx.ledger(name)` is a persistent **set of keys**, each stamped with when it was added: the right place for
+"this one is done" when the set may be large or is checked key by key (`key in ledger`). `add(key)` and
+`discard(key)` write the file atomically after every change, so a crash mid-loop keeps what the loop recorded.
+A long queue is recorded in one write instead:
+
+```python
+def on_true(ctx):
+    sent = ctx.ledger("sent")
+    with sent.batch():            # one atomic write for the whole loop; still saved if it raises
+        for name in ctx.payload:
+            deliver(name)
+            sent.add(name)
+```
+
+`ctx.ledger(name, expire="90d")` forgets entries older than that (they are pruned on the next write and ignored
+before that). Only expire keys for things that go away: a key whose subject is still visible after it expires
+makes the watch do the work again. A ledger with no `expire` keeps every key, which is what the `pull` recipe
+needs of `pulled` — that list is also what the observer skips on reconnect — and it grows for as long as the
+watch runs.
+
 ## Checkpoints
 
 `ctx.checkpoint(name)` is a persistent JSON **document** for this watch (under its data directory), unlike
