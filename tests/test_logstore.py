@@ -131,3 +131,16 @@ def test_failed_rotation_leaves_backups_alone(tmp_path, monkeypatch):
         writer.write({"n": 100 + n, "pad": "y" * 80})
     assert backups() == before
     assert json.loads(path.read_text().splitlines()[-1])["n"] == 104
+
+
+def test_a_rotation_that_died_mid_way_neither_loses_records_nor_breaks_the_log(tmp_path):
+    """A crash between the rename and the shift leaves .rotating; the next rotation must recover, not trip."""
+    path = tmp_path / "keepwatch.jsonl"
+    path.write_text('{"event": "current"}\n')
+    (tmp_path / "keepwatch.jsonl.rotating").write_text('{"event": "stranded"}\n')
+    writer = LogWriter(path, max_bytes=20, backups=2)
+    writer.write(make_record("poll.start"))
+    kept = "\n".join(p.read_text() for p in (tmp_path / "keepwatch.jsonl", tmp_path / "keepwatch.jsonl.1") if p.exists())
+    assert "stranded" in kept  # the records a killed rotation held are still the log's
+    assert "poll.start" in kept
+    assert not (tmp_path / "keepwatch.jsonl.rotating").exists()

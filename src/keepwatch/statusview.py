@@ -9,7 +9,7 @@ from typing import Any
 from keepwatch import transfer
 from keepwatch.config import Discovery
 from keepwatch.durations import format_duration
-from keepwatch.locks import LockBusy, hold_lock
+from keepwatch.locks import probe_lock
 from keepwatch.offline import read_offline
 from keepwatch.paths import Paths
 
@@ -17,11 +17,8 @@ from keepwatch.paths import Paths
 def service_running(paths: Paths) -> bool:
     if not paths.runtime.is_dir():
         return False
-    try:
-        with hold_lock(paths.service_lock, blocking=False):
-            return False
-    except LockBusy:
-        return True
+    with probe_lock(paths.service_lock) as held:
+        return held
 
 
 def read_status(paths: Paths) -> dict[str, Any] | None:

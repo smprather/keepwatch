@@ -15,6 +15,35 @@ class LockBusy(Exception):
 
 
 @contextmanager
+def probe_lock(path: Path) -> Generator[bool]:
+    """Whether an exclusive holder has `path`, asked without taking it: yields True when a service holds it.
+
+    A plain non-blocking exclusive probe would hold the lock it is testing, so two probes overlapping (two
+    monitors, or a monitor and `keepwatch status`) would each report a service that is not running - and the
+    same window could make `keepwatch run` refuse to start while something was merely looking.
+    """
+    if not path.exists():
+        yield False
+        return
+    try:
+        fd = os.open(path, os.O_RDWR)
+    except OSError:
+        yield False
+        return
+    held = False
+    try:
+        held = not platform.try_lock_shared(fd)
+        yield held
+    finally:
+        if not held:
+            try:
+                platform.unlock(fd)  # release a shared lock we took; nothing to release when it was busy
+            except OSError:
+                pass
+        os.close(fd)
+
+
+@contextmanager
 def hold_lock(
     path: Path,
     *,

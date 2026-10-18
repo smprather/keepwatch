@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from keepwatch.locks import LockBusy, hold_lock
+from keepwatch.locks import LockBusy, hold_lock, probe_lock
 
 
 def test_second_nonblocking_lock_is_busy(tmp_path):
@@ -34,3 +34,15 @@ def test_on_wait_is_called_when_blocked(tmp_path):
         pass
     thread.join()
     assert waited == [True]
+
+
+def test_a_probe_does_not_take_the_lock_it_asks_about(tmp_path):
+    """Two monitors ask at once: asking must not look like a service holding the lock."""
+    lock = tmp_path / "locks" / "service.lock"
+    with probe_lock(lock) as held:
+        assert held is False
+        with probe_lock(lock) as again:
+            assert again is False  # the first probe must not be mistaken for a service
+    with hold_lock(lock):
+        with probe_lock(lock) as held:
+            assert held is True

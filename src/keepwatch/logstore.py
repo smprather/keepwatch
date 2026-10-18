@@ -72,9 +72,19 @@ class LogWriter:
                 pass
             return
         staging = self.path.with_name(f"{self.path.name}.rotating")
+        if staging.exists():
+            # A rotation killed between the rename and the shift left the old log here. Its records are the
+            # log's own, so they go back before this rotation rather than being dropped - and on Windows the
+            # rename below would raise FileExistsError for good, stopping the log for every later write.
+            try:
+                with open(staging, "rb") as old, open(self.path, "ab") as current:
+                    current.write(old.read())
+                staging.unlink()
+            except OSError:
+                pass  # left in place: the next rotation tries again
         try:
             self.path.rename(staging)
-        except PermissionError:
+        except OSError:
             return  # try again on a later write
         try:
             self._backup(self.backups).unlink(missing_ok=True)
@@ -83,7 +93,7 @@ class LogWriter:
                 if source.exists():
                     source.rename(self._backup(index + 1))
             staging.rename(self._backup(1))
-        except PermissionError:
+        except OSError:  # not PermissionError alone: a FileExistsError here would stop the log for good
             staging.rename(self.path)  # keep writing to the same log; rotate later
 
 
