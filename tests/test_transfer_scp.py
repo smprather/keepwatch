@@ -11,6 +11,7 @@ from keepwatch.transfer import (
     ScpOptions,
     TransferFailed,
     TransferMissing,
+    _reget_source_missing,
     _source_missing,
     pull,
     push,
@@ -163,14 +164,15 @@ def test_missing_remote_file(tmp_path, server, ssh_config):
 @pytest.mark.parametrize(
     "stderr",
     [
-        "scp: No such file or directory: /remote/a.bin\n",  # OpenSSH's classic protocol on POSIX
-        "scp: /remote/a.bin: No such file or directory\r\n",  # scp in sftp mode
+        "scp: /remote/a.bin: No such file or directory\n",  # OpenSSH's remote scp (classic) and its sftp mode
+        "scp: No such file or directory: /remote/a.bin\n",  # the other ordering: asyncssh's server, as in this suite
         "scp: The system cannot find the file specified: C:\\remote\\a.bin\n",  # classic on Windows
         "scp: The system cannot find the path specified: C:\\remote\\a.bin\n",
     ],
 )
 def test_scp_says_a_source_is_gone(stderr):
-    assert _source_missing(stderr, Endpoint(path="/stage/.a.bin.part"))
+    """Both orderings are real: OpenSSH's remote scp prints `<path>: <reason>`, asyncssh's server `<reason>: <path>`."""
+    assert _source_missing(stderr, Endpoint(path="/stage/.a.bin.part"), Endpoint(path="/remote/a.bin"))
 
 
 @pytest.mark.parametrize(
@@ -183,7 +185,44 @@ def test_scp_says_a_source_is_gone(stderr):
     ],
 )
 def test_other_scp_failures_are_not_a_missing_source(stderr):
-    assert not _source_missing(stderr, Endpoint(path="/stage/.a.bin.part"))
+    assert not _source_missing(stderr, Endpoint(path="/stage/.a.bin.part"), Endpoint(path="/remote/a.bin"))
+
+
+def test_a_gone_source_is_told_apart_when_both_sides_share_a_file_name():
+    """`kit copy u@h:/data/report.tar.gz ./staging/report.tar.gz` on a gone source is still a withdrawal.
+
+    The local-side veto compares whole paths: a source and a destination that share a file name must not
+    look like the local side failing.
+    """
+    stderr = "scp: /data/report.tar.gz: No such file or directory\n"
+    assert _source_missing(stderr, Endpoint(path="./staging/report.tar.gz"), Endpoint(path="/data/report.tar.gz"))
+
+
+def test_a_local_side_failure_with_the_same_file_name_is_still_a_command_failure():
+    """The other half of it: the local staging path named in the text is never a withdrawal."""
+    stderr = "scp: ./staging/report.tar.gz: No such file or directory\n"
+    assert not _source_missing(stderr, Endpoint(path="./staging/report.tar.gz"), Endpoint(path="/data/report.tar.gz"))
+
+
+def test_a_windows_local_side_failure_is_recognised_through_its_separators():
+    stderr = "scp: The system cannot find the path specified: C:\\stage\\.a.bin.part\n"
+    assert not _source_missing(stderr, Endpoint(path="/stage/.a.bin.part"), Endpoint(path="/remote/a.bin"))
+
+
+def test_a_gone_reget_source_is_matched_on_the_raw_path():
+    """sftp prints the path it parsed, not the quoting the batch was written with."""
+    stderr = 'File "/remote/back\\slash.bin" not found.\n'
+    assert _reget_source_missing(stderr, Endpoint(path="/remote/back\\slash.bin"))
+
+
+def test_a_gone_reget_source_with_a_quote_in_its_name_still_matches():
+    stderr = "File \"/remote/it's \"quoted\".bin\" not found.\n"
+    assert _reget_source_missing(stderr, Endpoint(path="/remote/it's \"quoted\".bin"))
+
+
+def test_a_gone_reget_source_printed_in_its_escaped_form_still_matches():
+    stderr = 'File "/remote/back\\\\slash.bin" not found.\n'
+    assert _reget_source_missing(stderr, Endpoint(path="/remote/back\\slash.bin"))
 
 
 def test_unset_password_variable(tmp_path, server, ssh_config, monkeypatch):
@@ -209,7 +248,7 @@ def test_reports_each_scp_run(tmp_path, server, ssh_config):
     calls = []
     push(local, REMOTE, options=key_options(server, ssh_config), report=lambda *call: calls.append(call))
     assert len(calls) == 2  # the file, then its marker
-    argv, returncode, timed_out, duration, stdout, stderr = calls[0]
+    argv, returncode, timed_out, duration, _stdout, _stderr = calls[0]
     assert argv[0] == "scp" and returncode == 0 and timed_out is False and duration >= 0
 
 
