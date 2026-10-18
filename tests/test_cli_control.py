@@ -1,3 +1,4 @@
+
 from click.testing import CliRunner
 
 from keepwatch.cli import cli
@@ -22,6 +23,21 @@ def test_disable_then_enable(xdg, make_watch):
     assert read_offline(xdg, "a") is None
     result = run("enable", "a")
     assert result.exit_code == 0 and "was not offline" in result.output
+
+
+def test_a_name_that_is_a_path_is_refused(xdg, make_watch):
+    """A watch name reaches state/watches/<name>: `..` must not let enable/disable/status write outside it.
+
+    `watch_state_dir("..")` is the state home itself, which is a directory - so the name passed the
+    known-watch test and `disable` wrote `offline.json` there.
+    """
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    (xdg.state_home / "watches").mkdir(parents=True, exist_ok=True)
+    for command in ("disable", "enable", "status"):
+        result = run(command, "..")
+        assert result.exit_code == 1, (command, result.output)
+        assert "not a watch name" in result.output
+    assert not (xdg.state_home / "offline.json").exists()
 
 
 def test_unknown_names(xdg, make_watch):
