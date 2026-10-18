@@ -102,6 +102,26 @@ def try_lock(fd: int) -> bool:
     return True
 
 
+def try_lock_shared(fd: int) -> bool:
+    """Take a shared lock without waiting: it fails only against an exclusive holder, never against another probe.
+
+    Used to ask "is a service running?" without taking the lock the answer is about: an exclusive probe would
+    hold it, so two monitors asking at the same moment would each see the other one.
+    """
+    if IS_WINDOWS:
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBRLCK, 1)  # the read-lock mode: shared, refused by a write lock
+        except OSError:
+            return False
+        return True
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
 def lock(fd: int) -> None:
     """Take an exclusive lock on the open file, waiting as long as needed."""
     if IS_WINDOWS:
