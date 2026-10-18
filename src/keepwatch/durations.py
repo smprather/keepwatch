@@ -37,7 +37,15 @@ def parse_duration(value: object) -> float:
         raise DurationError(
             f'expected a duration like "30s", "15m" or "1h30m" (units: s, m, h, d), got {value!r}'
         )
-    return float(sum(int(count) * _UNIT_SECONDS[unit] for count, unit in _PART.findall(text)))
+    try:
+        total = float(sum(int(count) * _UNIT_SECONDS[unit] for count, unit in _PART.findall(text)))
+    except OverflowError:
+        # A 400-digit count is syntactically fine and numerically absurd; letting OverflowError out of here
+        # escaped load_watch_config, so `validate` crashed and the service never listed the watch as invalid.
+        raise DurationError(f"duration {value!r} is too large") from None
+    if not math.isfinite(total):
+        raise DurationError(f"duration {value!r} is too large")
+    return total
 
 
 def format_duration(seconds: float) -> str:

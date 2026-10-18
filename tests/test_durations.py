@@ -49,3 +49,9 @@ def test_parse_duration_rejects(value, fragment):
 )
 def test_format_duration(seconds, text):
     assert format_duration(seconds) == text
+
+
+def test_a_huge_unit_count_is_a_duration_error_not_an_overflow():
+    """`interval = "111…1d"` escaped load as OverflowError, so validate crashed and no watch started."""
+    with pytest.raises(DurationError):
+        parse_duration("1" * 400 + "d")
