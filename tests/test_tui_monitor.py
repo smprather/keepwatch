@@ -132,6 +132,10 @@ def test_a_live_watch_counts_down_and_an_offline_one_says_retry(xdg, make_watch)
         monitor.refresh()
         row = monitor.status().watches[0]
     assert monitor_module.next_text(row, time.time(), stale=False).startswith("1m")
+    offline = WatchRow(**{**row.__dict__, "state": "offline"})
+    assert monitor_module.next_text(offline, time.time(), stale=False).startswith("retry ")
+    past = WatchRow(**{**row.__dict__, "next_poll": iso_time(time.time() - 5)})
+    assert monitor_module.next_text(past, time.time(), stale=False) == "due"
 
 
 def test_offline_beats_parked(xdg, make_watch):

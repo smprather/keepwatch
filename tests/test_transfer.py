@@ -531,6 +531,35 @@ def test_push_rejects_resume_outside_the_sftp_protocol(tmp_path):
         push(tmp_path / "a.gz", "me@h:in/", resume=True)
 
 
+def test_a_resumed_partial_that_does_not_verify_is_pulled_again_from_the_start(tmp_path, monkeypatch):
+    """`attempts = [kept, 0]`: a wrong prefix must be thrown away, not combined with the right tail for ever."""
+    import hashlib
+
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / ".a.bin.part").write_bytes(b"xxxx")
+    data = b"payload!"
+    calls = []
+
+    def fake_reget(source, part, options, report):
+        calls.append("reget")
+        with open(part, "ab") as handle:
+            handle.write(b"wrong")  # the resumed bytes are not the file the sha256 names
+
+    def fake_copy(source, destination, *, options=None, report=None, warn=None):
+        calls.append("copy")
+        Path(destination.path).write_bytes(data)
+
+    monkeypatch.setattr(transfer, "_sftp_reget", fake_reget)
+    monkeypatch.setattr(transfer, "copy", fake_copy)
+    warnings = []
+    final = pull("u@h:/a.bin", stage, size=len(data), sha256=hashlib.sha256(data).hexdigest(),
+                 options=ScpOptions(protocol="sftp"), resume=True, warn=warnings.append)
+    assert calls == ["reget", "copy"]  # it started over after the resumed attempt failed
+    assert final.read_bytes() == data
+    assert any("again from the start" in warning for warning in warnings), warnings
+
+
 def test_a_past_deadline_stops_a_transfer_before_scp(tmp_path):
     reports = []
     with pytest.raises(TransferFailed, match="no time left"):

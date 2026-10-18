@@ -257,7 +257,7 @@ def test_a_busy_observer_cannot_drive_polls_back_to_back(make_watch, runner_for)
         runner.stop()
         assert runner.join(20)
     # One poll at start, then at most one woken poll per WAKE_GAP (1s): never one per event (about 60).
-    assert len(kinds(records, "poll.start")) <= 5
+    assert 1 <= len(kinds(records, "poll.start")) <= 5  # 0 polls would satisfy "<= 5" and prove nothing
 
 
 def test_events_do_not_cut_the_crash_pause_short(make_watch, runner_for):
@@ -278,3 +278,51 @@ def test_events_do_not_cut_the_crash_pause_short(make_watch, runner_for):
         runner.stop()
         assert runner.join(20)
     assert len(kinds(records, "watch.crash")) == 1
+
+
+BLOCKING_WATCH = """
+    import time
+
+    def check(ctx):
+        deadline = time.monotonic() + 20
+        while not (ctx.watch_dir / "go").exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return True
+"""
+
+
+def test_status_names_the_running_hook_and_what_it_transfers(make_watch, runner_for, xdg):
+    """`in_flight` and `transfer` in status.json have producers (issue 3): pin them, or the TUI column rots."""
+    import json
+
+    watch_dir = make_watch("w", config='interval = "1s"\n', files={"watch.py": BLOCKING_WATCH})
+    runner = runner_for(watch_dir, [], time.time)
+    runner.start()
+    try:
+        assert wait_for(lambda: (runner.snapshot(time.time()).get("in_flight") or {}).get("hook") == "check")
+        run_dir = xdg.run_dir(os.getpid(), "w")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        part = run_dir / "part.bin"
+        part.write_bytes(b"x" * 5)
+        (run_dir / "activity.json").write_text(json.dumps({"name": "big.bin", "size": 10, "part": str(part)}))
+        assert wait_for(lambda: (runner.snapshot(time.time()).get("transfer") or {}).get("name") == "big.bin")
+        (watch_dir / "go").write_text("")
+        assert wait_for(lambda: runner.snapshot(time.time()).get("in_flight") is None)
+        assert runner.snapshot(time.time()).get("transfer") is None
+    finally:
+        runner.stop()
+        runner.join(20)
+
+
+def test_a_recipe_hook_is_named_the_way_the_log_names_it(make_watch, runner_for):
+    """A recipe's hooks are called `recipe pull:check` in status.json and the header, never bare `check`."""
+    watch_dir = make_watch(
+        "relay",
+        config='recipe = "pull"\n[settings]\nremote = "u@h"\nremote_dir = "/d"\nlocal_dir = "stage"\n',
+    )
+    runner = runner_for(watch_dir, [], time.time)
+    runner._record_in_flight({"hook": "check", "poll_id": "p1", "timeout": 5, "started_at": "2026-10-02T00:00:00.000+00:00"})
+    snapshot = runner.snapshot(time.time())
+    assert snapshot["in_flight"]["target"] == "recipe pull:check"
+    runner._record_in_flight(None)
+    assert runner.snapshot(time.time())["in_flight"] is None

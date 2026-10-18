@@ -46,6 +46,13 @@ def test_site_down_example_validates_and_polls(xdg):
     assert [p["results"][0]["status"] for p in data["polls"]] == ["ok", "ok"]
 
 
+def test_the_expect_example_validates_without_expect_installed(xdg):
+    """CI has no `expect`, so the run-once test skips everywhere; its config must still be checked there."""
+    install(xdg, "greet-once")
+    result = run("validate", "greet-once")
+    assert result.exit_code == 0 or "expect" in result.output  # only the program may be missing
+
+
 @pytest.mark.skipif(shutil.which("expect") is None, reason="expect is not installed")
 def test_expect_example_runs_once(xdg):
     install(xdg, "greet-once")

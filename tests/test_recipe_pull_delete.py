@@ -14,7 +14,9 @@ from keepwatch.state import Outcome, WatchState
 from portable import PY, literal, toml_path
 from scp_server import ScpServer
 
-pytestmark = [pytest.mark.posix_only, pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")]
+pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
+# POSIX-only per test (chmod, symlinks), except the delete round-trip itself: the ssh command line it
+# builds is exactly what differs on Windows, so that one has to run there.
 FAKE_SSH = Path(__file__).resolve().with_name("fake_ssh.py")
 
 
@@ -86,6 +88,7 @@ def test_a_verified_pull_deletes_the_source(linux1, make_watch, tmp_path, xdg):
     assert any(m.startswith("deleted a.tar.gz from u@127.0.0.1") for m in messages)
 
 
+@pytest.mark.posix_only
 def test_a_failed_delete_is_retried_after_delete_retry(linux1, make_watch, tmp_path, xdg):
     source = linux1.root / "a.tar.gz"
     source.write_bytes(b"data")
@@ -104,6 +107,7 @@ def test_a_failed_delete_is_retried_after_delete_retry(linux1, make_watch, tmp_p
     assert not source.exists() and len(ledger(xdg, "to_delete")) == 0
 
 
+@pytest.mark.posix_only
 def test_a_file_changed_before_its_pull_does_not_fail_the_poll(linux1, make_watch, tmp_path, xdg):
     source = linux1.root / "a.tar.gz"
     source.write_bytes(b"data")
@@ -116,6 +120,7 @@ def test_a_file_changed_before_its_pull_does_not_fail_the_poll(linux1, make_watc
     assert any("changed on u@127.0.0.1 after it was reported" in r["message"] for r in records if r["event"] == "plugin.log")
 
 
+@pytest.mark.posix_only
 def test_a_changed_source_is_kept(linux1, make_watch, tmp_path, xdg):
     from keepwatch.recipes import pull
 
@@ -137,6 +142,7 @@ def test_a_changed_source_is_kept(linux1, make_watch, tmp_path, xdg):
     assert any("changed on u@127.0.0.1 since it was pulled" in r["message"] for r in records if r["event"] == "plugin.log")
 
 
+@pytest.mark.posix_only
 def test_files_pulled_before_delete_remote_are_left_alone(linux1, make_watch, tmp_path, xdg):
     from keepwatch.recipes import pull
 
@@ -148,6 +154,7 @@ def test_files_pulled_before_delete_remote_are_left_alone(linux1, make_watch, tm
     assert source.exists()  # no sha256 was recorded for it, so it is not deleted
 
 
+@pytest.mark.posix_only
 def test_a_refused_delete_is_kept_and_not_retried(linux1, make_watch, tmp_path, xdg):
     from keepwatch.recipes import pull
 
@@ -168,6 +175,7 @@ def test_a_refused_delete_is_kept_and_not_retried(linux1, make_watch, tmp_path, 
     assert poll(xdg, watch, [], state=first.after).outcome is Outcome.FALSE  # nothing left to do
 
 
+@pytest.mark.posix_only
 def test_an_entry_without_a_sha256_is_never_deleted(linux1, make_watch, tmp_path, xdg):
     from keepwatch.recipes import pull
 
@@ -184,6 +192,7 @@ def test_an_entry_without_a_sha256_is_never_deleted(linux1, make_watch, tmp_path
     assert any("no verified sha256 was recorded" in m for m in messages)
 
 
+@pytest.mark.posix_only
 def test_a_timed_out_delete_keeps_the_results_it_had(tmp_path, caplog):
     from keepwatch import Ctx
     from keepwatch.recipes import pull
