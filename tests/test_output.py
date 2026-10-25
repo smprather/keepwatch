@@ -98,6 +98,14 @@ def test_record_level_hides_routine_polls_before_normal_and_detail_before_verbos
     assert level("custom.thing") == 2
 
 
+def test_a_warning_or_error_is_never_hidden_by_its_event_type():
+    """Severity wins over the event's normal level: an observer warning is a failure, not polling noise."""
+    warning = record_level({**BASE, "event": "observer.output", "level": "WARNING", "text": "marker mismatch"})
+    error = record_level({**BASE, "event": "check.outcome", "level": "ERROR", "condition_before": False,
+                          "condition_after": False})
+    assert (warning, error) == (0, 0)
+
+
 def test_failed_statuses_are_defined_once():
     from keepwatch import output, pollengine, runner
 

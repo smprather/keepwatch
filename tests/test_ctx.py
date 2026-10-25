@@ -182,6 +182,16 @@ def test_event_emits_a_headline_message(tmp_path):
     ]
 
 
+def test_event_normalises_case_and_refuses_an_unknown_level(tmp_path):
+    """A misspelled level must fail loudly, not turn a failure headline into INFO and hide it."""
+    emitted = []
+    ctx = make_ctx(tmp_path, emitted=emitted)
+    ctx.event("failed", level="warning")
+    assert emitted[0]["level"] == "WARNING"
+    with pytest.raises(ValueError, match="invalid headline level"):
+        ctx.event("failed", level="loud")
+
+
 def test_run_raises_on_failure_with_stderr_tail(tmp_path):
     ctx = make_ctx(tmp_path)
     with pytest.raises(CommandFailed, match="exited 3.*nope"):

@@ -913,7 +913,8 @@ def tui(app: App) -> None:
 
     Read-only: it never enables, disables or polls anything, and it writes nothing, so it is safe beside a
     running service (several at once, even). The arrow keys or j/k select a watch, `a` shows every watch's
-    records, `v` captured output, space pauses the pane, `r` re-reads the config, q quits.
+    records, `v` cycles the pane's verbosity (quiet, normal, verbose), space pauses the pane, `r` re-reads the
+    config, q quits.
 
     Needs a terminal: when stdout is not one, use `keepwatch status` or `keepwatch logs --json` instead.
 

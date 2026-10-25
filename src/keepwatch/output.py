@@ -327,13 +327,11 @@ def record_level(record: dict[str, Any]) -> int:
     """
     event = str(record.get("event"))
     severity = str(record.get("level", "INFO"))
+    if severity in ("WARNING", "ERROR", "CRITICAL"):
+        return QUIET  # a warning is a failure whatever event carried it (an observer's marker mismatch, a check error)
     if event == "plugin.log":
-        if severity in ("WARNING", "ERROR", "CRITICAL"):
-            return QUIET
         return NORMAL if severity == "INFO" else VERBOSE
     if event == "plugin.event":
-        if severity in ("WARNING", "ERROR", "CRITICAL"):
-            return QUIET
         return VERBOSE if severity == "DEBUG" else NORMAL
     if event == "hook.end":
         if record.get("status") in FAILED_STATUSES:
