@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 Emit = Callable[[dict[str, Any]], None]
 LEDGER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")  # ledger and checkpoint names (config.py validates skip_ledger with it)
+_HEADLINE_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 
 class Unknown(Exception):
@@ -422,6 +423,20 @@ class Ctx:
                 "stderr_truncated": stderr_cut,
             }
         )
+
+    def event(self, message: str, *, level: str = "INFO", **fields: Any) -> None:
+        """Write a headline: one plain-language line about what happened.
+
+        Unlike `ctx.log`, which is for detail, a headline is the story the operator should read at normal
+        verbosity ("found export-1.tar.gz (4.1 GB) on relay1"). A headline at WARNING or above is shown even at
+        the quiet level, so failures must use that level. `level` is case-insensitive and must be one of DEBUG,
+        INFO, WARNING, ERROR or CRITICAL; anything else raises rather than being silently demoted. Keys become
+        searchable JSON fields.
+        """
+        name = level.upper()
+        if name not in _HEADLINE_LEVELS:
+            raise ValueError(f"invalid headline level {level!r}: use {', '.join(sorted(_HEADLINE_LEVELS))}")
+        self._emit({"type": "event", "level": name, "message": message, "fields": fields})
 
     def ledger(self, name: str, expire: str | float | None = None) -> Ledger:
         """Open the persistent ledger `name` (letters, digits, '_', '.', '-').

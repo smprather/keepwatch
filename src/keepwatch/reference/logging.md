@@ -16,6 +16,7 @@ Every record has `ts` (local time, RFC 3339 with offset), `level` (`DEBUG`, `INF
 | `poll.start` | `condition`, `faked`, `dry_run`, `trial`, `events` (how many observer events the poll got) |
 | `command` | from `ctx.run`: `argv`, `shell`, `exit_code`, `timed_out`, `duration`, `stdout`, `stderr`, `*_truncated` |
 | `plugin.log` | from `ctx.log`: `level`, `logger`, `message`, `fields`, `traceback` |
+| `plugin.event` | from `ctx.event`: `level`, `message`, `fields` — a plain-language headline |
 | `hook.end` | `hook`, `kind`, `target`, `status`, `reason`, `payload`, `exit_code`, `signal`, `exception` (type, message, traceback), `stdout`, `stderr`, `*_truncated`, `duration` |
 | `check.outcome` | `outcome`, `reason`, `payload`, `condition_before`, `condition_after`, `pending_edge`, `actions`, `faked` |
 | `poll.end` | `failed`, `failures`, `condition`, `pending_edge`, `dry_run` |
@@ -42,6 +43,21 @@ ctx.log.exception("upload failed")     # inside an except block: includes the tr
 ```
 
 Command hooks log by writing to stdout or stderr; that output lands in the `hook.end` record.
+
+## Headlines
+
+`ctx.log` is for detail. A **headline** is the story the operator should read without knowing the watch's
+internals: "found export-1.tar.gz (4.1 GB) on relay1", "pulled it in 2m10s", "swept 1 file(s) from relay1".
+`ctx.event(message, **fields)` writes one (`plugin.event`):
+
+```python
+ctx.event("found %s (%s) on %s" % (name, size, host), name=name, size=size, host=host)
+ctx.event("pull failed: %s" % exc, level="WARNING", name=name)
+```
+
+Headlines are plain lines in `keepwatch tui`'s pane at its normal level. A headline at `WARNING` or above is
+shown even at the quiet level, so failures use that level. Keys become JSON fields, searchable with
+`keepwatch logs --json`. The built-in `pull` and `push` recipes headline their own story points.
 
 ## Reading the log
 

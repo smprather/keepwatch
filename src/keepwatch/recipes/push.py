@@ -17,7 +17,7 @@ from typing import Any
 
 from keepwatch.ctx import CommandFailed, Ctx, Unknown
 from keepwatch.recipes import file_budget
-from keepwatch.transfer import TransferFailed, parse_endpoint
+from keepwatch.transfer import TransferFailed, format_bytes, parse_endpoint
 
 LEDGER = "pushed"
 
@@ -72,6 +72,8 @@ def check(ctx: Ctx) -> tuple[bool, list[str]]:
                 files.append(str(path))
         except OSError:
             continue  # removed since the scan
+    if files:
+        ctx.event(f"{len(files)} file(s) staged for {settings['dest']}", count=len(files), dest=settings["dest"])
     return bool(files), files
 
 
@@ -99,6 +101,8 @@ def on_true(ctx: Ctx) -> None:
     files = [Path(name) for name in ctx.payload]
     error: Exception | None = None
     try:
+        if files:
+            ctx.event(f"pushing {len(files)} file(s) to {settings['dest']}", count=len(files), dest=settings["dest"])
         for index, path in enumerate(files):
             if not path.is_file():
                 continue  # moved or deleted since the check
@@ -113,13 +117,21 @@ def on_true(ctx: Ctx) -> None:
             # queue carries on; the failure is raised at the end so the poll still reports it.
             budget = file_budget(ctx.remaining, len(files) - index, settings["file_timeout"])
             try:
+                size = path.stat().st_size
+                started = time.monotonic()
                 remote = ctx.transfer.push(path, settings["dest"], marker=settings["marker"],
                                            resume=settings["resume"], deadline=time.time() + budget, **options)
             except (TransferFailed, CommandFailed, OSError) as exc:
                 error = error or exc
-                ctx.log.warning("pushing %s failed (%s); the rest of the queue is still tried", path.name, exc)
+                ctx.event(f"pushing {path.name} failed ({exc}); the rest of the queue is still tried",
+                          level="WARNING", name=path.name, dest=settings["dest"])
                 continue
-            ctx.log.info("pushed %s", path.name, extra={"remote": remote})
+            duration = time.monotonic() - started
+            marker = settings["marker"]
+            verified = ", sha256 marker verified" if marker == "sha256" else (
+                f", {marker} marker written" if marker != "none" else "")
+            ctx.event(f"pushed {path.name} ({format_bytes(size)}) in {duration:.1f}s{verified}",
+                      remote=remote, size=size, duration=round(duration, 3))
             if settings["after"] == "delete":
                 path.unlink()
             elif settings["after"] == "archive":

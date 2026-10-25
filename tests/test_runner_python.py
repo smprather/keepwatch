@@ -48,6 +48,18 @@ def test_check_answers_with_payload_logs_and_output(make_watch, call_for):
     assert "messages" not in record and record["status"] == "true"
 
 
+def test_a_headline_message_reaches_the_service(make_watch, call_for):
+    watch_dir = make_watch("w", files={"watch.py": '''
+        def check(ctx):
+            ctx.event("found it", size=3)
+            return True
+    '''})
+    result = Runner().run(call_for(watch_dir))
+    assert [m for m in result.messages if m.get("type") == "event"] == [
+        {"type": "event", "level": "INFO", "message": "found it", "fields": {"size": 3}}
+    ]
+
+
 def test_false_and_unknown(make_watch, call_for):
     watch_dir = make_watch("w", files={"watch.py": '''
         import os

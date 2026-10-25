@@ -68,8 +68,8 @@ def test_relay_moves_a_file_from_linux1_to_linux2(tmp_path, make_watch, xdg, mon
         expected = f"{hashlib.sha256(data).hexdigest()}  export-1.tar.gz\n"
         assert (linux2 / "export-1.tar.gz.sha256").read_text(encoding="utf-8") == expected
         assert (linux1 / "export-1.tar.gz").exists()  # pull leaves the source alone
-        pulled = [r for r in records if r["event"] == "plugin.log" and r["message"].startswith("pulled")]
-        pushed = [r for r in records if r["event"] == "plugin.log" and r["message"].startswith("pushed")]
+        pulled = [r for r in records if r["event"] == "plugin.event" and r["message"].startswith("pulled")]
+        pushed = [r for r in records if r["event"] == "plugin.event" and r["message"].startswith("pushed")]
         assert len(pulled) == 1 and len(pushed) == 1
     finally:
         source.stop()

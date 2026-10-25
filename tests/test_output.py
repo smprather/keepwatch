@@ -1,7 +1,7 @@
 import io
 import sys
 
-from keepwatch.output import format_record, plain_output, use_utf8_output
+from keepwatch.output import format_record, plain_output, record_level, use_utf8_output
 
 BASE = {"ts": "2026-09-29T10:11:12.345-05:00", "level": "INFO", "watch": "psg", "poll_id": "abc123"}
 
@@ -57,7 +57,7 @@ def test_format_check_outcome():
         "actions": ["on_rise", "on_true"],
     }
     assert format_record(record) == "10:11:12 psg outcome true; condition FALSE → TRUE; actions: on_rise, on_true"
-    assert '  payload: ["a"]' in format_record(record, verbose=True)
+    assert '  payload: ["a"]' in format_record(record, level=2)
 
 
 def test_format_poll_end_and_unknown_event():
@@ -65,6 +65,45 @@ def test_format_poll_end_and_unknown_event():
     assert format_record(end) == "10:11:12 psg poll FAILED; failures 2"
     other = format_record({**BASE, "event": "custom.thing", "x": 1})
     assert other.startswith("10:11:12 psg custom.thing ")
+
+
+def test_a_headline_event_is_a_plain_line_not_an_indented_log():
+    record = {**BASE, "event": "plugin.event", "level": "INFO",
+              "message": "found a.bin (4 KiB) on host", "fields": {"size": 4096}}
+    assert format_record(record) == "10:11:12 psg found a.bin (4 KiB) on host"
+
+
+def test_record_level_hides_routine_polls_before_normal_and_detail_before_verbose():
+    def level(event, **fields):
+        return record_level({**BASE, "event": event, **fields})
+
+    assert level("poll.start", condition=False) == 2
+    assert level("poll.end", failed=False) == 2
+    assert level("poll.end", failed=True) == 0
+    assert level("command", exit_code=0) == 2
+    assert level("command", exit_code=1) == 0
+    assert level("check.outcome", condition_before=False, condition_after=False) == 2
+    assert level("check.outcome", condition_before=False, condition_after=True) == 1
+    assert level("hook.end", status="ok") == 1
+    assert level("hook.end", status="failed") == 0
+    assert level("plugin.log", level="DEBUG") == 2
+    assert level("plugin.log", level="INFO") == 1
+    assert level("plugin.log", level="WARNING") == 0
+    assert level("plugin.event", level="INFO") == 1
+    assert level("plugin.event", level="WARNING") == 0
+    assert level("watch.offline") == 0 and level("watch.online") == 0
+    assert level("watch.added") == 1 and level("config.loaded") == 1
+    assert level("observer.event") == 2 and level("observer.dropped") == 0
+    assert level("alert.end", status="ok") == 0
+    assert level("custom.thing") == 2
+
+
+def test_a_warning_or_error_is_never_hidden_by_its_event_type():
+    """Severity wins over the event's normal level: an observer warning is a failure, not polling noise."""
+    warning = record_level({**BASE, "event": "observer.output", "level": "WARNING", "text": "marker mismatch"})
+    error = record_level({**BASE, "event": "check.outcome", "level": "ERROR", "condition_before": False,
+                          "condition_after": False})
+    assert (warning, error) == (0, 0)
 
 
 def test_failed_statuses_are_defined_once():
@@ -79,8 +118,8 @@ def test_lifecycle_events_are_readable():
     service = {"ts": "2026-09-29T10:11:12.345-05:00", "level": "INFO"}
     watch = {**service, "watch": "psg"}
 
-    def fmt(record, verbose=False):
-        return format_record(record, verbose=verbose)
+    def fmt(record, level=1):
+        return format_record(record, level=level)
 
     assert fmt({**service, "event": "service.start", "version": "1", "config": "/c.toml"}) == (
         "10:11:12 service started (version 1, config /c.toml)"
@@ -174,5 +213,5 @@ def test_verbose_blocks_keep_their_newlines():
     """Sanitizing must not flatten the indented blocks the formatter builds."""
     record = {**BASE, "event": "hook.end", "hook": "on_true", "status": "failed", "duration": 0.1,
               "target": "t", "stderr": "one\ntwo\n"}
-    line = format_record(record, verbose=True)
+    line = format_record(record, level=2)
     assert "\n    one\n    two" in line

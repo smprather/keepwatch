@@ -18,7 +18,7 @@ from keepwatch import transfer
 from keepwatch.config import ConfigError, Discovery, discover_watches, load_global_config
 from keepwatch.durations import format_duration
 from keepwatch.logquery import LogFilter, follow_log, select_records
-from keepwatch.output import format_record, sanitize
+from keepwatch.output import NORMAL, format_record, record_level, sanitize
 from keepwatch.paths import Paths
 from keepwatch.statusview import collect_status, read_status, service_running
 
@@ -337,11 +337,11 @@ class Monitor:
         with self._lock:
             return self._rates.get(name)
 
-    def records(self, watch: str | None = None, *, verbose: bool = False) -> list[str]:
-        """The recent records, oldest first: one watch's, or every watch's."""
+    def records(self, watch: str | None = None, *, level: int = NORMAL) -> list[str]:
+        """The recent records worth showing at `level`, oldest first: one watch's, or every watch's."""
         with self._lock:
             chosen = list(self._by_watch.get(watch, ())) if watch is not None else list(self._all)
-        return [format_record(record, verbose=verbose) for record in chosen]
+        return [format_record(record, level=level) for record in chosen if record_level(record) <= level]
 
     def version(self) -> int:
         """Bumped on every record that arrives; the App redraws only when it changes."""

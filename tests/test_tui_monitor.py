@@ -292,7 +292,25 @@ def test_verbose_records_show_captured_output(xdg):
     monitor.start()
     monitor.stop()
     assert "the whole output" not in "\n".join(monitor.records())
-    assert "the whole output" in "\n".join(monitor.records(verbose=True))
+    assert "the whole output" in "\n".join(monitor.records(level=2))
+
+
+def test_records_are_filtered_by_verbosity_level(xdg):
+    """quiet: state changes and failures; normal: headlines and action results; verbose: everything."""
+    write_records(
+        xdg,
+        make_record("poll.start", watch="a", poll_id="p1", condition=False),
+        make_record("plugin.event", watch="a", poll_id="p1", message="found a.bin", fields={}),
+        make_record("hook.end", watch="a", poll_id="p1", hook="on_true", status="failed", duration=1.0, target="t"),
+        make_record("hook.end", watch="a", poll_id="p1", hook="on_true", status="ok", duration=1.0, target="t"),
+    )
+    monitor = loaded(xdg)
+    quiet = "\n".join(monitor.records(level=0))
+    normal = "\n".join(monitor.records(level=1))
+    verbose = "\n".join(monitor.records(level=2))
+    assert "found a.bin" not in quiet and "→ ok" not in quiet and "→ failed" in quiet
+    assert "found a.bin" in normal and "→ ok" in normal and "poll p1 start" not in normal
+    assert "poll p1 start" in verbose
 
 
 def test_the_version_changes_only_when_a_record_arrives(xdg):

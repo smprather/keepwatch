@@ -45,7 +45,7 @@ from keepwatch.logquery import LogFilter, follow_log, parse_when, select_records
 from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter, make_record
 from keepwatch.observers import build_observer, stop_all
 from keepwatch.offline import iso_time
-from keepwatch.output import ConsolePrinter, make_console, plain_output, use_utf8_output
+from keepwatch.output import NORMAL, VERBOSE, ConsolePrinter, make_console, plain_output, use_utf8_output
 from keepwatch.paths import PathError, Paths, ensure_private_dir, remove_stale_process_dirs, resolve_paths
 from keepwatch.pollengine import Fake, PollEngine, PollReport, parse_fakes
 from keepwatch.reference import UnknownTopic, render_all, render_topic, topic_index
@@ -264,7 +264,7 @@ def poll(
     global_config, watch = _load_one(app, name)
     records: list[dict] = []
     writer = LogWriter(app.paths.log_file, max_bytes=global_config.log.max_bytes, backups=global_config.log.backups)
-    display = records.append if as_json else ConsolePrinter(make_console(), verbose=verbose)
+    display = records.append if as_json else ConsolePrinter(make_console(), level=VERBOSE if verbose else NORMAL)
     reports: list[PollReport] = []
     with _process_dir(app.paths) as pid:
         engine = PollEngine(
@@ -451,7 +451,7 @@ def run_service(app: App, only: tuple[str, ...], verbose: bool, quiet: bool) -> 
         if sys.stdout is None:  # pythonw: no console, the log file has everything
             sink = QueueSink(writer.write)
         else:
-            printer = level_filter(ConsolePrinter(make_console(), verbose=verbose), minimum)
+            printer = level_filter(ConsolePrinter(make_console(), level=VERBOSE if verbose else NORMAL), minimum)
             sink = QueueSink(fan_out(writer.write, printer))
         stack.callback(sink.close)
         stack.callback(shutil.rmtree, paths.process_dir(os.getpid()), True)
@@ -556,7 +556,7 @@ def logs(
         failed=failed,
         poll_id=poll_id,
     )
-    printer = ConsolePrinter(make_console(), verbose=verbose)
+    printer = ConsolePrinter(make_console(), level=VERBOSE if verbose else NORMAL)
 
     def show(record: dict) -> None:
         if as_json:
@@ -913,7 +913,8 @@ def tui(app: App) -> None:
 
     Read-only: it never enables, disables or polls anything, and it writes nothing, so it is safe beside a
     running service (several at once, even). The arrow keys or j/k select a watch, `a` shows every watch's
-    records, `v` captured output, space pauses the pane, `r` re-reads the config, q quits.
+    records, `v` cycles the pane's verbosity (quiet, normal, verbose), space pauses the pane, `r` re-reads the
+    config, q quits.
 
     Needs a terminal: when stdout is not one, use `keepwatch status` or `keepwatch logs --json` instead.
 

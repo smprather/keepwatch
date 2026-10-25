@@ -16,6 +16,24 @@ Every Python hook receives one argument, `ctx`, a `keepwatch.Ctx`. The package s
 | `ctx.watch_dir` | `Path` | The watch directory, which is also the working directory. |
 | `ctx.log` | `logging.Logger` | Logs into keepwatch's log; see `keepwatch docs logging`. |
 
+## Headlines
+
+`ctx.event(message, **fields)` writes a plain-language headline (`plugin.event`) about what happened, as opposed
+to the detail `ctx.log` writes. Use it for the story a person watching the watch should read: a file found, a
+transfer started or finished, a sweep done. `level="WARNING"` (or `ERROR`) makes the line visible even at the
+TUI's quiet level, so a failure headline must use it. Keys become JSON fields in the log.
+
+```python
+def on_true(ctx):
+    ctx.event("pulling %s from %s" % (name, host), name=name)
+    try:
+        pull(name)
+    except Exception as exc:
+        ctx.event("pulling %s failed: %s" % (name, exc), level="WARNING", name=name)
+        raise
+    ctx.event("pulled %s" % name, name=name)
+```
+
 ## Ledgers
 
 `ctx.ledger(name)` is a persistent **set of keys**, each stamped with when it was added: the right place for

@@ -9,7 +9,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import DataTable, Footer, RichLog, Static
 
-from keepwatch.output import sanitize
+from keepwatch.output import NORMAL, sanitize
 from keepwatch.tui import monitor as view
 from keepwatch.tui.monitor import Monitor, Status, WatchRow
 
@@ -17,6 +17,7 @@ COLUMNS = ("WATCH", "STATE", "COND", "FAIL", "LAST", "NEXT", "OBS", "NOTE")
 PANE_LIMIT = 2000  # lines the pane widget keeps: a day-old monitor must not grow without bound
 NARROW = 80  # below this, NOTE goes; below NARROWEST, OBS follows
 NARROWEST = 68
+LEVEL_NAMES = ("quiet", "normal", "verbose")
 
 
 def line_style(line: str) -> str:
@@ -44,7 +45,7 @@ class KeepwatchApp(App[None]):
         Binding("j", "next_watch", "Next", show=False),
         Binding("k", "previous_watch", "Previous", show=False),
         Binding("a", "toggle_all", "all watches"),
-        Binding("v", "toggle_verbose", "verbose"),
+        Binding("v", "cycle_verbose", "verbosity"),
         Binding("space", "toggle_pause", "pause"),
         Binding("r", "rescan", "rescan"),
     ]
@@ -58,7 +59,7 @@ class KeepwatchApp(App[None]):
         self.selected: str | None = None
         self.table_columns: tuple[str, ...] = ()
         self.show_all = False
-        self.verbose = False
+        self.level = NORMAL
         self.paused = False
         self.pending = 0
         self.pane_lines: list[str] = []  # what the pane currently shows (tests read this)
@@ -69,7 +70,7 @@ class KeepwatchApp(App[None]):
         # which line. The widget is the thing the operator sees; `pane_lines` is only the model.
         self._drawn = 0
         self._drawn_last: str | None = None
-        self._drawn_key: tuple[str | None, bool] | None = None
+        self._drawn_key: tuple[str | None, int] | None = None
 
     # -- layout --------------------------------------------------------------
 
@@ -115,14 +116,18 @@ class KeepwatchApp(App[None]):
 
     def update_status(self) -> None:
         self.status = self.monitor.status()
-        self.banner = view.banner_text(self.status, time.time())
+        self._update_banner()
+        self._fill_table()
+        self._update_header()
+
+    def _update_banner(self) -> None:
+        assert self.status is not None  # update_status (mount) sets it before anything calls this
+        self.banner = f"{view.banner_text(self.status, time.time())} · log: {LEVEL_NAMES[self.level]} (v)"
         for problem in self.status.problems[:3]:
             self.banner += f"\n! {sanitize(problem)}"
         if len(self.status.problems) > 3:
             self.banner += f"\n! … {len(self.status.problems) - 3} more problems"
         self.query_one("#banner", Static).update(self.banner)
-        self._fill_table()
-        self._update_header()
 
     def update_records(self) -> None:
         version = self.monitor.version()
@@ -187,8 +192,8 @@ class KeepwatchApp(App[None]):
         the count drawn has to be kept per filter - otherwise another watch's record re-appends these lines.
         """
         pane = self.query_one("#pane", RichLog)
-        key = (self._selected_name(), self.verbose)
-        lines = self.monitor.records(key[0], verbose=self.verbose)
+        key = (self._selected_name(), self.level)
+        lines = self.monitor.records(key[0], level=self.level)
         slid = self._drawn > 0 and (self._drawn > len(lines) or lines[self._drawn - 1] != self._drawn_last)
         if full or key != self._drawn_key or slid:
             pane.clear()  # the window moved under us, or the filter changed: redraw from the top
@@ -239,8 +244,9 @@ class KeepwatchApp(App[None]):
         self.show_all = not self.show_all
         self._show_selected()
 
-    def action_toggle_verbose(self) -> None:
-        self.verbose = not self.verbose
+    def action_cycle_verbose(self) -> None:
+        self.level = (self.level + 1) % len(LEVEL_NAMES)
+        self._update_banner()
         self._show_selected()
 
     def action_toggle_pause(self) -> None:

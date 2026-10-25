@@ -114,6 +114,7 @@ def delete_remote(ctx: Ctx, entries: list[str]) -> None:
             continue
         if isinstance(message, dict) and isinstance(message.get("index"), int):
             results[message["index"]] = message
+    swept = 0
     for index, (entry, key, item) in enumerate(queued):
         name = item["path"].rsplit("/", 1)[-1]
         result = results.get(index)
@@ -122,6 +123,7 @@ def delete_remote(ctx: Ctx, entries: list[str]) -> None:
             pending.discard(entry)
             pulled.discard(key)
             skipped.add(key)
+            swept += 1
             if event == "deleted":
                 ctx.log.info("deleted %s from %s", name, remote)
             else:
@@ -142,9 +144,12 @@ def delete_remote(ctx: Ctx, entries: list[str]) -> None:
             else:
                 reason = " | ".join(stderr.strip().splitlines()[-3:]) or "no answer"
             ctx.log.warning("could not delete %s from %s (will retry): %s", name, remote, reason)
+    if swept:
+        ctx.event(f"swept {swept} file(s) from {remote}", count=swept, remote=remote)
 
 
 def check(ctx: Ctx) -> tuple[bool, list[dict[str, Any]]]:
+    settings = ctx.settings
     pulled = ctx.ledger(LEDGER)
     skipped = ctx.ledger(SKIPPED, expire=SKIP_FOR)
     new: list[dict[str, Any]] = []
@@ -156,9 +161,11 @@ def check(ctx: Ctx) -> tuple[bool, list[dict[str, Any]]]:
         if key in pulled or key in skipped or key in seen:
             continue
         seen.add(key)
-        new.append(
-            {"path": event["path"], "name": event["name"], "size": event["size"], "sha256": event.get("sha256"), "key": key}
-        )
+        item = {"path": event["path"], "name": event["name"], "size": event["size"],
+                "sha256": event.get("sha256"), "key": key}
+        new.append(item)
+        ctx.event(f"found {item['name']} ({format_bytes(item['size'])}) on {settings['remote']}",
+                  name=item["name"], size=item["size"], remote=settings["remote"])
     return bool(new) or bool(due_deletions(ctx)), new
 
 
@@ -202,6 +209,21 @@ def on_true(ctx: Ctx) -> None:
                 # A fair share of what is left, so one slow file cannot starve the rest of the queue (`file_timeout`
                 # caps it harder). A file that fails or runs out of its share is logged and the queue carries on.
                 budget = file_budget(ctx.remaining, len(items) - index, settings["file_timeout"])
+                part = Path(settings["local_dir"]) / f".{Path(item['path']).name}.part"
+                resumed = 0
+                if settings["resume"]:
+                    with contextlib.suppress(OSError):
+                        resumed = part.stat().st_size
+                if resumed:
+                    ctx.event(
+                        f"resuming {item['name']} at {format_bytes(resumed)} of {format_bytes(item['size'])} "
+                        f"from {settings['remote']}",
+                        name=item["name"], size=item["size"], offset=resumed, remote=settings["remote"],
+                    )
+                else:
+                    ctx.event(f"pulling {item['name']} ({format_bytes(item['size'])}) from {settings['remote']}",
+                              name=item["name"], size=item["size"], remote=settings["remote"])
+                started = time.monotonic()
                 try:
                     final = ctx.transfer.pull(
                         f"{settings['remote']}:{item['path']}",
@@ -215,28 +237,31 @@ def on_true(ctx: Ctx) -> None:
                     )
                 except TransferMismatch as exc:
                     # The file changed after it was reported; its new version comes as a new event.
-                    ctx.log.warning("%s changed on %s after it was reported (%s); not pulled", item["name"], settings["remote"], exc)
+                    ctx.event(f"{item['name']} changed on {settings['remote']} after it was reported ({exc}); "
+                              "not pulled", level="WARNING", name=item["name"], remote=settings["remote"])
                     continue
                 except TransferMissing as exc:
                     # The producer withdrew the file between the report and this pull: a permanent condition for
                     # this event, so retrying it would fail forever and starve the real queue behind it (issue 14).
                     if settings["on_missing"] == "fail":
                         error = error or exc
-                        ctx.log.warning("pulling %s from %s failed (%s); the rest of the queue is still tried",
-                                        item["name"], settings["remote"], exc)
+                        ctx.event(f"pulling {item['name']} from {settings['remote']} failed ({exc}); "
+                                  "the rest of the queue is still tried",
+                                  level="WARNING", name=item["name"], remote=settings["remote"])
                     else:
                         skipped.add(item["key"])
                         # A resumable attempt keeps its partial when it fails; a file that is gone never uses it.
-                        part = Path(settings["local_dir"]) / f".{Path(item['path']).name}.part"
                         with contextlib.suppress(OSError):
                             part.unlink(missing_ok=True)
-                        ctx.log.warning("%s is gone from %s (withdrawn after it was reported); skipping it",
-                                        item["name"], settings["remote"])
+                        ctx.event(f"{item['name']} is gone from {settings['remote']} "
+                                  "(withdrawn after it was reported); skipping it",
+                                  level="WARNING", name=item["name"], remote=settings["remote"])
                     continue
                 except (TransferFailed, CommandFailed, OSError) as exc:
                     error = error or exc
-                    ctx.log.warning("pulling %s from %s failed (%s); the rest of the queue is still tried",
-                                    item["name"], settings["remote"], exc)
+                    ctx.event(f"pulling {item['name']} from {settings['remote']} failed ({exc}); "
+                              "the rest of the queue is still tried",
+                              level="WARNING", name=item["name"], remote=settings["remote"])
                     continue
                 if queue is not None:  # queued first: a crash before the next line still gets the file deleted
                     entry = queue_key(item["key"], sha256)
@@ -244,7 +269,9 @@ def on_true(ctx: Ctx) -> None:
                     fresh.append(entry)
                 pulled.add(item["key"])
                 pulled_now += 1
-                ctx.log.info("pulled %s", item["name"], extra={"local": str(final), "size": item["size"]})
+                duration = time.monotonic() - started
+                ctx.event(f"pulled {item['name']} ({format_bytes(item['size'])}) in {duration:.1f}s",
+                          local=str(final), size=item["size"], duration=round(duration, 3))
         if pulled_now:
             cleanup_parts(ctx, Path(settings["local_dir"]), settings["part_max_age"])
     except Exception as exc:  # deletes below still run for what was pulled; the error is raised after them
