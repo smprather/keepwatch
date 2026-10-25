@@ -13,6 +13,10 @@ twice. For `pull`, a source file that is simply **gone** is a different matter: 
 the pull section below). `push` and `mirror` have no such case: they report the failure and try again on the next
 poll.
 
+The `pull` and `push` recipes also write plain-language **headlines** (`ctx.event`, see `keepwatch docs logging`)
+for their story points: a file found/staged, a transfer starting (or resuming at an offset), finishing with its
+size and duration, a sweep, and failures (which stay visible at the TUI's quiet level).
+
 A pull that is killed (a stop, a service restart, a timeout that kills the process) leaves a hidden
 `.NAME.part` in the staging folder. The next attempt **discards it and says how many bytes that cost**, and
 `part_max_age` (default 7 days) deletes stale ones after a successful pull. With `resume = true` — which needs

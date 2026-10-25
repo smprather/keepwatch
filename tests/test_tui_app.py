@@ -154,18 +154,32 @@ def test_selecting_a_watch_shows_only_its_records_then_all(xdg, make_watch):
         run_app(monitor, check)
 
 
-def test_v_toggles_verbose_output(xdg, make_watch):
+def test_v_cycles_quiet_normal_verbose_with_a_visible_indicator(xdg, make_watch):
     make_watch("a", config=WATCH_CONFIG)
     publish(xdg, status_document(watches={"a": entry()}))
-    write_records(xdg, make_record("hook.end", watch="a", poll_id="p1", hook="on_true", status="ok", duration=1.0,
-                                   target="a.py:on_true", stdout="the whole output\n"))
+    write_records(
+        xdg,
+        make_record("plugin.event", watch="a", poll_id="p1", message="found a.bin", fields={}),
+        make_record("hook.end", watch="a", poll_id="p1", hook="on_true", status="ok", duration=1.0,
+                    target="a.py:on_true", stdout="the whole output\n"),
+    )
     monitor = loaded(xdg)
 
     async def check(app, pilot):
-        assert "the whole output" not in "\n".join(app.pane_lines)
+        assert app.level == 1 and "log: normal" in app.banner
+        text = "\n".join(app.pane_lines)
+        assert "found a.bin" in text and "the whole output" not in text
         await pilot.press("v")
         await pilot.pause()
-        assert app.verbose is True and "the whole output" in "\n".join(app.pane_lines)
+        assert app.level == 2 and "log: verbose" in app.banner
+        assert "the whole output" in "\n".join(app.pane_lines)
+        await pilot.press("v")
+        await pilot.pause()
+        assert app.level == 0 and "log: quiet" in app.banner
+        assert app.pane_lines == []
+        await pilot.press("v")
+        await pilot.pause()
+        assert app.level == 1 and "found a.bin" in "\n".join(app.pane_lines)
 
     with running(xdg):
         monitor.refresh()

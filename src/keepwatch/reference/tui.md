@@ -29,6 +29,19 @@ up only if an existing field changes meaning, so a consumer can rely on the ones
 
 Below 80 columns `NOTE` is dropped, and then `OBS`.
 
+## Verbosity
+
+The pane starts at **normal**. `v` cycles quiet → normal → verbose → quiet; the banner shows the current level.
+The table, the banner and the pane header are unaffected: this only filters the pane's log lines.
+
+| Level | Shows |
+| --- | --- |
+| quiet | failures, `watch.offline`/`watch.online`, service errors, alerts — state changes only |
+| normal | + headlines (`plugin.event`), condition edges with their actions, hook results, watches added/removed, config reloads, observer connect/drop |
+| verbose | + every poll's `poll.start`/`poll.end`, `check.outcome` detail, commands, captured stdout/stderr, payloads, observer events |
+
+A record that keepwatch does not recognise yet stays visible at verbose rather than disappearing.
+
 ## Keys
 
 | Key | What it does |
@@ -36,7 +49,7 @@ Below 80 columns `NOTE` is dropped, and then `OBS`.
 | `q`, `Ctrl-C` | quit |
 | `↑`/`↓`, `j`/`k` | select a watch |
 | `a` | every watch's records instead of the selected one's |
-| `v` | verbose: captured stdout/stderr and payloads |
+| `v` | cycle the pane's verbosity: quiet → normal → verbose |
 | `space` | pause the pane (records keep arriving; the header counts them) |
 | `r` | re-read the config now (new and removed watches) |
 

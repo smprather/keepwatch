@@ -200,6 +200,17 @@ class PollEngine:
             self._sink(make_record("command", level=level, **tag, **fields))
             return
         level = str(message.get("level")) if message.get("level") in _PLUGIN_LEVELS else "INFO"
+        if message.get("type") == "event":
+            self._sink(
+                make_record(
+                    "plugin.event",
+                    level=level,
+                    **tag,
+                    message=message.get("message"),
+                    fields=message.get("fields") or {},
+                )
+            )
+            return
         self._sink(
             make_record(
                 "plugin.log",

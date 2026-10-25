@@ -79,6 +79,34 @@ def test_pull_recipe_pulls_new_files_once(make_watch, server, tmp_path, xdg):
     assert second.outcome is Outcome.FALSE
 
 
+def test_pull_recipe_headlines_the_story(make_watch, server, tmp_path, xdg):
+    """found -> pulling -> pulled, in plain language, without needing to know recipe internals."""
+    (server.root / "a.tar.gz").write_bytes(b"data")
+    watch = load_watch_config(pull_watch(make_watch, server, tmp_path))
+    records = []
+    report = engine(xdg, records).poll(watch, WatchState(False), events=[file_event("a.tar.gz", b"data")])
+    assert not report.failed, records
+    headlines = [r["message"] for r in records if r["event"] == "plugin.event"]
+    assert any(m.startswith("found a.tar.gz (4 B) on u@127.0.0.1") for m in headlines), headlines
+    assert any(m.startswith("pulling a.tar.gz (4 B) from u@127.0.0.1") for m in headlines), headlines
+    assert any(m.startswith("pulled a.tar.gz (4 B) in ") for m in headlines), headlines
+
+
+def test_a_resumed_pull_says_where_it_continues(make_watch, server, tmp_path, xdg):
+    data = bytes(range(256)) * 40
+    (server.root / "big.bin").write_bytes(data)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / ".big.bin.part").write_bytes(data[:4096])
+    watch = load_watch_config(pull_watch(make_watch, server, tmp_path,
+                                         extra='protocol = "sftp"\nresume = true\n'))
+    records = []
+    report = engine(xdg, records).poll(watch, WatchState(False), events=[file_event("big.bin", data)])
+    assert not report.failed, records
+    headlines = [r["message"] for r in records if r["event"] == "plugin.event"]
+    assert any(m.startswith("resuming big.bin at 4 KiB of 10 KiB from u@127.0.0.1") for m in headlines), headlines
+
+
 def test_a_failing_file_does_not_stop_the_rest_of_the_queue(make_watch, server, tmp_path, xdg):
     """One file that cannot be handled must not starve the queue, and the poll still fails so it is retried (issue 5)."""
     (server.root / "good.tar.gz").write_bytes(b"data")
@@ -92,7 +120,7 @@ def test_a_failing_file_does_not_stop_the_rest_of_the_queue(make_watch, server, 
     report = engine(xdg, records).poll(watch, WatchState(False), events=events)
     assert report.failed  # reported, so the next poll retries
     assert (stage / "good.tar.gz").read_bytes() == b"data"  # the queue carried on
-    messages = [r.get("message", "") for r in records if r["event"] == "plugin.log"]
+    messages = [r.get("message", "") for r in records if r["event"] == "plugin.event"]
     assert any("the rest of the queue is still tried" in message for message in messages), messages
 
 
@@ -123,7 +151,7 @@ def test_a_withdrawn_file_is_skipped_and_the_queue_behind_it_flows(make_watch, s
     assert (stage / "good.bin").read_bytes() == b"data"  # the queue behind it flowed
     skipped = Ledger(xdg.watch_data_dir("relay-pull") / "ledgers" / "skipped.json")
     assert withdrawn_key("withdrawn.bin") in skipped
-    messages = [r.get("message", "") for r in records if r["event"] == "plugin.log"]
+    messages = [r.get("message", "") for r in records if r["event"] == "plugin.event"]
     assert any("withdrawn.bin" in message and "gone" in message for message in messages), messages
     assert not (stage / ".withdrawn.bin.part").exists()  # a resumable partial of a withdrawn file is litter
     second = engine(xdg, []).poll(watch, first.after, events=events)
@@ -164,7 +192,7 @@ def test_on_missing_fail_keeps_the_withdrawn_file_failing(make_watch, server, tm
     assert report.failed
     skipped = Ledger(xdg.watch_data_dir("relay-pull") / "ledgers" / "skipped.json")
     assert withdrawn_key("withdrawn.bin") not in skipped
-    messages = [r.get("message", "") for r in records if r["event"] == "plugin.log"]
+    messages = [r.get("message", "") for r in records if r["event"] == "plugin.event"]
     assert any("withdrawn.bin" in message and "the rest of the queue is still tried" in message for message in messages), messages
 
 
@@ -224,7 +252,7 @@ def test_pull_recipe_does_not_record_a_mismatched_pull(make_watch, server, tmp_p
     assert not report.failed
     assert not list((tmp_path / "stage").iterdir())
     assert len(Ledger(xdg.watch_data_dir("relay-pull") / "ledgers" / "pulled.json")) == 0
-    assert any("after it was reported" in r["message"] for r in records if r["event"] == "plugin.log")
+    assert any("after it was reported" in r["message"] for r in records if r["event"] == "plugin.event")
 
 
 def test_pull_recipe_ignores_other_events(make_watch, server, tmp_path, xdg):

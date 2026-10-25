@@ -187,7 +187,7 @@ class _MessageReader(threading.Thread):
                 self.hello = message
             elif kind == "result":
                 self.result = message
-            elif kind in ("log", "command"):
+            elif kind in ("log", "event", "command"):
                 if self.delivered_bytes + len(raw) > self._limit:
                     self.dropped_bytes += len(raw)
                     continue

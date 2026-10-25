@@ -38,6 +38,7 @@ An action succeeds when it returns and fails when it raises. Its return value is
 - Each hook call is a **fresh process**: module-level variables do not survive between calls or from check to actions. Pass data from check to actions through the payload; keep anything longer-lived in `ctx.data_dir` or a ledger.
 - watch.py is imported as the module `keepwatch_watch`. The watch directory is first on `sys.path`, so `watch.py` can import sibling modules (`helpers.py`) and packages in the watch directory. The working directory is the watch directory.
 - `print()` and anything written to stdout or stderr (including by programs you start without `ctx.run`) is captured into the hook's log record (the first and last 32 KiB with the default `capture_bytes`).
-- Logging: use `ctx.log` (a standard `logging.Logger`); see `keepwatch docs logging`.
+- Logging: use `ctx.log` (a standard `logging.Logger`) for detail and `ctx.event` for a plain-language headline;
+  see `keepwatch docs logging`.
 - Third-party packages: list them in `python_dependencies`; see `keepwatch docs dependencies`. Without it, watch.py can import the standard library and `keepwatch`.
 - `sys.exit()` in a hook is treated like any other exception: the hook fails.

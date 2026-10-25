@@ -171,6 +171,17 @@ def test_run_captures_and_reports(tmp_path):
     assert record["timed_out"] is False and record["shell"] is False
 
 
+def test_event_emits_a_headline_message(tmp_path):
+    emitted = []
+    ctx = make_ctx(tmp_path, emitted=emitted)
+    ctx.event("found a.bin (4 KiB) on host", size=4096)
+    ctx.event("pull failed", level="WARNING", reason="denied")
+    assert emitted == [
+        {"type": "event", "level": "INFO", "message": "found a.bin (4 KiB) on host", "fields": {"size": 4096}},
+        {"type": "event", "level": "WARNING", "message": "pull failed", "fields": {"reason": "denied"}},
+    ]
+
+
 def test_run_raises_on_failure_with_stderr_tail(tmp_path):
     ctx = make_ctx(tmp_path)
     with pytest.raises(CommandFailed, match="exited 3.*nope"):

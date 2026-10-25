@@ -73,6 +73,22 @@ def test_push_recipe_uploads_with_a_marker_then_deletes(make_watch, server, tmp_
     assert not path.exists()
 
 
+def test_push_recipe_headlines_the_story(make_watch, server, tmp_path, xdg):
+    """staged -> pushing -> pushed with the marker verified, in plain language."""
+    staged(tmp_path)
+    watch = push_watch(make_watch, server, tmp_path)
+    records = []
+    global_config = load_global_config(xdg.config_file, xdg)
+    engine = PollEngine(runner=Runner(), paths=xdg, global_config=global_config, sink=records.append, pid=os.getpid())
+    report = engine.poll(watch, WatchState(False))
+    assert report.outcome is Outcome.TRUE and not report.failed, records
+    headlines = [r["message"] for r in records if r["event"] == "plugin.event"]
+    assert any(m == "1 file(s) staged for u@127.0.0.1:" for m in headlines), headlines
+    assert any(m == "pushing 1 file(s) to u@127.0.0.1:" for m in headlines), headlines
+    assert any(m.startswith("pushed c.tar.gz (7 B) in ") and m.endswith(", sha256 marker verified")
+               for m in headlines), headlines
+
+
 def test_unreachable_destination_is_unknown(make_watch, server, tmp_path, xdg):
     path = staged(tmp_path)
     watch = push_watch(make_watch, server, tmp_path, f"reachable_port = {closed_port()}\nreachable_timeout = '2s'\n")

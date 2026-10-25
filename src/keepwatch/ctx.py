@@ -423,6 +423,15 @@ class Ctx:
             }
         )
 
+    def event(self, message: str, *, level: str = "INFO", **fields: Any) -> None:
+        """Write a headline: one plain-language line about what happened.
+
+        Unlike `ctx.log`, which is for detail, a headline is the story the operator should read at normal
+        verbosity ("found export-1.tar.gz (4.1 GB) on relay1"). A headline at WARNING or above is shown even at
+        the quiet level, so failures must use that level. Keys become searchable JSON fields.
+        """
+        self._emit({"type": "event", "level": level, "message": message, "fields": fields})
+
     def ledger(self, name: str, expire: str | float | None = None) -> Ledger:
         """Open the persistent ledger `name` (letters, digits, '_', '.', '-').
 

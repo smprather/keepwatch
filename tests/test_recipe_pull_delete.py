@@ -90,6 +90,17 @@ def test_a_verified_pull_deletes_the_source(linux1, make_watch, tmp_path, xdg):
 
 
 @pytest.mark.posix_only
+def test_a_verified_pull_headlines_the_sweep(linux1, make_watch, tmp_path, xdg):
+    source = linux1.root / "a.tar.gz"
+    source.write_bytes(b"data")
+    records = []
+    report = poll(xdg, sweep_watch(make_watch, linux1, tmp_path), [file_event(source)], records=records)
+    assert report.outcome is Outcome.TRUE and not report.failed
+    headlines = [r["message"] for r in records if r["event"] == "plugin.event"]
+    assert any(m == "swept 1 file(s) from u@127.0.0.1" for m in headlines), headlines
+
+
+@pytest.mark.posix_only
 def test_a_failed_delete_is_retried_after_delete_retry(linux1, make_watch, tmp_path, xdg):
     source = linux1.root / "a.tar.gz"
     source.write_bytes(b"data")
@@ -118,7 +129,7 @@ def test_a_file_changed_before_its_pull_does_not_fail_the_poll(linux1, make_watc
     report = poll(xdg, sweep_watch(make_watch, linux1, tmp_path), [event], records=records)
     assert not report.failed
     assert source.exists() and len(ledger(xdg, "pulled")) == 0 and len(ledger(xdg, "to_delete")) == 0
-    assert any("changed on u@127.0.0.1 after it was reported" in r["message"] for r in records if r["event"] == "plugin.log")
+    assert any("changed on u@127.0.0.1 after it was reported" in r["message"] for r in records if r["event"] == "plugin.event")
 
 
 @pytest.mark.posix_only
