@@ -6,24 +6,24 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch.platform import IS_WINDOWS
-from keepwatch.runner import Runner
 from portable import exits, py, script
+from watchglass.platform import IS_WINDOWS
+from watchglass.runner import Runner
 
 ACT_PY = '''
     import json, os, pathlib
     env = os.environ
     seen = {
-        "condition": env["KEEPWATCH_CONDITION"],
-        "hook": env["KEEPWATCH_HOOK"],
-        "dest": env["KEEPWATCH_SETTING_DEST"],
+        "condition": env["WATCHGLASS_CONDITION"],
+        "hook": env["WATCHGLASS_HOOK"],
+        "dest": env["WATCHGLASS_SETTING_DEST"],
         "extra": env["EXTRA"],
         "global": env["GLOBAL_ONLY"],
-        "payload": json.loads(pathlib.Path(env["KEEPWATCH_PAYLOAD_FILE"]).read_text()),
-        "settings": json.loads(pathlib.Path(env["KEEPWATCH_SETTINGS_FILE"]).read_text()),
+        "payload": json.loads(pathlib.Path(env["WATCHGLASS_PAYLOAD_FILE"]).read_text()),
+        "settings": json.loads(pathlib.Path(env["WATCHGLASS_SETTINGS_FILE"]).read_text()),
         "cwd": os.getcwd(),
     }
-    pathlib.Path(env["KEEPWATCH_RUN_DIR"], "seen.json").write_text(json.dumps(seen))
+    pathlib.Path(env["WATCHGLASS_RUN_DIR"], "seen.json").write_text(json.dumps(seen))
 '''
 
 SLEEP = py("import time; time.sleep(30)")
@@ -46,7 +46,7 @@ def test_string_check_runs_in_the_platform_shell(make_watch, call_for):
 def test_check_passes_a_payload(make_watch, call_for):
     watch_dir = make_watch("cmd", config='[hooks]\ncheck = ["./check.py"]\n', files={"check.py": script('''
         import os, pathlib
-        pathlib.Path(os.environ["KEEPWATCH_PAYLOAD_OUT"]).write_text('["a.tar.gz", "b.tar.gz"]')
+        pathlib.Path(os.environ["WATCHGLASS_PAYLOAD_OUT"]).write_text('["a.tar.gz", "b.tar.gz"]')
     ''')})
     result = Runner().run(call_for(watch_dir))
     assert result.status == "true"
@@ -57,11 +57,11 @@ def test_check_passes_a_payload(make_watch, call_for):
 def test_invalid_payload_json_is_an_error(make_watch, call_for):
     watch_dir = make_watch("cmd", config='[hooks]\ncheck = ["./check.py"]\n', files={"check.py": script('''
         import os, pathlib
-        pathlib.Path(os.environ["KEEPWATCH_PAYLOAD_OUT"]).write_text("not json")
+        pathlib.Path(os.environ["WATCHGLASS_PAYLOAD_OUT"]).write_text("not json")
     ''')})
     result = Runner().run(call_for(watch_dir))
     assert result.status == "error"
-    assert result.reason.startswith("$KEEPWATCH_PAYLOAD_OUT does not contain valid JSON")
+    assert result.reason.startswith("$WATCHGLASS_PAYLOAD_OUT does not contain valid JSON")
 
 
 def test_action_sees_environment_payload_and_settings(xdg, make_watch, call_for):
@@ -170,7 +170,7 @@ def test_terminate_all_stops_running_hooks(make_watch, call_for):
     thread.join(10)
     assert results and results[0].status == "error"
     if IS_WINDOWS:
-        assert results[0].reason == "terminated by keepwatch"
+        assert results[0].reason == "terminated by watchglass"
     else:
         assert results[0].signal == 15
 
@@ -190,7 +190,7 @@ def test_close_refuses_new_hooks_and_kill_all_stops_stubborn_ones(make_watch, ca
     thread.join(10)
     assert results[0].signal == 9
     refused = runner.run(call_for(watch_dir))
-    assert (refused.status, refused.reason) == ("error", "keepwatch is shutting down")
+    assert (refused.status, refused.reason) == ("error", "watchglass is shutting down")
 
 
 @pytest.mark.windows_only
@@ -204,6 +204,6 @@ def test_close_terminates_at_once_and_refuses_new_hooks_on_windows(make_watch, c
     runner.close()
     thread.join(10)
     assert not thread.is_alive()
-    assert results[0].reason == "terminated by keepwatch"
+    assert results[0].reason == "terminated by watchglass"
     refused = runner.run(call_for(watch_dir))
-    assert (refused.status, refused.reason) == ("error", "keepwatch is shutting down")
+    assert (refused.status, refused.reason) == ("error", "watchglass is shutting down")

@@ -1,10 +1,10 @@
 
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
-from keepwatch.locks import hold_lock
-from keepwatch.offline import read_offline
-from keepwatch.paths import ensure_private_dir
+from watchglass.cli import cli
+from watchglass.locks import hold_lock
+from watchglass.offline import read_offline
+from watchglass.paths import ensure_private_dir
 
 
 def run(*args):

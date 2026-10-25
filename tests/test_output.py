@@ -1,7 +1,7 @@
 import io
 import sys
 
-from keepwatch.output import format_record, plain_output, record_level, use_utf8_output
+from watchglass.output import format_record, plain_output, record_level, use_utf8_output
 
 BASE = {"ts": "2026-09-29T10:11:12.345-05:00", "level": "INFO", "watch": "psg", "poll_id": "abc123"}
 
@@ -107,7 +107,7 @@ def test_a_warning_or_error_is_never_hidden_by_its_event_type():
 
 
 def test_failed_statuses_are_defined_once():
-    from keepwatch import output, pollengine, runner
+    from watchglass import output, pollengine, runner
 
     assert runner.FAILED_STATUSES == frozenset({"error", "failed", "timeout"})
     assert not hasattr(output, "_FAILED_STATUSES")
@@ -144,7 +144,7 @@ def test_lifecycle_events_are_readable():
         "10:11:12 psg back online: enabled by user"
     )
     assert fmt({**watch, "event": "watch.crash", "error": "KeyError: 'x'", "traceback": "Traceback\n  boom"}) == (
-        "10:11:12 psg keepwatch internal error: KeyError: 'x'\n  traceback:\n    Traceback\n      boom"
+        "10:11:12 psg watchglass internal error: KeyError: 'x'\n  traceback:\n    Traceback\n      boom"
     )
     assert fmt({**watch, "event": "alert.end", "alert_event": "offline", "status": "ok", "duration": 0.5}) == (
         "10:11:12 psg alert_command (offline) → ok (0.50s)"
@@ -167,7 +167,7 @@ def test_cli_error_is_readable():
 
 
 def test_use_utf8_output_reconfigures_a_code_page_stream(monkeypatch):
-    """A Windows pipe is encoded with the console code page (cp1252), which cannot write keepwatch's arrows."""
+    """A Windows pipe is encoded with the console code page (cp1252), which cannot write watchglass's arrows."""
     buffer = io.BytesIO()
     stream = io.TextIOWrapper(buffer, encoding="cp1252", newline="")
     monkeypatch.setattr(sys, "stdout", stream)

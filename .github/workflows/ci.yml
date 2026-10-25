@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, "keepwatch-*"]
+    branches: [main, "watchglass-*"]
     tags: ["v*"]
   pull_request:
 
@@ -40,5 +40,5 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2, pinned to a commit
         with:
           persist-credentials: false
-      - run: python -m py_compile src/keepwatch/remote_watcher.py tests/remote_watcher_selftest.py
+      - run: python -m py_compile src/watchglass/remote_watcher.py tests/remote_watcher_selftest.py
       - run: python tests/remote_watcher_selftest.py -v

@@ -1,14 +1,14 @@
 import json
 import os
 
-from keepwatch.config import load_global_config, load_watch_config
-from keepwatch.pollengine import PollEngine
-from keepwatch.runner import Runner
-from keepwatch.state import Outcome, WatchState
 from portable import py
+from watchglass.config import load_global_config, load_watch_config
+from watchglass.pollengine import PollEngine
+from watchglass.runner import Runner
+from watchglass.state import Outcome, WatchState
 
 EVENTS = ({"event": "file", "name": "a.gz", "observer": "inbox"}, {"line": "hi", "observer": "feed"})
-COPY_EVENTS = py('import os, shutil; shutil.copy(os.environ["KEEPWATCH_EVENTS_FILE"], "events.json")')
+COPY_EVENTS = py('import os, shutil; shutil.copy(os.environ["WATCHGLASS_EVENTS_FILE"], "events.json")')
 WATCH_PY = """
     import json
 

@@ -1,6 +1,6 @@
 """The recipes' per-file budget: one slow file must not starve the rest of the queue (issue 5)."""
 
-from keepwatch.recipes import file_budget
+from watchglass.recipes import file_budget
 
 
 def test_a_file_gets_an_equal_share_of_what_is_left():

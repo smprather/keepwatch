@@ -9,12 +9,12 @@ from typing import Any, cast
 
 import pytest
 
-from keepwatch import observers
-from keepwatch.config import ObserverConfig, load_watch_config
-from keepwatch.ctx import Checkpoint, checkpoint_file
-from keepwatch.observers import RemoteTreeObserver, _remote_path, build_observer
 from portable import PY
 from test_remote_files_observer import FAKE_SSH, age, kinds, stop, wait_for
+from watchglass import observers
+from watchglass.config import ObserverConfig, load_watch_config
+from watchglass.ctx import Checkpoint, checkpoint_file
+from watchglass.observers import RemoteTreeObserver, _remote_path, build_observer
 
 WATCH_CONFIG = "[observe.local]\nkind = 'files'\npath = '.'\n"  # a valid watch; the observer under test is built by hand
 
@@ -65,7 +65,7 @@ def tree_observer(make_watch, xdg, remote_dir, *, checkpoint=None, deliver=None,
 
 
 def options_of(observer):
-    """The KEEPWATCH_REMOTE_ARGS the observer sends the watcher on stdin, as the watcher parses them."""
+    """The WATCHGLASS_REMOTE_ARGS the observer sends the watcher on stdin, as the watcher parses them."""
     assert observer.config.stdin is not None
     first = observer.config.stdin.split("\n", 1)[0]
     return json.loads(json.loads(first.split(" = ", 1)[1]))
@@ -179,6 +179,6 @@ def test_a_dropped_event_reconnects_the_watcher(make_watch, xdg, tmp_path):
 
 def test_remote_tree_is_not_a_user_observer_kind():
     """The mirror recipe declares this observer itself: no watch config may name it (yet)."""
-    from keepwatch import config
+    from watchglass import config
 
     assert "remote_tree" not in config._OBSERVER_KIND_KEYS

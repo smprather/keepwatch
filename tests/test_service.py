@@ -5,9 +5,9 @@ import time
 
 import pytest
 
-from keepwatch import service as service_module
-from keepwatch.config import ConfigError
-from keepwatch.service import Service
+from watchglass import service as service_module
+from watchglass.config import ConfigError
+from watchglass.service import Service
 
 
 def make_service(xdg, records, **kwargs):

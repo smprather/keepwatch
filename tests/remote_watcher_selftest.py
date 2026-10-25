@@ -1,4 +1,4 @@
-"""Tests for keepwatch's remote watcher. Python 3.6+ and the standard library only.
+"""Tests for watchglass's remote watcher. Python 3.6+ and the standard library only.
 
 CI runs this file directly under Python 3.6 (`python tests/remote_watcher_selftest.py -v`); the main suite
 imports WatcherTests (tests/test_remote_watcher.py), so it also runs on every supported Python and OS.
@@ -18,18 +18,18 @@ import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SOURCE = os.path.normpath(os.path.join(HERE, os.pardir, "src", "keepwatch", "remote_watcher.py"))
+SOURCE = os.path.normpath(os.path.join(HERE, os.pardir, "src", "watchglass", "remote_watcher.py"))
 FAST = {"settle": 1, "interval": 0.2, "heartbeat": 30}
 _COPY = []
 
 
 def watcher():
-    """The watcher copied into a directory of its own, as it runs in production (from stdin, away from keepwatch).
+    """The watcher copied into a directory of its own, as it runs in production (from stdin, away from watchglass).
 
-    Run in place, src/keepwatch/ would be first on sys.path and keepwatch's modules could shadow the stdlib.
+    Run in place, src/watchglass/ would be first on sys.path and watchglass's modules could shadow the stdlib.
     """
     if not _COPY:
-        directory = tempfile.mkdtemp(prefix="keepwatch-watcher-")
+        directory = tempfile.mkdtemp(prefix="watchglass-watcher-")
         atexit.register(shutil.rmtree, directory, True)
         target = os.path.join(directory, "remote_watcher.py")
         shutil.copyfile(SOURCE, target)
@@ -49,7 +49,7 @@ class Running(object):
         if stdin_mode:
             with open(SOURCE, "rb") as handle:
                 source = handle.read()
-            prefix = "KEEPWATCH_REMOTE_ARGS = " + json.dumps(json.dumps(options)) + "\n"
+            prefix = "WATCHGLASS_REMOTE_ARGS = " + json.dumps(json.dumps(options)) + "\n"
             argv = [sys.executable, "-u", "-"]
             data = prefix.encode("ascii") + source
         else:

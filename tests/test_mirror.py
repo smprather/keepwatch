@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from keepwatch.recipes import mirror
+from watchglass.recipes import mirror
 
 
 def test_plan_push_copies_new_and_changed_and_creates_directories():

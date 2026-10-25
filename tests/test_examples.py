@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
-from keepwatch.config import load_watch_config
-from keepwatch.reference import example_dirs, render_topic
+from watchglass.cli import cli
+from watchglass.config import load_watch_config
+from watchglass.reference import example_dirs, render_topic
 
 
 def run(*args):

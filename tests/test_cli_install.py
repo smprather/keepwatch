@@ -4,9 +4,9 @@ import sys
 import pytest
 from click.testing import CliRunner
 
-from keepwatch import cli as cli_module
-from keepwatch import systemd, winsched
-from keepwatch.cli import cli
+from watchglass import cli as cli_module
+from watchglass import systemd, winsched
+from watchglass.cli import cli
 
 
 def run(*args):
@@ -19,12 +19,12 @@ def fake_systemctl(tmp_path, monkeypatch, exit_code=0):
     script.write_text(f'#!/bin/sh\necho "$@" >> "{calls}"\necho "fake failure" >&2\nexit {exit_code}\n'
                       if exit_code else f'#!/bin/sh\necho "$@" >> "{calls}"\n')
     script.chmod(0o755)
-    monkeypatch.setenv("KEEPWATCH_SYSTEMCTL", str(script))
+    monkeypatch.setenv("WATCHGLASS_SYSTEMCTL", str(script))
     return calls
 
 
 def unit_file(xdg):
-    return xdg.config_home.parent / "systemd" / "user" / "keepwatch.service"
+    return xdg.config_home.parent / "systemd" / "user" / "watchglass.service"
 
 
 @pytest.mark.posix_only
@@ -36,8 +36,8 @@ def test_install_writes_the_unit_and_enables_it(xdg, tmp_path, monkeypatch):
     text = unit_file(xdg).read_text()
     assert "ExecStart=" in text and " run" in text
     assert 'Environment="PATH=' in text and "WantedBy=default.target" in text
-    assert calls.read_text().splitlines() == ["--user daemon-reload", "--user enable --now keepwatch.service"]
-    assert "systemctl --user status keepwatch" in result.output
+    assert calls.read_text().splitlines() == ["--user daemon-reload", "--user enable --now watchglass.service"]
+    assert "systemctl --user status watchglass" in result.output
     assert "SSH_AUTH_SOCK" not in result.output
 
 
@@ -47,7 +47,7 @@ def test_install_warns_about_ssh_agent(xdg, tmp_path, monkeypatch):
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/ssh-XXXX/agent.123")
     result = run("install")
     assert result.exit_code == 0
-    assert "SSH_AUTH_SOCK" in result.output and "keepwatch docs environment" in result.output
+    assert "SSH_AUTH_SOCK" in result.output and "watchglass docs environment" in result.output
 
 
 @pytest.mark.posix_only
@@ -55,7 +55,7 @@ def test_install_dry_run_changes_nothing(xdg, tmp_path, monkeypatch):
     calls = fake_systemctl(tmp_path, monkeypatch)
     result = run("install", "--dry-run")
     assert result.exit_code == 0
-    assert "[Service]" in result.output and "systemctl --user enable --now keepwatch.service" in result.output
+    assert "[Service]" in result.output and "systemctl --user enable --now watchglass.service" in result.output
     assert not unit_file(xdg).exists() and not calls.exists()
 
 
@@ -74,7 +74,7 @@ def test_uninstall(xdg, tmp_path, monkeypatch):
     result = run("uninstall")
     assert result.exit_code == 0, result.output
     assert not unit_file(xdg).exists()
-    assert calls.read_text().splitlines()[-2:] == ["--user disable --now keepwatch.service", "--user daemon-reload"]
+    assert calls.read_text().splitlines()[-2:] == ["--user disable --now watchglass.service", "--user daemon-reload"]
 
 
 @pytest.mark.posix_only
@@ -90,7 +90,7 @@ def test_install_keeps_a_custom_config(xdg, tmp_path, monkeypatch):
 
 @pytest.mark.posix_only
 def test_find_executable_prefers_the_running_script(tmp_path, monkeypatch):
-    script = tmp_path / "bin" / "keepwatch"
+    script = tmp_path / "bin" / "watchglass"
     script.parent.mkdir()
     script.write_text("#!/bin/sh\n")
     monkeypatch.setattr(sys, "argv", [str(script), "install"])
@@ -117,9 +117,9 @@ def test_windows_install_registers_and_starts_a_logon_task(xdg, monkeypatch):
     assert result.exit_code == 0, result.output
     register, start = scripts
     assert "Register-ScheduledTask" in register and "New-ScheduledTaskTrigger -AtLogOn" in register
-    assert "-m keepwatch run" in register and "keepwatch.lnk" in register
+    assert "-m watchglass run" in register and "watchglass.lnk" in register
     assert "Start-ScheduledTask" not in register and "Start-ScheduledTask" in start
-    assert "registered Task Scheduler task 'keepwatch'" in result.output and "started it" in result.output
+    assert "registered Task Scheduler task 'watchglass'" in result.output and "started it" in result.output
 
 
 def test_windows_install_start_failure_is_only_a_warning(xdg, monkeypatch):
@@ -161,7 +161,7 @@ def test_windows_uninstall(xdg, monkeypatch):
     result = run("uninstall")
     assert result.exit_code == 0, result.output
     (script,) = scripts
-    assert "Unregister-ScheduledTask" in script and "keepwatch.lnk" in script
+    assert "Unregister-ScheduledTask" in script and "watchglass.lnk" in script
 
 
 def test_windows_uninstall_has_one_windows_branch():
@@ -176,7 +176,7 @@ def test_windows_uninstall_has_one_windows_branch():
 @pytest.mark.posix_only
 def test_the_unit_escapes_what_systemd_would_expand():
     """A `"` ends the quoted value, `%` is a specifier and `$` expands: a path can hold all three."""
-    text = systemd.unit_text('/opt/keep "watch" 100%/$HOME/keepwatch', '/usr/bin:/opt/$HOME/a%b')
+    text = systemd.unit_text('/opt/keep "watch" 100%/$HOME/watchglass', '/usr/bin:/opt/$HOME/a%b')
     exec_line = next(line for line in text.splitlines() if line.startswith("ExecStart="))
     env_line = next(line for line in text.splitlines() if line.startswith('Environment="PATH='))
     assert '\\"watch\\"' in exec_line  # the quote does not end the value
@@ -190,7 +190,7 @@ def test_uninstall_removes_the_unit_even_when_systemctl_cannot_run(xdg, tmp_path
     """An uninstall that cannot reach systemctl must still remove the unit file it installed."""
     unit_file(xdg).parent.mkdir(parents=True)
     unit_file(xdg).write_text("[Service]\n")
-    monkeypatch.setenv("KEEPWATCH_SYSTEMCTL", str(tmp_path / "no-such-systemctl"))
+    monkeypatch.setenv("WATCHGLASS_SYSTEMCTL", str(tmp_path / "no-such-systemctl"))
     result = run("uninstall")
     assert not unit_file(xdg).exists()
     assert "cannot run systemctl" in result.output

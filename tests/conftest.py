@@ -3,7 +3,7 @@ import textwrap
 
 import pytest
 
-from keepwatch.paths import Paths, resolve_paths
+from watchglass.paths import Paths, resolve_paths
 
 IS_WINDOWS = os.name == "nt"
 
@@ -31,7 +31,7 @@ def xdg(tmp_path, monkeypatch) -> Paths:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
-    monkeypatch.delenv("KEEPWATCH_CONFIG", raising=False)
+    monkeypatch.delenv("WATCHGLASS_CONFIG", raising=False)
     monkeypatch.delenv("NO_COLOR", raising=False)
     return resolve_paths()
 
@@ -57,8 +57,8 @@ def make_watch(xdg):
 
 @pytest.fixture
 def call_for(xdg):
-    from keepwatch.config import load_watch_config
-    from keepwatch.runner import HookCall
+    from watchglass.config import load_watch_config
+    from watchglass.runner import HookCall
 
     def make(watch_dir, hook="check", *, timeout=30.0, condition=False, payload=None,
              capture_bytes=65536, environment=None, mode="call"):

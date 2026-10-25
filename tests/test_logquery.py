@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch import logquery
-from keepwatch.logquery import LogFilter, follow_log, log_files, parse_when, read_records, select_records
+from watchglass import logquery
+from watchglass.logquery import LogFilter, follow_log, log_files, parse_when, read_records, select_records
 
 
 def write_lines(path, records):
@@ -17,13 +17,13 @@ def write_lines(path, records):
 
 
 def test_rotated_files_are_read_oldest_first(tmp_path):
-    current = tmp_path / "keepwatch.jsonl"
-    write_lines(tmp_path / "keepwatch.jsonl.2", [{"n": 1}])
-    write_lines(tmp_path / "keepwatch.jsonl.1", [{"n": 2}])
+    current = tmp_path / "watchglass.jsonl"
+    write_lines(tmp_path / "watchglass.jsonl.2", [{"n": 1}])
+    write_lines(tmp_path / "watchglass.jsonl.1", [{"n": 2}])
     write_lines(current, [{"n": 3}])
     with open(current, "a") as handle:
         handle.write("not json\n[1]\n")
-    assert [p.name for p in log_files(current)] == ["keepwatch.jsonl.2", "keepwatch.jsonl.1", "keepwatch.jsonl"]
+    assert [p.name for p in log_files(current)] == ["watchglass.jsonl.2", "watchglass.jsonl.1", "watchglass.jsonl"]
     assert [r["n"] for r in read_records(current)] == [1, 2, 3]
 
 
@@ -37,7 +37,7 @@ def test_parse_when():
 
 
 def test_filters_and_limit(tmp_path):
-    path = tmp_path / "keepwatch.jsonl"
+    path = tmp_path / "watchglass.jsonl"
     write_lines(path, [
         {"ts": "2026-09-30T10:00:00+00:00", "level": "INFO", "event": "poll.start", "watch": "a", "poll_id": "aaa1"},
         {"ts": "2026-09-30T10:00:01+00:00", "level": "ERROR", "event": "hook.end", "watch": "a", "poll_id": "aaa1",
@@ -78,20 +78,20 @@ def follow_until(path, count, action):
 
 
 def test_follow_emits_new_records_only(tmp_path):
-    path = tmp_path / "keepwatch.jsonl"
+    path = tmp_path / "watchglass.jsonl"
     write_lines(path, [{"n": 0}])
     seen = follow_until(path, 2, lambda: write_lines(path, [{"n": 1}, {"n": 2}]))
     assert [r["n"] for r in seen] == [1, 2]
 
 
 def test_follow_survives_rotation(tmp_path):
-    path = tmp_path / "keepwatch.jsonl"
+    path = tmp_path / "watchglass.jsonl"
     write_lines(path, [{"n": 0}])
 
     def rotate():
         write_lines(path, [{"n": 1}])
         time.sleep(0.3)
-        path.rename(tmp_path / "keepwatch.jsonl.1")
+        path.rename(tmp_path / "watchglass.jsonl.1")
         write_lines(path, [{"n": 2}])
 
     seen = follow_until(path, 2, rotate)
@@ -99,7 +99,7 @@ def test_follow_survives_rotation(tmp_path):
 
 
 def test_follow_reads_the_rest_of_a_rotated_file(tmp_path, monkeypatch):
-    path = tmp_path / "keepwatch.jsonl"
+    path = tmp_path / "watchglass.jsonl"
     write_lines(path, [{"n": 0}])
     real_stat = logquery.os.stat
     rotated = []
@@ -108,7 +108,7 @@ def test_follow_reads_the_rest_of_a_rotated_file(tmp_path, monkeypatch):
         if not rotated and Path(target) == path:
             rotated.append(True)
             write_lines(path, [{"n": 1}])                 # appended after the last read...
-            path.rename(tmp_path / "keepwatch.jsonl.1")   # ...and rotated before the next one
+            path.rename(tmp_path / "watchglass.jsonl.1")   # ...and rotated before the next one
             write_lines(path, [{"n": 2}])
         return real_stat(target, *args, **kwargs)
 

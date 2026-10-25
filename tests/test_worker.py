@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch import __version__, platform
-from keepwatch.protocol import PROTOCOL_VERSION, decode_lines
-from keepwatch.worker import interpret_check_return
+from watchglass import __version__, platform
+from watchglass.protocol import PROTOCOL_VERSION, decode_lines
+from watchglass.worker import interpret_check_return
 
 
 def watch(tmp_path, source):
@@ -43,7 +43,7 @@ def run_worker(request):
     req_r, req_w = os.pipe()
     res_r, res_w = os.pipe()
     process = platform.start_process(
-        [sys.executable, "-m", "keepwatch.worker", *platform.pipe_arguments(req_r, res_w)],
+        [sys.executable, "-m", "watchglass.worker", *platform.pipe_arguments(req_r, res_w)],
         cwd=None, env=None, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         inherit=(req_r, res_w),
     )
@@ -98,9 +98,9 @@ def test_check_with_payload_and_logs(tmp_path):
 
 def test_unknown_with_reason(tmp_path):
     watch_dir = watch(tmp_path, '''
-        import keepwatch
+        import watchglass
         def check(ctx):
-            raise keepwatch.Unknown("VPN is down")
+            raise watchglass.Unknown("VPN is down")
     ''')
     messages, _, _ = run_worker(request_for(watch_dir))
     assert messages[-1] == {"type": "result", "status": "unknown", "reason": "VPN is down", "payload": None}

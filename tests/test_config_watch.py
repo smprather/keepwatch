@@ -2,9 +2,9 @@ import textwrap
 
 import pytest
 
-from keepwatch import platform
-from keepwatch.config import Command, ConfigError, ExitCodes, load_watch_config
-from keepwatch.hooks import discover_python_hooks, resolve_hooks
+from watchglass import platform
+from watchglass.config import Command, ConfigError, ExitCodes, load_watch_config
+from watchglass.hooks import discover_python_hooks, resolve_hooks
 
 
 def write(watch_dir, text):
@@ -79,7 +79,7 @@ def test_typo_reports_line_and_suggestion(tmp_path):
     assert problem.line == 2
     assert problem.message == "unknown key 'intervall' (did you mean 'interval'?)"
     assert str(problem).endswith(
-        "config.toml:2: unknown key 'intervall' (did you mean 'interval'?); see: keepwatch docs config"
+        "config.toml:2: unknown key 'intervall' (did you mean 'interval'?); see: watchglass docs config"
     )
 
 

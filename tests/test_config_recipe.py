@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch import config
-from keepwatch.config import ConfigError, load_watch_config
+from watchglass import config
+from watchglass.config import ConfigError, load_watch_config
 
 PULL = """
 recipe = "pull"

@@ -2,8 +2,8 @@ import json
 
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
 from portable import toml_path
+from watchglass.cli import cli
 
 WATCH_PY = '''
     def check(ctx):

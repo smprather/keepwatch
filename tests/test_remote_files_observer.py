@@ -8,10 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch import observers
-from keepwatch.config import ObserverConfig, load_watch_config
-from keepwatch.ctx import Ledger
-from keepwatch.observers import (
+from portable import PY, literal, toml_path
+from watchglass import observers
+from watchglass.config import ObserverConfig, load_watch_config
+from watchglass.ctx import Ledger
+from watchglass.observers import (
     AUTO_PYTHON,
     RemoteFilesObserver,
     build_observer,
@@ -19,8 +20,7 @@ from keepwatch.observers import (
     watcher_options,
     watcher_source,
 )
-from keepwatch.output import format_record
-from portable import PY, literal, toml_path
+from watchglass.output import format_record
 
 FAKE_SSH = Path(__file__).resolve().with_name("fake_ssh.py")
 DEFAULT_SSH = [
@@ -153,7 +153,7 @@ def test_watcher_source_carries_the_options():
     first, rest = source.split("\n", 1)
     namespace = {}
     exec(first, namespace)
-    assert json.loads(namespace["KEEPWATCH_REMOTE_ARGS"]) == options
+    assert json.loads(namespace["WATCHGLASS_REMOTE_ARGS"]) == options
     assert "def main(argv)" in rest
     source.encode("ascii")
 

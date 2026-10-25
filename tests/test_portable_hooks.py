@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch.runner import Runner
+from watchglass.runner import Runner
 
 UNKNOWN_3 = "[check_exit_codes]\nunknown = [3]\n"
 
@@ -31,7 +31,7 @@ def test_relative_python_program_runs_from_the_watch_dir(make_watch, call_for):
 
 
 def test_shell_must_be_a_non_empty_list(tmp_path):
-    from keepwatch.config import ConfigError, load_watch_config
+    from watchglass.config import ConfigError, load_watch_config
 
     watch_dir = tmp_path / "w"
     watch_dir.mkdir()

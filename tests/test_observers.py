@@ -2,10 +2,10 @@ import time
 
 import pytest
 
-from keepwatch import observers
-from keepwatch.config import load_watch_config
-from keepwatch.observers import EventQueue, build_observer, parse_event
 from portable import PY, literal
+from watchglass import observers
+from watchglass.config import load_watch_config
+from watchglass.observers import EventQueue, build_observer, parse_event
 
 EMITTER = """
 import json, sys, time
@@ -31,7 +31,7 @@ time.sleep(60)
 """
 SHOW_ENV = """
 import json, os, time
-names = ("KEEPWATCH_WATCH", "KEEPWATCH_OBSERVER", "KEEPWATCH_DATA_DIR", "FROM_WATCH")
+names = ("WATCHGLASS_WATCH", "WATCHGLASS_OBSERVER", "WATCHGLASS_DATA_DIR", "FROM_WATCH")
 print(json.dumps({name: os.environ.get(name) for name in names}), flush=True)
 time.sleep(60)
 """
@@ -210,8 +210,8 @@ def test_observer_environment(make_watch, xdg):
     finally:
         stop(observer)
     seen = events[0]
-    assert (seen["KEEPWATCH_WATCH"], seen["KEEPWATCH_OBSERVER"], seen["FROM_WATCH"]) == ("w", "src", "yes")
-    assert seen["KEEPWATCH_DATA_DIR"] == str(xdg.watch_data_dir("w"))
+    assert (seen["WATCHGLASS_WATCH"], seen["WATCHGLASS_OBSERVER"], seen["FROM_WATCH"]) == ("w", "src", "yes")
+    assert seen["WATCHGLASS_DATA_DIR"] == str(xdg.watch_data_dir("w"))
     assert xdg.watch_data_dir("w").is_dir()
 
 

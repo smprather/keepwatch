@@ -2,8 +2,8 @@
 
 import pytest
 
-from keepwatch.config import ConfigError, load_watch_config
-from keepwatch.scheduler import trial_delay
+from watchglass.config import ConfigError, load_watch_config
+from watchglass.scheduler import trial_delay
 
 
 def test_the_accordion_doubles_up_to_retry_after():
@@ -48,6 +48,6 @@ def test_a_push_recipe_that_resumes_needs_sftp_and_a_marker(xdg, make_watch):
 
 def test_a_trial_delay_survives_a_long_outage():
     """The offline accordion must clamp, not overflow: a big failure count is an ordinary long outage."""
-    from keepwatch.scheduler import trial_delay
+    from watchglass.scheduler import trial_delay
 
     assert trial_delay(86400.0, 60.0, 2000) == 86400.0

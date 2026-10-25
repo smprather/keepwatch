@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch import observers
-from keepwatch.config import load_watch_config
-from keepwatch.observers import FilesObserver, build_observer
 from portable import toml_path
+from watchglass import observers
+from watchglass.config import load_watch_config
+from watchglass.observers import FilesObserver, build_observer
 
 
 @pytest.fixture(autouse=True)

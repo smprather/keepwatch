@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch.config import (
+from watchglass.config import (
     Command,
     ConfigError,
     GlobalConfig,
@@ -36,7 +36,7 @@ def test_full_global_config(xdg, tmp_path, monkeypatch):
     write_global(xdg, '''
         watch_dirs = ["~/w1", "more", "$KW_TEST_DIR/w3"]
         reload_interval = "10s"
-        alert_command = ["notify-send", "keepwatch"]
+        alert_command = ["notify-send", "watchglass"]
 
         [defaults]
         interval = "2m"
@@ -54,7 +54,7 @@ def test_full_global_config(xdg, tmp_path, monkeypatch):
     home = Path(os.environ["HOME"])
     assert cfg.watch_dirs == (home / "w1", xdg.config_home / "more", tmp_path / "x" / "w3")
     assert cfg.reload_interval == 10.0
-    assert cfg.alert_command == Command(argv=("notify-send", "keepwatch"))
+    assert cfg.alert_command == Command(argv=("notify-send", "watchglass"))
     assert dict(cfg.defaults) == {"interval": 120.0, "max_failures": 8}
     assert dict(cfg.environment) == {"SSH_AUTH_SOCK": "/tmp/agent"}
     assert cfg.log == LogSettings(max_bytes=5000, backups=2, capture_bytes=1024)

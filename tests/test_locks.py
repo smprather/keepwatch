@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from keepwatch.locks import LockBusy, hold_lock, probe_lock
+from watchglass.locks import LockBusy, hold_lock, probe_lock
 
 
 def test_second_nonblocking_lock_is_busy(tmp_path):

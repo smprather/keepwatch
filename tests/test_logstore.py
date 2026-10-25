@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch.logstore import LogWriter, QueueSink, fan_out, level_filter, make_record
+from watchglass.logstore import LogWriter, QueueSink, fan_out, level_filter, make_record
 
 
 def test_make_record():
@@ -23,7 +23,7 @@ def test_fan_out():
 
 
 def test_writer_appends_json_lines(tmp_path):
-    path = tmp_path / "logs" / "keepwatch.jsonl"
+    path = tmp_path / "logs" / "watchglass.jsonl"
     writer = LogWriter(path, max_bytes=10_000, backups=2)
     writer.write({"event": "a", "path": tmp_path})
     writer.write({"event": "b"})
@@ -33,18 +33,18 @@ def test_writer_appends_json_lines(tmp_path):
 
 
 def test_writer_rotates(tmp_path):
-    path = tmp_path / "keepwatch.jsonl"
+    path = tmp_path / "watchglass.jsonl"
     writer = LogWriter(path, max_bytes=200, backups=2)
     for index in range(40):
         writer.write({"event": "x", "n": index, "pad": "y" * 50})
     names = sorted(p.name for p in tmp_path.iterdir() if not p.name.startswith("."))
-    assert names == ["keepwatch.jsonl", "keepwatch.jsonl.1", "keepwatch.jsonl.2"]
+    assert names == ["watchglass.jsonl", "watchglass.jsonl.1", "watchglass.jsonl.2"]
     last = json.loads(path.read_text().splitlines()[-1])
     assert last["n"] == 39
 
 
 def test_writer_is_thread_safe(tmp_path):
-    path = tmp_path / "keepwatch.jsonl"
+    path = tmp_path / "watchglass.jsonl"
     writer = LogWriter(path, max_bytes=10_000_000, backups=1)
     threads = [threading.Thread(target=lambda: [writer.write({"event": "t"}) for _ in range(50)]) for _ in range(4)]
     for thread in threads:
@@ -79,7 +79,7 @@ def test_queue_sink_delivers_in_order_on_one_thread():
         thread.join()
     sink.close()
     assert sorted(n for n, _ in seen) == sorted([*range(20), *range(100, 120)])
-    assert {name for _, name in seen} == {"keepwatch-log"}
+    assert {name for _, name in seen} == {"watchglass-log"}
 
 
 def test_queue_sink_survives_a_failing_sink():
@@ -99,7 +99,7 @@ def test_queue_sink_survives_a_failing_sink():
 
 @pytest.mark.windows_only
 def test_rotation_waits_while_another_process_holds_the_log(tmp_path):
-    path = tmp_path / "keepwatch.jsonl"
+    path = tmp_path / "watchglass.jsonl"
     writer = LogWriter(path, max_bytes=200, backups=2)
     writer.write({"event": "first", "pad": "x" * 150})
     with open(path, "rb"):  # an ordinary reader blocks renames on Windows
@@ -109,16 +109,16 @@ def test_rotation_waits_while_another_process_holds_the_log(tmp_path):
 
 
 def test_failed_rotation_leaves_backups_alone(tmp_path, monkeypatch):
-    path = tmp_path / "keepwatch.jsonl"
+    path = tmp_path / "watchglass.jsonl"
     writer = LogWriter(path, max_bytes=200, backups=2)
     for n in range(12):
         writer.write({"n": n, "pad": "x" * 80})
 
     def backups():
-        return {p.name: p.read_text() for p in tmp_path.iterdir() if p.name.startswith("keepwatch.jsonl.")}
+        return {p.name: p.read_text() for p in tmp_path.iterdir() if p.name.startswith("watchglass.jsonl.")}
 
     before = backups()
-    assert sorted(before) == ["keepwatch.jsonl.1", "keepwatch.jsonl.2"]
+    assert sorted(before) == ["watchglass.jsonl.1", "watchglass.jsonl.2"]
     real_rename = Path.rename
 
     def refuse_the_log(self, target):
@@ -135,12 +135,12 @@ def test_failed_rotation_leaves_backups_alone(tmp_path, monkeypatch):
 
 def test_a_rotation_that_died_mid_way_neither_loses_records_nor_breaks_the_log(tmp_path):
     """A crash between the rename and the shift leaves .rotating; the next rotation must recover, not trip."""
-    path = tmp_path / "keepwatch.jsonl"
+    path = tmp_path / "watchglass.jsonl"
     path.write_text('{"event": "current"}\n')
-    (tmp_path / "keepwatch.jsonl.rotating").write_text('{"event": "stranded"}\n')
+    (tmp_path / "watchglass.jsonl.rotating").write_text('{"event": "stranded"}\n')
     writer = LogWriter(path, max_bytes=20, backups=2)
     writer.write(make_record("poll.start"))
-    kept = "\n".join(p.read_text() for p in (tmp_path / "keepwatch.jsonl", tmp_path / "keepwatch.jsonl.1") if p.exists())
+    kept = "\n".join(p.read_text() for p in (tmp_path / "watchglass.jsonl", tmp_path / "watchglass.jsonl.1") if p.exists())
     assert "stranded" in kept  # the records a killed rotation held are still the log's
     assert "poll.start" in kept
-    assert not (tmp_path / "keepwatch.jsonl.rotating").exists()
+    assert not (tmp_path / "watchglass.jsonl.rotating").exists()

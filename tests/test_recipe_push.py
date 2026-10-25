@@ -6,12 +6,12 @@ import time
 
 import pytest
 
-from keepwatch.config import load_global_config, load_watch_config
-from keepwatch.pollengine import PollEngine
-from keepwatch.runner import Runner
-from keepwatch.state import Outcome, WatchState
 from portable import toml_path
 from scp_server import ScpServer
+from watchglass.config import load_global_config, load_watch_config
+from watchglass.pollengine import PollEngine
+from watchglass.runner import Runner
+from watchglass.state import Outcome, WatchState
 
 pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
 

@@ -9,15 +9,15 @@ from types import SimpleNamespace
 import pytest
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
-from keepwatch.config import load_global_config, load_watch_config
-from keepwatch.ctx import Ledger
-from keepwatch.pollengine import PollEngine
-from keepwatch.recipes.pull import cleanup_parts, event_key
-from keepwatch.runner import Runner
-from keepwatch.state import Outcome, WatchState
 from portable import toml_path
 from scp_server import ScpServer
+from watchglass.cli import cli
+from watchglass.config import load_global_config, load_watch_config
+from watchglass.ctx import Ledger
+from watchglass.pollengine import PollEngine
+from watchglass.recipes.pull import cleanup_parts, event_key
+from watchglass.runner import Runner
+from watchglass.state import Outcome, WatchState
 
 pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
 
@@ -284,8 +284,8 @@ def test_the_delete_helper_speaks_posix_paths_and_asks_for_a_verified_delete(tmp
     import json
     import subprocess as subprocess_module
 
-    from keepwatch.ctx import Ledger
-    from keepwatch.recipes.pull import TO_DELETE, delete_remote, queue_key
+    from watchglass.ctx import Ledger
+    from watchglass.recipes.pull import TO_DELETE, delete_remote, queue_key
 
     calls = []
 

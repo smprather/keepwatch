@@ -1,4 +1,4 @@
-"""Tests for Ctx: the plugin API — ledgers, checkpoints, run, transfers (see `keepwatch docs ctx`)."""
+"""Tests for Ctx: the plugin API — ledgers, checkpoints, run, transfers (see `watchglass docs ctx`)."""
 
 import os
 import re
@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-import keepwatch.ctx as ctx_module
-from keepwatch import (
+import watchglass.ctx as ctx_module
+from watchglass import (
     Checkpoint,
     CheckpointCorrupt,
     CheckpointReadOnly,

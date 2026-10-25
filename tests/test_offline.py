@@ -2,8 +2,8 @@ import json
 import os
 import time
 
-from keepwatch.offline import OfflineMarker, clear_offline, iso_time, read_offline, write_offline
-from keepwatch.paths import write_json_atomic
+from watchglass.offline import OfflineMarker, clear_offline, iso_time, read_offline, write_offline
+from watchglass.paths import write_json_atomic
 
 
 def test_write_json_atomic(tmp_path):
@@ -46,7 +46,7 @@ def test_unreadable_marker_counts_as_offline_by_user(xdg):
     path.write_text("{oops")
     marker = read_offline(xdg, "w")
     assert marker.by_user is True
-    assert str(path) in marker.reason and "keepwatch enable w" in marker.reason
+    assert str(path) in marker.reason and "watchglass enable w" in marker.reason
 
 
 def test_iso_time_renders_a_time_past_the_calendar_instead_of_raising():

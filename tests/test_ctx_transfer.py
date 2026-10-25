@@ -3,10 +3,10 @@ import time
 
 import pytest
 
-from keepwatch import Ctx, TransferFailed
-from keepwatch.ctx import CommandFailed
-from keepwatch.transfer import TransferMissing
 from scp_server import ScpServer
+from watchglass import Ctx, TransferFailed
+from watchglass.ctx import CommandFailed
+from watchglass.transfer import TransferMissing
 
 pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
 

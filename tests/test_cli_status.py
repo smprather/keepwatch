@@ -4,11 +4,11 @@ import time
 
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
-from keepwatch.locks import hold_lock
-from keepwatch.offline import OfflineMarker, iso_time, write_offline
-from keepwatch.paths import ensure_private_dir, write_json_atomic
-from keepwatch.service import Service
+from watchglass.cli import cli
+from watchglass.locks import hold_lock
+from watchglass.offline import OfflineMarker, iso_time, write_offline
+from watchglass.paths import ensure_private_dir, write_json_atomic
+from watchglass.service import Service
 
 
 def run(*args):
@@ -95,3 +95,14 @@ def test_status_for_an_unknown_watch(make_watch):
     result = run("status", "psg-exprot")  # pi-lens-ignore: typos:unknown -- deliberate: the test asserts the did-you-mean hint
     assert result.exit_code == 1
     assert "did you mean 'psg-export'" in result.output
+
+
+def test_a_refused_rename_migration_is_a_clean_cli_error(xdg):
+    old_config = xdg.config_home.parent / "keepwatch"
+    old_config.mkdir(parents=True)
+    with hold_lock(xdg.runtime.parent / "keepwatch" / "service.lock"):
+        result = run("status")
+    text = result.output + (getattr(result, "stderr", "") or "")
+    assert result.exit_code == 1
+    assert "old keepwatch service is running" in text
+    assert "Traceback" not in text

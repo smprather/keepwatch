@@ -9,7 +9,7 @@ import types
 
 import pytest
 
-from keepwatch import conpty
+from watchglass import conpty
 
 PROMPT = "u@host's password: "
 

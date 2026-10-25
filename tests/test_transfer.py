@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch import askpass, transfer
-from keepwatch.transfer import (
+from watchglass import askpass, transfer
+from watchglass.transfer import (
     SCP_DEFAULTS,
     Endpoint,
     ScpOptions,
@@ -172,12 +172,12 @@ def test_askpass_launcher_runs_the_helper(tmp_path):
 
 
 def test_the_askpass_launcher_runs_the_helper_file(tmp_path):
-    """Not `-m keepwatch.askpass`: under a uv symlinked venv on Windows every interpreter the launcher can
-    reach (sys.executable is the base python then, see uv issue 19374) cannot import keepwatch."""
+    """Not `-m watchglass.askpass`: under a uv symlinked venv on Windows every interpreter the launcher can
+    reach (sys.executable is the base python then, see uv issue 19374) cannot import watchglass."""
     launcher = write_askpass(tmp_path, "KW_TEST_PW")
     text = launcher.read_text(encoding="utf-8")
     assert str(Path(askpass.__file__).resolve()) in text
-    assert "-m keepwatch.askpass" not in text
+    assert "-m watchglass.askpass" not in text
 
 
 def test_the_windows_askpass_launcher_quotes_the_helper_file(tmp_path, monkeypatch):
@@ -187,12 +187,12 @@ def test_the_windows_askpass_launcher_quotes_the_helper_file(tmp_path, monkeypat
     text = launcher.read_text(encoding="utf-8", errors="replace")
     assert text.startswith("@echo off")
     assert f'"{Path(askpass.__file__).resolve()}"' in text
-    assert "-m keepwatch.askpass" not in text
+    assert "-m watchglass.askpass" not in text
 
 
-def test_the_askpass_helper_runs_without_keepwatch_on_the_path(tmp_path):
-    """The helper's file is stdlib only, so any interpreter can run it; `-m keepwatch.askpass` would need
-    keepwatch importable, which is exactly what the sibling console python of a uv shim lacks (issue 1)."""
+def test_the_askpass_helper_runs_without_watchglass_on_the_path(tmp_path):
+    """The helper's file is stdlib only, so any interpreter can run it; `-m watchglass.askpass` would need
+    watchglass importable, which is exactly what the sibling console python of a uv shim lacks (issue 1)."""
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     env["KW_TEST_PW"] = "pa ss"
     module = str(Path(askpass.__file__).resolve())
@@ -206,7 +206,7 @@ def test_the_askpass_helper_runs_without_keepwatch_on_the_path(tmp_path):
     assert worked.returncode == 0, worked.stderr
     assert worked.stdout == b"pa ss\n"
     broken = subprocess.run(
-        [sys.executable, "-S", "-m", "keepwatch.askpass", "KW_TEST_PW", "u@h's password: "],
+        [sys.executable, "-S", "-m", "watchglass.askpass", "KW_TEST_PW", "u@h's password: "],
         cwd=tmp_path,
         env=env,
         capture_output=True,
@@ -293,7 +293,7 @@ def test_resume_is_ignored_without_a_size(tmp_path):
 
 def test_a_transfer_publishes_what_it_is_doing(tmp_path, monkeypatch):
     """status.json (and so the TUI) learns what a hook is transferring, with the partial's size (issue 3)."""
-    monkeypatch.setenv("KEEPWATCH_RUN_DIR", str(tmp_path))
+    monkeypatch.setenv("WATCHGLASS_RUN_DIR", str(tmp_path))
     part = tmp_path / ".a.bin.part"
     part.write_bytes(b"x" * 300)
     with transfer._activity(name="a.bin", part=str(part), size=1000):
@@ -323,7 +323,7 @@ def test_conpty_needs_windows_and_a_password_variable(monkeypatch):
     assert ScpOptions(password_mode="conpty", password_env="KW_PW").password_mode == "conpty"
     with pytest.raises(ValueError, match="must be one of"):
         ScpOptions(password_mode="askpass2")
-    assert ScpOptions().password_mode == "askpass"  # the default is exactly what keepwatch did before
+    assert ScpOptions().password_mode == "askpass"  # the default is exactly what watchglass did before
 
 
 def test_conpty_takes_the_askpass_launcher_out_of_the_environment(monkeypatch):
@@ -345,7 +345,7 @@ def test_the_conpty_mode_hands_the_password_to_the_pty(monkeypatch):
         calls.append((list(argv), password, limit))
         return (0, "typed\n", "", False)
 
-    monkeypatch.setattr("keepwatch.conpty.run", fake_run)
+    monkeypatch.setattr("watchglass.conpty.run", fake_run)
     options = ScpOptions(password_env="KW_PW", password_mode="conpty")
     code, out, err, timed_out = transfer._run(["scp", "a", "b"], {"KW_PW": "s3cret"}, 30.0, options=options)
     assert calls == [(["scp", "a", "b"], "s3cret", 30.0)]

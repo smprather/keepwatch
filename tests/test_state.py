@@ -1,6 +1,6 @@
 import pytest
 
-from keepwatch.state import (
+from watchglass.state import (
     Edge,
     Outcome,
     WatchState,
