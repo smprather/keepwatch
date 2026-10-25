@@ -29,6 +29,7 @@ FOLLOW_INTERVAL = 0.5  # the log is checked twice a second, as `keepwatch logs -
 _STATE_STYLES = {
     "online": "green",
     "polling": "yellow",
+    "transferring": "cyan",
     "offline": "red",
     "parked": "dim",
     "idle": "dim",
@@ -252,16 +253,17 @@ class Monitor:
         merged_dir, config_error = merged.get("watch_dir"), merged.get("config_error")
         last_poll, next_poll = merged.get("last_poll"), merged.get("next_poll")
         offline, in_flight, activity = merged.get("offline"), merged.get("in_flight"), merged.get("transfer")
+        state = _state(merged, poll)
         return WatchRow(
             name=name,
-            state=_state(merged, poll),
+            state=state,
             condition=condition if isinstance(condition, bool) else None,
             failures=failures if isinstance(failures, int) else None,
             last_poll=last_poll if isinstance(last_poll, dict) else None,
             next_poll=next_poll if isinstance(next_poll, str) else None,
             observers=_observers(merged),
             pending_events=_count(merged.get("pending_events")),
-            note=_note(merged),
+            note=_note(merged, state),
             # a duration keepwatch itself wrote into status.json, already guarded by the isinstance above
             interval=float(interval) if isinstance(interval, (int, float)) else None,  # pi-lens-ignore: unchecked-numeric-parse-python
             description=description if isinstance(description, str) else None,
@@ -368,14 +370,14 @@ def _state(entry: dict[str, Any], poll: InFlight | None) -> str:
     if isinstance(enabled, bool) and not enabled:
         return "parked"
     if entry.get("in_flight") or poll is not None:
-        return "polling"
+        return "transferring" if isinstance(entry.get("transfer"), dict) else "polling"
     known = entry.get("known_to_service")
     if isinstance(known, bool) and not known:
         return "idle"
     return "online"
 
 
-def _note(entry: dict[str, Any]) -> str:
+def _note(entry: dict[str, Any], state: str) -> str:
     if entry.get("config_error"):
         return f"config error: {_first_line(entry['config_error'])}"
     exists = entry.get("exists")
@@ -387,6 +389,11 @@ def _note(entry: dict[str, Any]) -> str:
     offline = entry.get("offline")
     if isinstance(offline, dict) and offline.get("by_user"):
         return "offline by user"
+    if state == "transferring":
+        activity = entry.get("transfer")
+        name = activity.get("name") if isinstance(activity, dict) else None
+        if isinstance(name, str) and name:
+            return sanitize(name)  # a remote file name is data, never terminal control
     return ""
 
 

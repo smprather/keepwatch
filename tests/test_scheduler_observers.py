@@ -300,8 +300,7 @@ def test_status_names_the_running_hook_and_what_it_transfers(make_watch, runner_
     runner.start()
     try:
         assert wait_for(lambda: (runner.snapshot(time.time()).get("in_flight") or {}).get("hook") == "check")
-        run_dir = xdg.run_dir(os.getpid(), "w")
-        run_dir.mkdir(parents=True, exist_ok=True)
+        run_dir = xdg.run_dir(os.getpid(), "w")  # the runner creates it for the hook (issue 18 follow-up)
         part = run_dir / "part.bin"
         part.write_bytes(b"x" * 5)
         (run_dir / "activity.json").write_text(json.dumps({"name": "big.bin", "size": 10, "part": str(part)}))

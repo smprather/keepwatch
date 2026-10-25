@@ -241,6 +241,37 @@ def test_a_poll_the_service_already_reported_cannot_still_be_running(xdg, make_w
         assert monitor.status().watches[0].state == "online"
 
 
+def test_a_live_transfer_is_a_transferring_state_with_its_file_name(xdg, make_watch):
+    """A 40-minute scp is not 'polling': the row says transferring and names the file (issue 18 follow-up)."""
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    publish(xdg, status_document(watches={"a": entry(
+        last_poll=last_poll(time.time() - 300), next_poll=None,
+        in_flight={"hook": "on_true", "poll_id": "p1", "target": "recipe pull:on_true",
+                   "started_at": iso_time(time.time() - 90)},
+        transfer={"name": "big.bin", "part": "/stage/.big.bin.part", "size": 4096, "part_size": 2048},
+    )}))
+    monitor = loaded(xdg)
+    with running(xdg):
+        monitor.refresh()
+        [row] = monitor.status().watches
+        assert row.state == "transferring"
+        assert monitor_module.note_text(row) == "big.bin"
+    assert monitor_module.state_style("transferring") == "cyan"
+
+
+def test_a_transfer_snapshot_without_an_in_flight_hook_is_not_transferring(xdg, make_watch):
+    """A stale transfer left in status.json must not claim a state the service is not in."""
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    publish(xdg, status_document(watches={"a": entry(
+        transfer={"name": "old.bin", "part": "/stage/.old.bin.part", "size": 10, "part_size": 5},
+    )}))
+    monitor = loaded(xdg)
+    with running(xdg):
+        monitor.refresh()
+        [row] = monitor.status().watches
+        assert row.state == "online" and monitor_module.note_text(row) == ""
+
+
 def test_in_flight_is_cleared_when_the_service_stops_or_the_pid_changes(xdg, make_watch):
     make_watch("a", config='[hooks]\ncheck = ["true"]\n')
     publish(xdg, status_document(watches={"a": entry(last_poll=last_poll(time.time() - 300), next_poll=None)}))

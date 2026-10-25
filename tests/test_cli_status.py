@@ -40,7 +40,7 @@ def test_status_shows_what_a_watch_is_running_and_transferring(xdg, make_watch):
     with hold_lock(xdg.service_lock):
         result = run("status", "a")
         data = json.loads(run("status", "--json").output)
-    assert "polling" in result.output
+    assert "transferring" in result.output
     assert "recipe pull:on_true running 1m30s" in result.output
     assert "pulling a.bin 50% (2 KiB/4 KiB)" in result.output
     assert data["watches"]["a"]["in_flight"]["hook"] == "on_true"

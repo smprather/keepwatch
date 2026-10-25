@@ -48,6 +48,22 @@ def test_check_answers_with_payload_logs_and_output(make_watch, call_for):
     assert "messages" not in record and record["status"] == "true"
 
 
+def test_a_python_hook_gets_its_run_dir_before_it_starts(make_watch, call_for, xdg):
+    """A transfer publishes activity.json through KEEPWATCH_RUN_DIR; the dir must exist before the hook runs."""
+    watch_dir = make_watch("w", files={"watch.py": '''
+        import os
+
+        def check(ctx):
+            run_dir = os.environ["KEEPWATCH_RUN_DIR"]
+            (ctx.watch_dir / "run-dir.txt").write_text(run_dir + "|" + str(os.path.isdir(run_dir)))
+            return True
+    '''})
+    result = Runner().run(call_for(watch_dir))
+    assert result.status == "true"
+    shown, is_dir = (watch_dir / "run-dir.txt").read_text(encoding="utf-8").rsplit("|", 1)
+    assert is_dir == "True" and Path(shown) == xdg.run_dir(os.getpid(), "w")
+
+
 def test_a_headline_message_reaches_the_service(make_watch, call_for):
     watch_dir = make_watch("w", files={"watch.py": '''
         def check(ctx):

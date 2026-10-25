@@ -14,13 +14,15 @@ up only if an existing field changes meaning, so a consumer can rely on the ones
 - **The banner**: whether the service is running, its pid and version, and how old the status is. When the
   service is not running — or its status is more than a few seconds old — the age is marked stale, `NEXT` shows
   `—` instead of a countdown, and the rest is the last known status.
-- **The table**: one row per watch. `WATCH`; `STATE` (`online`, `polling`, `offline`, `parked`, `idle`,
-  `invalid`, `orphaned`); `COND`; `FAIL`; `LAST` (outcome and age); `NEXT` (a countdown, `due`, or `retry …` for
-  an offline watch); `OBS` (running observers); and `NOTE`, the first thing that is wrong: an invalid config, a
-  config error, a missing directory, orphaned state, queued events, a user-disabled watch.
+- **The table**: one row per watch. `WATCH`; `STATE` (`online`, `polling`, `transferring`, `offline`, `parked`,
+  `idle`, `invalid`, `orphaned`); `COND`; `FAIL`; `LAST` (outcome and age); `NEXT` (a countdown, `due`, or
+  `retry …` for an offline watch); `OBS` (running observers); and `NOTE`, the first thing that is wrong: an
+  invalid config, a config error, a missing directory, orphaned state, queued events, a user-disabled watch —
+  or, while a transfer runs, the file being moved.
 - **What is running right now**: the service puts the hook it is running (`in_flight`) and what that hook is
   transferring (`transfer`, with the partial file's size) into `status.json`, so `keepwatch status` and this
-  monitor show them without reading the log.
+  monitor show them without reading the log. A long transfer therefore reads `transferring` rather than
+  `polling`, and `NOTE` names the file.
 - **The pane**: the selected watch's recent records, oldest first — the same lines `keepwatch logs` prints.
   While a hook is running the pane header names it and how long it has been going: `recipe pull:on_true running
   1m30s · pulling psg-export.gz 74% (2.6 GiB/3.7 GiB), 2.1 MiB/s, 8m left`. A transfer says how far it has got
@@ -64,6 +66,6 @@ and does not browse history (use `keepwatch logs` for that), and it needs a term
 ## When a poll is in flight
 
 An action that runs for a long time (a large transfer, say) writes no log record until it ends, so the monitor
-marks the watch `polling` from the poll's own `poll.start` record, shows how long it has been running and which
-of its hooks have already finished. It believes that only while the service runs with a fresh status: when the
-service stops or restarts, the mark goes away.
+marks the watch `polling` from the poll's own `poll.start` record (or `transferring` once `status.json` has a
+live transfer), shows how long it has been running and which of its hooks have already finished. It believes
+that only while the service runs with a fresh status: when the service stops or restarts, the mark goes away.
