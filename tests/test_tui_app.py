@@ -302,7 +302,8 @@ def test_the_service_view_of_an_in_flight_hook_is_shown(xdg, make_watch):
     monitor = Monitor(xdg, xdg.config_file)
 
     async def check(app, pilot):
-        assert cell(app, 0, "STATE") == "polling"
+        assert cell(app, 0, "STATE") == "transferring"
+        assert cell(app, 0, "NOTE") == "big.bin"
         assert "recipe pull:on_true running 1m30s" in app.header
         assert "pulling big.bin 75%" in app.header
 

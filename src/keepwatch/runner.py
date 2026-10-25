@@ -344,6 +344,19 @@ class Runner:
             return self._error(call, "command" if is_command else "python", call.hook, started,
                                "keepwatch is shutting down")
         try:
+            # Every hook gets its run dir before it starts: a transfer publishes activity.json there, and a
+            # Python hook may never touch ctx.run_dir, so waiting for "first access" left status.json's
+            # transfer snapshot permanently null (issue 18 follow-up).
+            call.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        except OSError as exc:
+            return self._error(
+                call,
+                "command" if is_command else "python",
+                call.hook,
+                started,
+                f"cannot create the hook's run directory {call.run_dir}: {exc.strerror or exc}",
+            )
+        try:
             if is_command:
                 return self._run_command(call, call.watch.hooks[call.hook])
             return self._run_python(call)
@@ -642,7 +655,6 @@ class Runner:
         try:
             payload_out: Path | None = None
             try:
-                call.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
                 call.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
                 stem = f"{call.poll_id}-{call.hook}"
                 settings_file = call.run_dir / f"{stem}-settings.json"

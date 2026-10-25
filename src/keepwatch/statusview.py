@@ -95,10 +95,10 @@ def _watch_line(name: str, entry: dict[str, Any], now: float) -> str:
     elif isinstance(entry.get("known_to_service"), bool) and not entry["known_to_service"]:
         label = "idle"
     elif entry.get("in_flight"):
-        label = "polling"
+        label = "transferring" if isinstance(entry.get("transfer"), dict) else "polling"
     else:
         label = "online"
-    parts = [f"{name:<20} {label:<8}"]
+    parts = [f"{name:<20} {label:<12}"]
     if "condition" in entry:
         parts.append(f"condition {'TRUE' if entry['condition'] else 'FALSE'}")
     if "failures" in entry:
