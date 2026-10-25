@@ -177,6 +177,11 @@ def test_v_cycles_quiet_normal_verbose_with_a_visible_indicator(xdg, make_watch)
         await pilot.pause()
         assert app.level == 0 and "log: quiet" in app.banner
         assert app.pane_lines == []
+        monitor._ingest(make_record("hook.end", watch="a", poll_id="p2", hook="on_true", status="failed",
+                                    duration=1.0, target="a.py:on_true", reason="boom"))
+        app.update_records()
+        await pilot.pause()
+        assert any("→ failed" in line for line in app.pane_lines)  # quiet never hides a failure
         await pilot.press("v")
         await pilot.pause()
         assert app.level == 1 and "found a.bin" in "\n".join(app.pane_lines)

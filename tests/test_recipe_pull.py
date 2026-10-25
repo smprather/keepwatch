@@ -120,8 +120,8 @@ def test_a_failing_file_does_not_stop_the_rest_of_the_queue(make_watch, server, 
     report = engine(xdg, records).poll(watch, WatchState(False), events=events)
     assert report.failed  # reported, so the next poll retries
     assert (stage / "good.tar.gz").read_bytes() == b"data"  # the queue carried on
-    messages = [r.get("message", "") for r in records if r["event"] == "plugin.event"]
-    assert any("the rest of the queue is still tried" in message for message in messages), messages
+    failures = [r for r in records if r["event"] == "plugin.event" and "the rest of the queue is still tried" in r["message"]]
+    assert failures and all(r["level"] == "WARNING" for r in failures), failures  # quiet must show it
 
 
 WITHDRAWN = b"gone before the pull"  # the size and sha of a file that is no longer on the source
