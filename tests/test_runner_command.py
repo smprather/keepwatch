@@ -156,7 +156,7 @@ def test_unwritable_run_dir_is_a_failed_hook(make_watch, call_for):
     result = Runner().run(call)
     assert result.status == "failed"
     assert result.reason.startswith("cannot create the hook's run directory")
-    assert "not a directory" in result.reason.lower()
+    assert str(call.run_dir) in result.reason  # the OS's own wording differs (POSIX vs Windows)
 
 
 def test_terminate_all_stops_running_hooks(make_watch, call_for):
