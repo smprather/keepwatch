@@ -36,9 +36,13 @@ uv tool install watchglass
 ```
 
 The first `watchglass` command moves `~/.config/keepwatch` and `~/.local/state/keepwatch` (or their Windows
-equivalents) to the `watchglass` paths once, then `watchglass install` registers the new service. Run directories
-are not moved. Environment variables are renamed too: `KEEPWATCH_*` becomes `WATCHGLASS_*` in scripts and
-service environments. See `watchglass docs storage` for the paths.
+equivalents) to the `watchglass` paths once, renames the old logs so `watchglass logs` still shows them, and
+then `watchglass install` registers the new service. Run-only data is not carried over. Environment variables
+are renamed too: `KEEPWATCH_*` becomes `WATCHGLASS_*` in scripts and service environments. Watch code needs the
+same change: `from keepwatch import ...` becomes `from watchglass import ...`, and hooks that run the old
+command or read the old variables must use the new names. `watchglass init` does not overwrite the old
+`AGENTS.md`/`CLAUDE.md` in the watches directory; delete them to have watchglass write the current ones.
+See `watchglass docs storage` for the paths.
 
 ## Learn more
 

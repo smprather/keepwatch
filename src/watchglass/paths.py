@@ -97,6 +97,41 @@ def resolve_paths(env: Mapping[str, str] | None = None, uid: int | None = None) 
     return paths
 
 
+def _legacy_service_alive(status_file: Path) -> bool:
+    """Whether the old keepwatch service says it is running and its pid still exists."""
+    try:
+        document = json.loads(status_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    service = document.get("service") if isinstance(document, dict) else None
+    if not isinstance(service, dict) or not service.get("running"):
+        return False
+    pid = service.get("pid")
+    return isinstance(pid, int) and pid_alive(pid)
+
+
+def _legacy_process_alive(runtime: Path) -> bool:
+    """Whether a manual `keepwatch poll` still has a live run directory (it holds no service lock)."""
+    if not runtime.is_dir():
+        return False
+    for entry in runtime.iterdir():
+        if entry.name.isdigit() and entry.is_dir() and pid_alive(int(entry.name)):
+            return True
+    return False
+
+
+def _rename_legacy_logs(state_home: Path) -> None:
+    """Keep pre-rename log history visible to `watchglass logs` after the state tree moves."""
+    for old in sorted((state_home / "logs").glob(f"{LEGACY_APP}.jsonl*")):
+        new = old.with_name(f"{APP}{old.name[len(LEGACY_APP):]}")
+        if new.exists():
+            continue
+        try:
+            old.rename(new)
+        except OSError:
+            print(f"watchglass: could not rename {old} to {new}", file=sys.stderr)
+
+
 def migrate_legacy_dirs(
     paths: Paths, env: Mapping[str, str] | None = None, uid: int | None = None
 ) -> list[Path]:
@@ -116,18 +151,27 @@ def migrate_legacy_dirs(
     legacy_config = config_base / LEGACY_APP if config_base else legacy_config_default
     legacy_state = state_base / LEGACY_APP if state_base else legacy_state_default
     legacy_runtime = runtime_base / LEGACY_APP if runtime_base else legacy_runtime_default
-    if not legacy_config.is_dir() and not legacy_state.is_dir():
+    moves = [
+        (old, new, label)
+        for old, new, label in ((legacy_config, paths.config_home, "config"), (legacy_state, paths.state_home, "state"))
+        if old != new and old.is_dir() and not new.exists()
+    ]
+    if not moves:
         return []
     with probe_lock(legacy_runtime / "service.lock") as running:
-        if running:
+        if running or _legacy_service_alive(legacy_state / "status.json") or _legacy_process_alive(legacy_runtime):
             raise PathError(
                 "the old keepwatch service is running; stop it before upgrading "
                 "(systemctl --user stop keepwatch.service, or: keepwatch stop), then run watchglass again"
             )
+    # Windows keeps the runtime inside the state directory. Remove it before the move, or it would be
+    # carried into the new runtime: run-only data must never move.
+    if (any(old == legacy_state for old, _, _ in moves) and legacy_runtime != legacy_state
+            and legacy_runtime.is_relative_to(legacy_state)):
+        if legacy_runtime.is_dir() and not legacy_runtime.is_symlink():
+            shutil.rmtree(legacy_runtime, ignore_errors=True)
     moved = []
-    for old, new, label in ((legacy_config, paths.config_home, "config"), (legacy_state, paths.state_home, "state")):
-        if old == new or not old.is_dir() or new.exists():
-            continue
+    for old, new, label in moves:
         try:
             new.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             shutil.move(str(old), str(new))
@@ -136,6 +180,8 @@ def migrate_legacy_dirs(
                 f"cannot move the old keepwatch {label} directory {old} to {new}: {exc.strerror or exc}; "
                 "move it yourself (stop the old service first), then run watchglass again"
             ) from exc
+        if old == legacy_state:
+            _rename_legacy_logs(new)
         moved.append(new)
         print(f"watchglass: moved {old} to {new}", file=sys.stderr)
     return moved

@@ -1,3 +1,6 @@
+# PyPI trusted publishing: before the first tag, add a pending publisher for project `watchglass` at
+# https://pypi.org/manage/account/publishing/ with owner `smprather`, repository `watchglass`, workflow
+# `publish.yml` and environment `pypi`. No token is stored here.
 name: publish
 
 on:

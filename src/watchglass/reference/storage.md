@@ -22,10 +22,14 @@ On Windows the defaults are `%APPDATA%\watchglass` for configuration and watches
 
 The first `watchglass` command moves `$XDG_CONFIG_HOME/keepwatch` and `$XDG_STATE_HOME/keepwatch` (or the
 Windows defaults, `%APPDATA%\keepwatch` and `%LOCALAPPDATA%\keepwatch`) to the watchglass paths once, when the
-new directories do not exist. Stop the old service first: the migration refuses while the old service lock is
-held. If both the old and new directories exist, both are left alone for you to reconcile. Run-only data is not
-moved (old runtime directories are ignored and swept normally), and the environment variables are
-`WATCHGLASS_*` now.
+new directories do not exist. Stop the old service first: the migration refuses while the old service is still
+running (its lock, or a live pid in `status.json`). If both the old and new directories exist, both are left
+alone for you to reconcile. Run-only data is not carried over: on Windows the old run directory is discarded
+with the state move; on POSIX the old runtime directory is left behind and never read or swept. Old
+`keepwatch.jsonl*` logs are renamed to `watchglass.jsonl*` so `watchglass logs` still shows the history, and
+the environment variables are `WATCHGLASS_*` now. Watch code changes too: `from keepwatch import ...` becomes
+`from watchglass import ...`, and hooks that run the old command or read the old variables must use the new
+names. `watchglass init` does not overwrite the old `AGENTS.md`/`CLAUDE.md` in the watches directory.
 
 ## Persistent and run-only data
 

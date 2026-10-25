@@ -134,6 +134,7 @@ def test_every_command_and_option_is_documented():
     assert "UNSET" not in text and "Sentinel" not in text
 
 
+@pytest.mark.usefixtures("xdg")
 def test_docs_write_utf8_to_a_cp1252_pipe(tmp_path):
     """A Windows pipe is encoded with the console code page, which cannot write '→' (issue 2)."""
     env = {**os.environ, "PYTHONIOENCODING": "cp1252"}

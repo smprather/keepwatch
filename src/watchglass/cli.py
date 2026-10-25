@@ -173,7 +173,10 @@ def cli(ctx: click.Context, config_path: Path | None) -> None:
     Writing or fixing a watch? Read `watchglass docs agent` first, or `watchglass docs --all` for the complete reference.
     """
     global _LOG_FILE
-    paths = resolve_paths()
+    try:
+        paths = resolve_paths()
+    except PathError as exc:
+        _fail(str(exc))
     _LOG_FILE = paths.log_file
     ctx.obj = App(paths=paths, config_path=config_path or paths.config_file)
 
