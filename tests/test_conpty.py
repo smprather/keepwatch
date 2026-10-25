@@ -93,9 +93,9 @@ def test_a_hanging_pty_is_killed_at_the_limit(monkeypatch):
     assert process.terminated is True
 
 
-def test_the_missing_extra_says_what_to_install(monkeypatch):
+def test_the_missing_pywinpty_says_what_to_install(monkeypatch):
     monkeypatch.setitem(sys.modules, "winpty", None)  # as if pywinpty were not installed
-    with pytest.raises(ImportError, match=r"keepwatch\[conpty\]"):
+    with pytest.raises(ImportError, match=r"pip install pywinpty.*restart"):
         conpty.run(["scp"], "s3cret", limit=5)
 
 

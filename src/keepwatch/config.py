@@ -524,7 +524,8 @@ def _conpty_problems(collector: _Collector, values: Mapping[str, Any]) -> None:
     elif find_spec("winpty") is None:
         collector.add(
             'password_mode = "conpty" needs pywinpty: it is a default Windows dependency of keepwatch, so '
-            "reinstall it (uv tool install --force keepwatch) or pip install pywinpty",
+            "reinstall it the same way you installed keepwatch (or pip install pywinpty), then restart the "
+            "keepwatch service",
             key="password_mode",
             table="settings",
             topic="recipes",

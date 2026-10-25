@@ -2,8 +2,8 @@
 
 Some servers reject a password delivered through `SSH_ASKPASS` while accepting the same bytes typed at a
 console (mod_sftp among them — see `keepwatch docs transfers`), so `password_mode = "conpty"` runs scp through
-ConPTY and types it. This module is imported only on that path: pywinpty is an optional extra, and nothing here
-is needed anywhere else (the rest of keepwatch is standard library only).
+ConPTY and types it. This module is imported only on that path: pywinpty is a default Windows dependency, and
+nothing here is needed anywhere else (the rest of keepwatch is standard library only).
 """
 
 from __future__ import annotations
@@ -29,13 +29,14 @@ def scrub(text: str, password: str) -> str:
 
 
 def _spawn(argv: Sequence[str], env: Mapping[str, str]):
-    """The pty process, or a clear error naming the extra to install (never an ImportError in a hook's log)."""
+    """The pty process, or a clear error saying what to install (never a bare ImportError in a hook's log)."""
     try:
-        winpty = import_module("winpty")  # pywinpty: a Windows-only optional extra
+        winpty = import_module("winpty")  # pywinpty: a default Windows dependency
     except ImportError as exc:  # pragma: no cover - exercised with a fake module in the tests
         raise ImportError(
-            "password_mode = \"conpty\" needs pywinpty: install keepwatch with the extra, e.g. "
-            "uv tool install 'keepwatch[conpty]' (or pip install pywinpty)"
+            "password_mode = \"conpty\" needs pywinpty: it is a default dependency of keepwatch on Windows, "
+            "so reinstall it the same way you installed keepwatch (or pip install pywinpty), then restart "
+            "the keepwatch service"
         ) from exc
     return winpty.PtyProcess.spawn(list(argv), env=dict(env), dimensions=(24, 200))
 

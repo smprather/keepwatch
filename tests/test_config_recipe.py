@@ -154,8 +154,10 @@ def test_conpty_is_windows_only(make_watch, monkeypatch, text):
 def test_conpty_on_windows_needs_pywinpty(make_watch, monkeypatch, text):
     """A Windows install without pywinpty fails validation, not the transfer (issue 17)."""
     monkeypatch.setattr(config.sys, "platform", "win32")
-    monkeypatch.setattr(config, "find_spec", lambda name: None)
+    looked_up = []
+    monkeypatch.setattr(config, "find_spec", lambda name: looked_up.append(name) or None)
     found = problems(make_watch, text)
+    assert looked_up == ["winpty"]  # pywinpty's import name, not the distribution name
     assert any('password_mode = "conpty" needs pywinpty' in problem for problem in found)
     assert any("pip install pywinpty" in problem for problem in found)
 
@@ -163,8 +165,10 @@ def test_conpty_on_windows_needs_pywinpty(make_watch, monkeypatch, text):
 @pytest.mark.parametrize("text", [CONPTY_PUSH, CONPTY_MIRROR])
 def test_conpty_on_windows_with_pywinpty_is_accepted(make_watch, monkeypatch, text):
     monkeypatch.setattr(config.sys, "platform", "win32")
-    monkeypatch.setattr(config, "find_spec", lambda name: object())
+    looked_up = []
+    monkeypatch.setattr(config, "find_spec", lambda name: looked_up.append(name) or object())
     assert load(make_watch, text).settings["password_mode"] == "conpty"
+    assert looked_up == ["winpty"]
 
 
 def test_missing_and_unknown_settings(make_watch):
