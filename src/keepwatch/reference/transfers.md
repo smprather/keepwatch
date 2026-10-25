@@ -69,9 +69,13 @@ Some servers (mod_sftp is the known one) reject a password that arrives through 
 the *same bytes typed at a console* — no askpass variant helps, because the refusal happens server-side. For
 those, set `password_mode = "conpty"`: keepwatch then runs scp under a Windows pseudo-console, waits for the
 password prompt, types the password itself, and scrubs it out of anything it captures (ssh turns the console's
-echo off, but a pty is not always polite; the value never reaches the log either way). It needs `password_env`,
-Windows, and the `keepwatch[conpty]` extra (`uv tool install 'keepwatch[conpty]'`), since pywinpty is a
-Windows-only package. On every other system the option is refused with a message rather than guessed at, and
+echo off, but a pty is not always polite; the value never reaches the log either way). It needs `password_env`
+and Windows: pywinpty is a default dependency of keepwatch on Windows (a PEP 508 marker, so non-Windows
+installs skip it), and the `keepwatch[conpty]` extra still works as an alias. On every other system the option
+is refused with a message rather than guessed at. For a `recipe = "push"` or `"mirror"` watch, `keepwatch
+validate` reports a missing pywinpty during config load instead of waiting for a transfer to fail; install it
+and restart the service (a failed load is cached until the config or the service restarts). A watch.py or
+`keepwatch kit` transfer with `password_mode = "conpty"` is checked when it runs, not by `validate`. And
 `password_mode = "askpass"` (the default) is exactly the behaviour above.
 
 A last trap for the same destination: **mod_sftp may ignore a server-side `authorized_keys`** unless the

@@ -12,8 +12,7 @@ Watches can also react to events instead of polling: observers keep commands, lo
 
 ```sh
 uv tool install git+https://github.com/smprather/keepwatch
-# Windows only, for servers that refuse SSH_ASKPASS passwords (see: keepwatch docs transfers):
-# uv tool install 'keepwatch[conpty]'
+# (Windows installs get pywinpty automatically; `keepwatch[conpty]` still works as an alias.)
 keepwatch init                 # config, watches directory, AGENTS.md
 keepwatch new hello            # a commented Python watch
 keepwatch validate hello

@@ -1,5 +1,6 @@
 import os
 import sys
+import tomllib
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -66,6 +67,13 @@ def test_the_version_must_match_as_a_whole_word():
 
     longer = [sys.executable, "-c", f"print('keepwatch, version {__version__}1')"]
     assert installcheck.verify_command(longer, os.environ) is not None
+
+
+def test_pywinpty_is_a_default_windows_dependency():
+    """Every Windows install gets pywinpty; the `conpty` extra stays as an alias (issue 17)."""
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert "pywinpty>=2; sys_platform == 'win32'" in project["dependencies"]
+    assert project["optional-dependencies"]["conpty"] == ["pywinpty>=2; sys_platform == 'win32'"]
 
 
 def test_install_checks_the_registered_program_too(xdg, monkeypatch, tmp_path):

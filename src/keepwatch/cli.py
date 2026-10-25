@@ -967,8 +967,8 @@ def _scp_options(function):
                      "never pass the password itself). Default: key authentication only (BatchMode)."),
         click.option("--password-mode", type=click.Choice(transfer.PASSWORD_MODES), default="askpass", show_default=True,
                      help="askpass: the password goes through SSH_ASKPASS. conpty: type it at a Windows "
-                     "pseudo-console instead, for servers that refuse askpass (needs password_env, Windows, and "
-                     "the keepwatch[conpty] extra)."),
+                     "pseudo-console instead, for servers that refuse askpass (needs password_env and Windows, "
+                     "where pywinpty installs by default; keepwatch[conpty] still works as an alias)."),
         click.option("--identity", type=click.Path(dir_okay=False), help="Private key file for ssh -i (only this key is offered)."),
         click.option("--known-hosts", type=click.Path(dir_okay=False),
                      help="known_hosts file to check the host key against. Unknown host keys are always refused."),

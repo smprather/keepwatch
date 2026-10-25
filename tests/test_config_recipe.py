@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from keepwatch import config
 from keepwatch.config import ConfigError, load_watch_config
 
 PULL = """
@@ -135,6 +136,39 @@ def test_mirror_mtime_tolerance_must_not_be_negative(make_watch):
 def test_mirror_password_mode_needs_password_env(make_watch):
     found = problems(make_watch, MIRROR + 'password_mode = "conpty"\n')
     assert any('password_mode = "conpty" needs password_env' in problem for problem in found)
+
+
+CONPTY_PUSH = PUSH + 'password_mode = "conpty"\n'
+CONPTY_MIRROR = MIRROR + 'password_env = "RELAY_PASSWORD"\npassword_mode = "conpty"\n'
+
+
+@pytest.mark.parametrize("text", [CONPTY_PUSH, CONPTY_MIRROR])
+def test_conpty_is_windows_only(make_watch, monkeypatch, text):
+    """`password_mode = "conpty"` is refused off Windows, even with password_env set (issue 17)."""
+    monkeypatch.setattr(config.sys, "platform", "linux")
+    found = problems(make_watch, text)
+    assert any('password_mode = "conpty" is Windows-only; this is linux' in problem for problem in found)
+
+
+@pytest.mark.parametrize("text", [CONPTY_PUSH, CONPTY_MIRROR])
+def test_conpty_on_windows_needs_pywinpty(make_watch, monkeypatch, text):
+    """A Windows install without pywinpty fails validation, not the transfer (issue 17)."""
+    monkeypatch.setattr(config.sys, "platform", "win32")
+    looked_up = []
+    monkeypatch.setattr(config, "find_spec", lambda name: looked_up.append(name) or None)
+    found = problems(make_watch, text)
+    assert looked_up == ["winpty"]  # pywinpty's import name, not the distribution name
+    assert any('password_mode = "conpty" needs pywinpty' in problem for problem in found)
+    assert any("pip install pywinpty" in problem for problem in found)
+
+
+@pytest.mark.parametrize("text", [CONPTY_PUSH, CONPTY_MIRROR])
+def test_conpty_on_windows_with_pywinpty_is_accepted(make_watch, monkeypatch, text):
+    monkeypatch.setattr(config.sys, "platform", "win32")
+    looked_up = []
+    monkeypatch.setattr(config, "find_spec", lambda name: looked_up.append(name) or object())
+    assert load(make_watch, text).settings["password_mode"] == "conpty"
+    assert looked_up == ["winpty"]
 
 
 def test_missing_and_unknown_settings(make_watch):

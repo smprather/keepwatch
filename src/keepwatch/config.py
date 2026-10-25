@@ -8,9 +8,11 @@ import json
 import os
 import re
 import shlex
+import sys
 import tomllib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from importlib.util import find_spec
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -413,7 +415,8 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
             "str",
             "askpass",
             "`askpass` (the password goes through SSH_ASKPASS) or `conpty` (type it at a Windows pseudo-console, "
-            "for servers that refuse askpass; needs `password_env` and the keepwatch[conpty] extra).",
+            "for servers that refuse askpass; needs `password_env` and Windows, where pywinpty is a default "
+            "dependency (keepwatch[conpty] is an alias).",
         ),
         Key(
             "resume",
@@ -473,7 +476,8 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
             "str",
             "askpass",
             "`askpass` (the password goes through SSH_ASKPASS) or `conpty` (type it at a Windows pseudo-console, "
-            "for servers that refuse askpass; needs `password_env` and the keepwatch[conpty] extra).",
+            "for servers that refuse askpass; needs `password_env` and Windows, where pywinpty is a default "
+            "dependency (keepwatch[conpty] is an alias).",
         ),
         Key(
             "part_max_age",
@@ -497,6 +501,35 @@ _RECIPE_REQUIRED = {
 }
 _RECIPE_PATHS = ("local_dir", "identity", "known_hosts", "archive_dir")
 _RECIPE_CHOICES = {"protocol": PROTOCOLS, "marker": MARKERS, "after": RECIPE_AFTER, "on_conflict": CONFLICTS, "on_missing": ON_MISSING, "direction": DIRECTIONS}
+
+
+def _conpty_problems(collector: _Collector, values: Mapping[str, Any]) -> None:
+    """`password_mode = "conpty"` (push and mirror): it needs a password, Windows, and pywinpty (issue 17)."""
+    if values["password_mode"] != "conpty":
+        return
+    if not values["password_env"]:
+        collector.add(
+            'password_mode = "conpty" needs password_env in [settings]: there is no password to type otherwise',
+            key="password_mode",
+            table="settings",
+            topic="recipes",
+        )
+    if sys.platform != "win32":
+        collector.add(
+            f'password_mode = "conpty" is Windows-only; this is {sys.platform}',
+            key="password_mode",
+            table="settings",
+            topic="recipes",
+        )
+    elif find_spec("winpty") is None:
+        collector.add(
+            'password_mode = "conpty" needs pywinpty: it is a default Windows dependency of keepwatch, so '
+            "reinstall it the same way you installed keepwatch (or pip install pywinpty), then restart the "
+            "keepwatch service",
+            key="password_mode",
+            table="settings",
+            topic="recipes",
+        )
 
 
 def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any], watch_dir: Path) -> dict[str, Any]:
@@ -556,22 +589,9 @@ def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any],
                 table="settings",
                 topic="recipes",
             )
-    if recipe == "mirror":
-        if values["password_mode"] == "conpty" and not values["password_env"]:
-            collector.add(
-                'password_mode = "conpty" needs password_env in [settings]: there is no password to type otherwise',
-                key="password_mode",
-                table="settings",
-                topic="recipes",
-            )
+    if recipe in ("mirror", "push"):
+        _conpty_problems(collector, values)
     if recipe == "push":
-        if values["password_mode"] == "conpty" and not values["password_env"]:
-            collector.add(
-                'password_mode = "conpty" needs password_env in [settings]: there is no password to type otherwise',
-                key="password_mode",
-                table="settings",
-                topic="recipes",
-            )
         if values["resume"]:
             if values["protocol"] != "sftp":
                 collector.add(

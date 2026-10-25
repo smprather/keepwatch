@@ -607,7 +607,7 @@ def _run(
     argv: list[str], env: dict[str, str], timeout: float | None, *, options: ScpOptions
 ) -> tuple[int | None, str, str, bool]:
     if options.password_mode == "conpty":
-        from keepwatch.conpty import run as conpty_run  # imported only for this mode (an optional extra)
+        from keepwatch.conpty import run as conpty_run  # imported only for this mode (a default Windows dependency)
 
         return conpty_run(argv, env.get(options.password_env or "", ""), limit=timeout, env=env)
     try:
