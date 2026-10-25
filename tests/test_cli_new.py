@@ -5,7 +5,7 @@ import stat
 import pytest
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
+from watchglass.cli import cli
 
 
 def run(*args):
@@ -17,7 +17,7 @@ def test_python_template_validates_and_polls(xdg):
     assert result.exit_code == 0, result.output
     watch_dir = xdg.default_watches_dir / "fresh"
     assert sorted(p.name for p in watch_dir.iterdir()) == ["config.toml", "watch.py"]
-    assert "keepwatch validate fresh" in result.output
+    assert "watchglass validate fresh" in result.output
     assert run("validate", "fresh").exit_code == 0
     data = json.loads(run("poll", "fresh", "--json").output)
     assert data["polls"][0]["outcome"] == "false"

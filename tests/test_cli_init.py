@@ -1,7 +1,7 @@
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
-from keepwatch.config import LogSettings, load_global_config
+from watchglass.cli import cli
+from watchglass.config import LogSettings, load_global_config
 
 
 def run(*args):
@@ -32,7 +32,7 @@ def test_init_writes_agent_files_once(xdg):
     assert run("init").exit_code == 0
     agents = xdg.default_watches_dir / "AGENTS.md"
     claude = xdg.default_watches_dir / "CLAUDE.md"
-    assert "keepwatch docs agent" in agents.read_text()
+    assert "watchglass docs agent" in agents.read_text()
     assert claude.read_text() == "@AGENTS.md\n"
     agents.write_text("# mine\n")
     result = run("init")

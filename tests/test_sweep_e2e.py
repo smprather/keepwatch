@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch.service import Service
 from portable import PY, literal, toml_path
 from scp_server import PASSWORD, ScpServer
+from watchglass.service import Service
 
 pytestmark = [pytest.mark.posix_only, pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")]
 FAKE_SSH = Path(__file__).resolve().with_name("fake_ssh.py")

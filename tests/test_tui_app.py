@@ -5,12 +5,12 @@ import time
 
 from textual.widgets import DataTable
 
-from keepwatch.locks import hold_lock
-from keepwatch.logstore import LogWriter, make_record
-from keepwatch.offline import OfflineMarker, iso_time, write_offline
-from keepwatch.paths import ensure_private_dir, write_json_atomic
-from keepwatch.tui.app import KeepwatchApp
-from keepwatch.tui.monitor import Monitor
+from watchglass.locks import hold_lock
+from watchglass.logstore import LogWriter, make_record
+from watchglass.offline import OfflineMarker, iso_time, write_offline
+from watchglass.paths import ensure_private_dir, write_json_atomic
+from watchglass.tui.app import WatchglassApp
+from watchglass.tui.monitor import Monitor
 
 WATCH_CONFIG = '[hooks]\ncheck = ["true"]\n'
 
@@ -78,7 +78,7 @@ def run_app(monitor, check, *, size=(120, 40)):
     """Run the app headless and hand it to `check` (an async function) with the pilot."""
 
     async def main():
-        app = KeepwatchApp(monitor)
+        app = WatchglassApp(monitor)
         async with app.run_test(size=size) as pilot:
             await pilot.pause()
             await check(app, pilot)

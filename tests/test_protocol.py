@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from keepwatch.protocol import MAX_PAYLOAD_BYTES, clip, decode_lines, encode, normalize_payload
+from watchglass.protocol import MAX_PAYLOAD_BYTES, clip, decode_lines, encode, normalize_payload
 
 
 def test_encode_and_decode_round_trip():

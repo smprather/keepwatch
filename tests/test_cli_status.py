@@ -4,11 +4,11 @@ import time
 
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
-from keepwatch.locks import hold_lock
-from keepwatch.offline import OfflineMarker, iso_time, write_offline
-from keepwatch.paths import ensure_private_dir, write_json_atomic
-from keepwatch.service import Service
+from watchglass.cli import cli
+from watchglass.locks import hold_lock
+from watchglass.offline import OfflineMarker, iso_time, write_offline
+from watchglass.paths import ensure_private_dir, write_json_atomic
+from watchglass.service import Service
 
 
 def run(*args):

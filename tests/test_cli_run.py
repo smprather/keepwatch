@@ -8,9 +8,9 @@ import time
 import pytest
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
+from watchglass.cli import cli
 
-KEEPWATCH = [sys.executable, "-c", "from keepwatch.cli import main; main()"]
+WATCHGLASS = [sys.executable, "-c", "from watchglass.cli import main; main()"]
 
 COUNTER = '''
     def check(ctx):
@@ -36,7 +36,7 @@ def wait_for(predicate, timeout=20.0):
 def test_run_refuses_a_watch_name_it_does_not_know(xdg, make_watch):
     """`--watch` with a typo used to filter every watch out and run a service that did nothing."""
     make_watch("w", config='[hooks]\ncheck = ["true"]\n')
-    result = subprocess.run([*KEEPWATCH, "run", "--watch", "w-typo"], capture_output=True, text=True, timeout=60)
+    result = subprocess.run([*WATCHGLASS, "run", "--watch", "w-typo"], capture_output=True, text=True, timeout=60)
     assert result.returncode == 1
     assert "w-typo" in result.stdout + result.stderr
 
@@ -45,11 +45,11 @@ def test_run_refuses_a_watch_name_it_does_not_know(xdg, make_watch):
 def test_run_stops_on_sigterm(xdg, make_watch):
     watch_dir = make_watch("w", config='interval = "1s"\n', files={"watch.py": COUNTER})
     count = watch_dir / "count"
-    proc = subprocess.Popen([*KEEPWATCH, "run"], env=dict(os.environ), stdout=subprocess.PIPE,
+    proc = subprocess.Popen([*WATCHGLASS, "run"], env=dict(os.environ), stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)
     try:
         assert wait_for(lambda: count.exists() and int(count.read_text()) >= 2)
-        second = subprocess.run([*KEEPWATCH, "run"], env=dict(os.environ), capture_output=True, text=True, timeout=30)
+        second = subprocess.run([*WATCHGLASS, "run"], env=dict(os.environ), capture_output=True, text=True, timeout=30)
         assert second.returncode == 1
         assert "already running" in second.stdout + second.stderr
     finally:
@@ -78,14 +78,14 @@ def test_help_lists_the_run_panel(xdg):
 def test_run_polls_and_stops_cleanly(xdg, make_watch):
     watch_dir = make_watch("w", config='interval = "1s"\n', files={"watch.py": COUNTER})
     count = watch_dir / "count"
-    proc = subprocess.Popen([*KEEPWATCH, "run"], env=dict(os.environ), stdout=subprocess.PIPE,
+    proc = subprocess.Popen([*WATCHGLASS, "run"], env=dict(os.environ), stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)
     try:
         assert wait_for(lambda: count.exists() and int(count.read_text()) >= 2)
-        second = subprocess.run([*KEEPWATCH, "run"], env=dict(os.environ), capture_output=True, text=True, timeout=30)
+        second = subprocess.run([*WATCHGLASS, "run"], env=dict(os.environ), capture_output=True, text=True, timeout=30)
         assert second.returncode == 1
         assert "already running" in second.stdout + second.stderr
-        stopped = subprocess.run([*KEEPWATCH, "stop"], env=dict(os.environ), capture_output=True, text=True,
+        stopped = subprocess.run([*WATCHGLASS, "stop"], env=dict(os.environ), capture_output=True, text=True,
                                  timeout=60)
         assert stopped.returncode == 0, stopped.stdout + stopped.stderr
         assert "stopped" in stopped.stdout
@@ -102,11 +102,11 @@ def test_run_polls_and_stops_cleanly(xdg, make_watch):
 def test_stop_without_a_service(xdg):
     result = CliRunner().invoke(cli, ["stop"])
     assert result.exit_code == 1
-    assert "no keepwatch service is running" in result.output
+    assert "no watchglass service is running" in result.output
 
 
 def test_fail_without_a_console_writes_to_the_log(xdg, monkeypatch):
-    from keepwatch import cli as cli_module
+    from watchglass import cli as cli_module
 
     monkeypatch.setattr(cli_module, "_LOG_FILE", xdg.log_file)
     monkeypatch.setattr(sys, "stderr", None)

@@ -5,8 +5,8 @@ import socket
 import pytest
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
 from scp_server import ScpServer
+from watchglass.cli import cli
 
 needs_scp = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
 
@@ -94,7 +94,7 @@ def test_kit_bad_usage(xdg, tmp_path):
 
 
 def test_kit_refuses_to_transfer_in_a_check(xdg, tmp_path):
-    result = CliRunner().invoke(cli, ["kit", "copy", str(tmp_path / "a.gz"), "me@h:"], env={"KEEPWATCH_HOOK": "check"})
+    result = CliRunner().invoke(cli, ["kit", "copy", str(tmp_path / "a.gz"), "me@h:"], env={"WATCHGLASS_HOOK": "check"})
     assert result.exit_code == 1
     assert "a check must not transfer files" in result.output
 

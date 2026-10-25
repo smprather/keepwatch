@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch import runner as runner_module
-from keepwatch.config import load_watch_config
-from keepwatch.runner import Runner, make_shim
-from keepwatch.state import Outcome
+from watchglass import runner as runner_module
+from watchglass.config import load_watch_config
+from watchglass.runner import Runner, make_shim
+from watchglass.state import Outcome
 
 network = pytest.mark.skipif(
-    os.environ.get("KEEPWATCH_SKIP_NETWORK") == "1" or shutil.which("uv") is None,
+    os.environ.get("WATCHGLASS_SKIP_NETWORK") == "1" or shutil.which("uv") is None,
     reason="needs uv and network access",
 )
 
@@ -49,12 +49,12 @@ def test_check_answers_with_payload_logs_and_output(make_watch, call_for):
 
 
 def test_a_python_hook_gets_its_run_dir_before_it_starts(make_watch, call_for, xdg):
-    """A transfer publishes activity.json through KEEPWATCH_RUN_DIR; the dir must exist before the hook runs."""
+    """A transfer publishes activity.json through WATCHGLASS_RUN_DIR; the dir must exist before the hook runs."""
     watch_dir = make_watch("w", files={"watch.py": '''
         import os
 
         def check(ctx):
-            run_dir = os.environ["KEEPWATCH_RUN_DIR"]
+            run_dir = os.environ["WATCHGLASS_RUN_DIR"]
             (ctx.watch_dir / "run-dir.txt").write_text(run_dir + "|" + str(os.path.isdir(run_dir)))
             return True
     '''})
@@ -140,10 +140,10 @@ def test_dependencies_without_uv_are_reported(make_watch, call_for):
 
 
 def test_make_shim_links_the_running_package(tmp_path):
-    import keepwatch
+    import watchglass
 
     shim = make_shim(tmp_path / "lib")
-    assert (shim / "keepwatch").resolve() == Path(keepwatch.__file__).resolve().parent
+    assert (shim / "watchglass").resolve() == Path(watchglass.__file__).resolve().parent
     assert make_shim(tmp_path / "lib") == shim
 
 
@@ -168,7 +168,7 @@ def test_version_mismatch_is_reported(make_watch, call_for, monkeypatch):
     watch_dir = make_watch("w", files={"watch.py": "def check(ctx):\n    return True\n"})
     result = Runner().run(call_for(watch_dir))
     assert result.status == "error"
-    assert result.reason.startswith("keepwatch version mismatch")
+    assert result.reason.startswith("watchglass version mismatch")
 
 
 def test_describe_mode(make_watch, call_for):
@@ -177,14 +177,14 @@ def test_describe_mode(make_watch, call_for):
     assert result.status == "ok" and result.hooks == ["check", "on_true"]
 
 
-def test_keepwatch_environment_reaches_python_hooks(make_watch, call_for):
+def test_watchglass_environment_reaches_python_hooks(make_watch, call_for):
     watch_dir = make_watch("w", config='[environment]\nFROM_WATCH = "1"\n', files={"watch.py": '''
         import os
         def check(ctx):
-            return True, {k: os.environ.get(k) for k in ("KEEPWATCH_WATCH", "KEEPWATCH_HOOK", "FROM_WATCH")}
+            return True, {k: os.environ.get(k) for k in ("WATCHGLASS_WATCH", "WATCHGLASS_HOOK", "FROM_WATCH")}
     '''})
     result = Runner().run(call_for(watch_dir))
-    assert result.payload == {"KEEPWATCH_WATCH": "w", "KEEPWATCH_HOOK": "check", "FROM_WATCH": "1"}
+    assert result.payload == {"WATCHGLASS_WATCH": "w", "WATCHGLASS_HOOK": "check", "FROM_WATCH": "1"}
 
 
 def test_huge_log_volume_is_capped(make_watch, call_for, monkeypatch):
@@ -197,7 +197,7 @@ def test_huge_log_volume_is_capped(make_watch, call_for, monkeypatch):
     '''})
     result = Runner().run(call_for(watch_dir))
     assert result.status == "true"
-    notes = [m["message"] for m in result.messages if m.get("logger") == "keepwatch.worker"]
+    notes = [m["message"] for m in result.messages if m.get("logger") == "watchglass.worker"]
     assert any("beyond the 100000-byte limit" in note for note in notes)
     assert sum(1 for m in result.messages if m.get("type") == "log") < 1000
 
@@ -211,7 +211,7 @@ def test_unexpected_runner_errors_become_failed_results(make_watch, call_for, mo
     monkeypatch.setattr(Runner, "_run_command", boom)
     result = Runner().run(call_for(watch_dir, hook="on_true"))
     assert result.status == "failed"
-    assert result.reason == "keepwatch internal error: RuntimeError: boom"
+    assert result.reason == "watchglass internal error: RuntimeError: boom"
     assert "RuntimeError" in result.exception["traceback"]
 
 
@@ -251,11 +251,11 @@ def test_messages_are_delivered_while_the_hook_runs(make_watch, call_for):
 
 @pytest.mark.posix_only
 def test_make_shim_is_safe_across_threads_and_repairs_dangling_links(tmp_path):
-    import keepwatch
+    import watchglass
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    (lib / "keepwatch").symlink_to(tmp_path / "gone")
+    (lib / "watchglass").symlink_to(tmp_path / "gone")
     errors = []
 
     def build():
@@ -270,20 +270,20 @@ def test_make_shim_is_safe_across_threads_and_repairs_dangling_links(tmp_path):
     for thread in threads:
         thread.join()
     assert errors == []
-    assert (lib / "keepwatch").resolve() == Path(keepwatch.__file__).resolve().parent
+    assert (lib / "watchglass").resolve() == Path(watchglass.__file__).resolve().parent
 
 
 @pytest.mark.windows_only
 def test_make_shim_repairs_a_wrong_junction_across_threads(tmp_path):
     import _winapi
 
-    import keepwatch
+    import watchglass
 
     lib = tmp_path / "lib"
     lib.mkdir()
     other = tmp_path / "other"
     other.mkdir()
-    _winapi.CreateJunction(str(other), str(lib / "keepwatch"))
+    _winapi.CreateJunction(str(other), str(lib / "watchglass"))
     errors = []
 
     def build():
@@ -298,4 +298,4 @@ def test_make_shim_repairs_a_wrong_junction_across_threads(tmp_path):
     for thread in threads:
         thread.join()
     assert errors == []
-    assert (lib / "keepwatch").resolve() == Path(keepwatch.__file__).resolve().parent
+    assert (lib / "watchglass").resolve() == Path(watchglass.__file__).resolve().parent

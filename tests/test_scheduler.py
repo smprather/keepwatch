@@ -4,14 +4,14 @@ import time
 
 import pytest
 
-from keepwatch import scheduler as scheduler_module
-from keepwatch.config import load_global_config, load_watch_config
-from keepwatch.offline import OfflineMarker, clear_offline, iso_time, read_offline, write_offline
-from keepwatch.pollengine import PollEngine
-from keepwatch.runner import Runner
-from keepwatch.scheduler import WatchRunner
-from keepwatch.state import Outcome, WatchState
 from portable import py
+from watchglass import scheduler as scheduler_module
+from watchglass.config import load_global_config, load_watch_config
+from watchglass.offline import OfflineMarker, clear_offline, iso_time, read_offline, write_offline
+from watchglass.pollengine import PollEngine
+from watchglass.runner import Runner
+from watchglass.scheduler import WatchRunner
+from watchglass.state import Outcome, WatchState
 
 
 class Clock:

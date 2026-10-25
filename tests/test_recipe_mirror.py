@@ -13,16 +13,16 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch.config import load_global_config, load_watch_config
-from keepwatch.ctx import Checkpoint, CommandFailed, Ctx, Unknown, checkpoint_file
-from keepwatch.pollengine import PollEngine
-from keepwatch.recipes import mirror
-from keepwatch.remote import ssh_run_argv
-from keepwatch.runner import Runner
-from keepwatch.state import WatchState
-from keepwatch.transfer import Transfer, TransferFailed
 from portable import toml_path
 from scp_server import ScpServer
+from watchglass.config import load_global_config, load_watch_config
+from watchglass.ctx import Checkpoint, CommandFailed, Ctx, Unknown, checkpoint_file
+from watchglass.pollengine import PollEngine
+from watchglass.recipes import mirror
+from watchglass.remote import ssh_run_argv
+from watchglass.runner import Runner
+from watchglass.state import WatchState
+from watchglass.transfer import Transfer, TransferFailed
 
 pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
 SSH_OPTIONS = ("-F", "/dev/null", "-o", "IdentityAgent=none")
@@ -94,7 +94,7 @@ class FakeCtx(Ctx):
         self.events = list(events)
         self.payload = None
         self._left = 3600.0
-        self.log = logging.getLogger("keepwatch.test.mirror")
+        self.log = logging.getLogger("watchglass.test.mirror")
         self.watch_dir = tmp_path / "watch"
         self.watch_dir.mkdir(exist_ok=True)
         self._data = tmp_path / "data"

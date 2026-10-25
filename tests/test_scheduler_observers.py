@@ -3,13 +3,13 @@ import time
 
 import pytest
 
-from keepwatch import observers
-from keepwatch.config import load_global_config, load_watch_config
-from keepwatch.offline import OfflineMarker, clear_offline, iso_time, write_offline
-from keepwatch.pollengine import PollEngine
-from keepwatch.runner import Runner
-from keepwatch.scheduler import WatchRunner
 from portable import PY, literal
+from watchglass import observers
+from watchglass.config import load_global_config, load_watch_config
+from watchglass.offline import OfflineMarker, clear_offline, iso_time, write_offline
+from watchglass.pollengine import PollEngine
+from watchglass.runner import Runner
+from watchglass.scheduler import WatchRunner
 
 RECORDING_WATCH = """
     def check(ctx):
@@ -266,7 +266,7 @@ def test_events_do_not_cut_the_crash_pause_short(make_watch, runner_for):
     runner = runner_for(watch_dir, records, time.time)
 
     def broken(*args, **kwargs):
-        raise RuntimeError("keepwatch bug")
+        raise RuntimeError("watchglass bug")
 
     runner._engine.poll = broken
     runner.start()

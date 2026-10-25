@@ -1,8 +1,8 @@
 import ast
 from pathlib import Path
 
-from keepwatch import observers, remote
-from keepwatch.config import ObserverConfig
+from watchglass import observers, remote
+from watchglass.config import ObserverConfig
 
 SOURCE = Path(remote.__file__)
 

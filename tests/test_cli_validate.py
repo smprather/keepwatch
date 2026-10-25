@@ -3,8 +3,8 @@ import json
 import pytest
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
 from portable import TRUE, toml_path
+from watchglass.cli import cli
 
 
 def run(*args):
@@ -32,7 +32,7 @@ def test_every_problem_is_reported(xdg, make_watch):
     assert "importing watch.py failed: ModuleNotFoundError" in by_name["importerr"]["problems"][0]
     assert by_name["nocheck"]["problems"][0].endswith(
         "the watch has no check: define check(ctx) in watch.py or set check in [hooks] of config.toml; "
-        "see: keepwatch docs python"
+        "see: watchglass docs python"
     )
     badcmd = " ".join(by_name["badcmd"]["problems"])
     assert "./missing.sh does not exist" in badcmd and "'no-such-program-xyz' is not on PATH" in badcmd
@@ -65,7 +65,7 @@ def test_dates_in_settings_do_not_crash(xdg, make_watch):
     assert "check → true" in result.output
 
 
-def test_hooks_keepwatch_cannot_see_are_reported(xdg, make_watch):
+def test_hooks_watchglass_cannot_see_are_reported(xdg, make_watch):
     make_watch("hidden", files={
         "helpers.py": "def on_rise(ctx):\n    pass\n",
         "watch.py": "from helpers import on_rise\n\ndef check(ctx):\n    return True\n\nasync def on_true(ctx):\n    pass\n",

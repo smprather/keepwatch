@@ -1,0 +1,30 @@
+"""watchglass: poll conditions and run actions, from login onward."""
+
+__version__ = "2026.10.25.1"
+
+from watchglass.ctx import (  # noqa: E402
+    Checkpoint,
+    CheckpointCorrupt,
+    CheckpointReadOnly,
+    CommandFailed,
+    Ctx,
+    Ledger,
+    LedgerCorrupt,
+    LedgerReadOnly,
+    Unknown,
+)
+from watchglass.transfer import TransferFailed  # noqa: E402
+
+__all__ = [
+    "Checkpoint",
+    "CheckpointCorrupt",
+    "CheckpointReadOnly",
+    "CommandFailed",
+    "Ctx",
+    "Ledger",
+    "LedgerCorrupt",
+    "LedgerReadOnly",
+    "TransferFailed",
+    "Unknown",
+    "__version__",
+]

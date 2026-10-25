@@ -2,11 +2,11 @@ import os
 
 import pytest
 
-from keepwatch.config import load_global_config, load_watch_config
-from keepwatch.pollengine import Fake, PollEngine, parse_fakes
-from keepwatch.runner import Runner
-from keepwatch.state import Edge, Outcome, WatchState
 from portable import toml_path
+from watchglass.config import load_global_config, load_watch_config
+from watchglass.pollengine import Fake, PollEngine, parse_fakes
+from watchglass.runner import Runner
+from watchglass.state import Edge, Outcome, WatchState
 
 PSG_WATCH = '''
     import sys

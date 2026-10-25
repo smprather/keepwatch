@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch.config import DEFAULT_IGNORE, Command, ConfigError, ObserverConfig, load_watch_config
 from portable import PY, literal
+from watchglass.config import DEFAULT_IGNORE, Command, ConfigError, ObserverConfig, load_watch_config
 
 
 def load(make_watch, text):
@@ -67,7 +67,7 @@ def test_missing_kind(make_watch):
     [problem] = problems(make_watch, "[observe.x]\npath = 'in'\n")
     assert "[observe.x] needs kind = one of command, files, remote_files; got missing" in problem
     assert "config.toml:1:" in problem
-    assert "keepwatch docs observers" in problem
+    assert "watchglass docs observers" in problem
 
 
 def test_unknown_kind(make_watch):

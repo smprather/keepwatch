@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch import platform
+from watchglass import platform
 
 
 def test_pid_alive():
@@ -21,9 +21,9 @@ def test_pid_alive():
 def test_posix_default_dirs():
     config, state, runtime = platform.default_app_dirs({"HOME": "/home/u", "TMPDIR": "/var/tmp"}, uid=7)
     assert (config, state, runtime) == (
-        Path("/home/u/.config/keepwatch"),
-        Path("/home/u/.local/state/keepwatch"),
-        Path("/var/tmp/keepwatch-7"),
+        Path("/home/u/.config/watchglass"),
+        Path("/home/u/.local/state/watchglass"),
+        Path("/var/tmp/watchglass-7"),
     )
 
 
@@ -31,9 +31,9 @@ def test_posix_default_dirs():
 def test_windows_default_dirs():
     env = {"APPDATA": r"C:\Users\u\AppData\Roaming", "LOCALAPPDATA": r"C:\Users\u\AppData\Local"}
     config, state, runtime = platform.default_app_dirs(env)
-    assert config == Path(r"C:\Users\u\AppData\Roaming\keepwatch")
-    assert state == Path(r"C:\Users\u\AppData\Local\keepwatch")
-    assert runtime == Path(r"C:\Users\u\AppData\Local\keepwatch\run")
+    assert config == Path(r"C:\Users\u\AppData\Roaming\watchglass")
+    assert state == Path(r"C:\Users\u\AppData\Local\watchglass")
+    assert runtime == Path(r"C:\Users\u\AppData\Local\watchglass\run")
 
 
 GRANDCHILD = (

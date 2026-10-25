@@ -2,8 +2,8 @@ import json
 
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
-from keepwatch.logstore import LogWriter
+from watchglass.cli import cli
+from watchglass.logstore import LogWriter
 
 RECORDS = [
     {"ts": "2026-09-30T10:00:00.000+00:00", "level": "INFO", "event": "poll.start", "watch": "a",
@@ -17,7 +17,7 @@ RECORDS = [
 
 
 def test_a_negative_limit_is_a_usage_error(xdg):
-    """`keepwatch logs -n -5` promised exit 2 for wrong usage; it raised ValueError from deque(maxlen=-5)."""
+    """`watchglass logs -n -5` promised exit 2 for wrong usage; it raised ValueError from deque(maxlen=-5)."""
     seed(xdg)
     result = run("logs", "-n", "-5")
     assert result.exit_code == 2

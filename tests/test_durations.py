@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from keepwatch.durations import DurationError, format_duration, parse_duration
+from watchglass.durations import DurationError, format_duration, parse_duration
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,126 @@
+# Transfers: scp for hooks
+
+Moving files between machines is what many watches do. watchglass gives hooks one safe way to do it, built on the system's OpenSSH `scp` (part of Windows 10/11 and every Linux): **Python hooks** use `ctx.transfer`, **command hooks** use `watchglass kit`. Every scp run is logged as a `command` record, like `ctx.run`.
+
+```python
+def on_true(ctx):
+    done = ctx.ledger("pushed")
+    for path in ctx.payload:
+        ctx.transfer.push(path, "me@linux2:incoming/", password_env="RELAY_PASSWORD")
+        done.add(ctx.file_key(path))
+```
+
+```sh
+watchglass kit push "$FILE" me@linux2:incoming/ --password-env RELAY_PASSWORD
+```
+
+## Endpoints
+
+- A local path (`C:\data\out\a.gz` and `C:/data/out/a.gz` are local: a drive letter is never a host). In `ctx.transfer`, relative paths start at the watch directory.
+- `[user@]host:path` (a colon before any slash): `path` is relative to the remote home unless it starts with `/`. `host` may be a Host alias from `~/.ssh/config`.
+- `scp://[user@]host[:port]/path` when you need a port inside the endpoint.
+
+At least one side must be remote. **Two remote endpoints** (copying linux1 → linux2 through this machine with `scp -3`) need `protocol = "sftp"` on both hosts and key authentication: with the classic protocol, `scp -3` reports success even when the destination host fails, so watchglass refuses it. To an scp-only destination, copy through a local folder instead (pull, then push), which is also what lets a destination that is often offline catch up later.
+
+## Operations
+
+| Python | Command hook | What it does |
+|---|---|---|
+| `ctx.transfer.copy(src, dst)` | `watchglass kit copy SRC DST` | One scp; nothing else. |
+| `ctx.transfer.pull(remote, local_dir, size=, sha256=, on_conflict=)` | `watchglass kit pull REMOTE DIR [--size N] [--sha256 HEX] [--on-conflict …]` | Copies to `DIR/.NAME.part`, checks size and sha256 when given, then renames to `DIR/NAME`. A failed check deletes the part file, so a half or wrong file never appears under its real name. Returns / prints the final path. `resume = true` is refused without `protocol = "sftp"` and a `sha256`: sftp's `reget` is what continues the partial, and only the sha256 proves the resumed bytes are the file that was asked for. |
+| `ctx.transfer.push(path, remote_dir, marker=)` | `watchglass kit push PATH REMOTE_DIR [--marker sha256\|none]` | Uploads `NAME`, then, once that succeeded, `NAME.sha256` in `sha256sum` format. Returns / prints the remote path. |
+| `ctx.transfer.tcp_open(host, port=22, timeout=5)` | `watchglass kit tcp-open HOST [--port N]` | Whether the port accepts a TCP connection (exit 0 open, 1 closed). Allowed in a check. |
+
+`pull` when `DIR/NAME` already exists: with `sha256` given and matching, nothing is copied (an earlier pull finished); otherwise it fails unless `on_conflict = "rename"` (`NAME-1.ext`) or `"overwrite"`.
+
+Two transfers must not pull the same name into the same folder at the same time (they share `.NAME.part`).
+
+**The `.sha256` marker** exists for destinations where uploads cannot be renamed into place (upload-only accounts): the data arrives first, the marker last. A consumer there waits for `NAME.sha256` and runs `sha256sum -c NAME.sha256` before using `NAME`.
+
+## Options
+
+Keyword arguments of `copy`, `pull` and `push` (`--option` for `watchglass kit`):
+
+| Option | Meaning |
+|---|---|
+| `password_env` | Name of the environment variable holding the password. Default: keys only. |
+| `identity` | A private key file (`ssh -i`); ssh then offers only that key. On Windows the file must be readable by you alone, or OpenSSH ignores it ("bad permissions"): `icacls KEY /inheritance:r /grant:r "%USERNAME%:F"` (keys made by ssh-keygen in `~\.ssh` already are). If ssh then says "Try removing permissions for user: OWNER RIGHTS", also run `icacls KEY /remove:g *S-1-3-4`. |
+| `known_hosts` | A known_hosts file to check host keys against (default: ssh's own, `~/.ssh/known_hosts`). |
+| `port` | ssh port for `user@host:path` endpoints. |
+| `protocol` | `"scp"` (default): the classic protocol, which scp-only servers accept; watchglass adds `-O` on OpenSSH 9 and newer, where scp otherwise speaks SFTP. `"sftp"`: needs OpenSSH 9+. |
+| `preserve_mtime` | `scp -p`: the destination carries the source's modification and access times **and its mode bits**. Default off. Needed by anything that later diffs the two trees by mtime (the `mirror` recipe), and by anyone who wants a copy to look like the original. See *Times a destination refuses*. |
+| `ssh_options` | Extra scp arguments, placed before watchglass's own (ssh keeps the first value given): a list such as `["-o", "ProxyJump=bastion"]`, never a string. (`watchglass kit --ssh-option ProxyJump=bastion` adds the `-o` itself.) |
+| `timeout` | Give up after this many seconds. In `ctx.transfer` each scp run also stops at the hook's deadline (so a push's marker never gets more than what is left). Running out of time raises `TransferFailed`, not `subprocess.TimeoutExpired` (unlike `ctx.run`). |
+
+Always set: `StrictHostKeyChecking=yes` (**host keys must already be known**: connect once by hand, `ssh me@host true`, or pass `known_hosts`), `ConnectTimeout=15`, `ServerAliveInterval=15`, `ServerAliveCountMax=3`, and `BatchMode=yes` without a password (nothing can prompt), or `NumberOfPasswordPrompts=1` with one (a wrong password fails once, instead of three times that could trip a lockout such as fail2ban).
+
+## Passwords
+
+Never put a password in config.toml, a hook or a command line. Put it in an environment variable that the watchglass service sees, and name the variable in `password_env`:
+
+- **Windows:** `setx RELAY_PASSWORD "…"` (for your user), then restart the watchglass logon task (`watchglass stop`, then start it from Task Scheduler, or log off and on): processes only see variables that existed when they started.
+- **Linux:** `Environment=` in a systemd drop-in (`systemctl --user edit watchglass`), or the global `[environment]` table of watchglass's config if that file is private to you.
+
+watchglass hands it to scp through `SSH_ASKPASS` (with `SSH_ASKPASS_REQUIRE=force`): a small launcher in a private temporary directory runs the helper's own file (`askpass.py`, standard library only, so even an interpreter that cannot import watchglass can run it) with the variable's name, and the helper prints its value. The password is never written to a file, passed as an argument or logged; only the variable's name is. The helper refuses to answer host-key questions ("yes/no"). Password and keyboard-interactive logins both work.
+
+### Passwords a server refuses
+
+Some servers (mod_sftp is the known one) reject a password that arrives through `SSH_ASKPASS` while accepting
+the *same bytes typed at a console* — no askpass variant helps, because the refusal happens server-side. For
+those, set `password_mode = "conpty"`: watchglass then runs scp under a Windows pseudo-console, waits for the
+password prompt, types the password itself, and scrubs it out of anything it captures (ssh turns the console's
+echo off, but a pty is not always polite; the value never reaches the log either way). It needs `password_env`
+and Windows: pywinpty is a default dependency of watchglass on Windows (a PEP 508 marker, so non-Windows
+installs skip it), and the `watchglass[conpty]` extra still works as an alias. On every other system the option
+is refused with a message rather than guessed at. For a `recipe = "push"` or `"mirror"` watch, `watchglass
+validate` reports a missing pywinpty during config load instead of waiting for a transfer to fail; install it
+and restart the service (a failed load is cached until the config or the service restarts). A watch.py or
+`watchglass kit` transfer with `password_mode = "conpty"` is checked when it runs, not by `validate`. And
+`password_mode = "askpass"` (the default) is exactly the behaviour above.
+
+A last trap for the same destination: **mod_sftp may ignore a server-side `authorized_keys`** unless the
+administrator sets `SFTPAuthorizedUserKeys` (or the equivalent for that build), so a key path that "should"
+work may still be refused — check the server's SFTP configuration before concluding the key is wrong.
+
+### A destination that refuses to overwrite
+
+Some destinations (mod_sftp again) refuse to overwrite a file that already exists. That turns one failed push
+into a trap: the partial `NAME` left by a dropped connection **poisons that name**, and every retry fails with a
+bare `Permission denied` that reads like a wrong password. watchglass now says what it is:
+
+```
+WARNING psg-export-2026.10.6_1 is already on the destination and its server refuses to overwrite it (a partial
+file from an earlier attempt?); remove it there and the next attempt pushes cleanly
+```
+
+With `resume = true` (needs `protocol = "sftp"` and `marker = "sha256"`) it goes further and **continues the
+partial** with sftp's `reput` instead of failing, then uploads the marker as usual — the marker is what verifies
+the finished file on the receiving side, so a continued upload that ended up wrong is caught there. `watchglass
+kit push --resume` does the same by hand, and `ctx.transfer.push(..., resume=True)` for watch authors.
+
+### Times a destination refuses
+
+`preserve_mtime` asks scp to copy the times after the data. Two things can refuse that, and both come **after**
+the bytes are there:
+
+- Windows' OpenSSH reports `local set times: Input/output error` on a **pull** whose transfer succeeded.
+- A server that will not set them reports `set times: Operation not permitted` on a push.
+
+Because the times step is last, watchglass treats that stderr as a **warning, not a failure** when
+`preserve_mtime` is on: the copy is kept and the log says its times could not be set, so it carries the transfer
+time. For a local destination the file must actually be there (if scp wrote nothing, the transfer still fails),
+and a pull's `.NAME.part` must still pass its size/sha256 checks — so the tolerance cannot hide a broken
+transfer. Without `preserve_mtime` the same stderr is a plain failure, as before.
+
+If what you need is the times and nothing else, a caller that knows the source's mtime can set them itself:
+`os.utime(path, (mtime, mtime))` after a pull. That is what `recipe = "mirror"` does when a pull could not carry
+them.
+
+## Errors
+
+- **Remote login scripts must print nothing** for non-interactive sessions: an `echo` in the remote `.cshrc`/`.bashrc` corrupts scp in both protocols ("Received message too long"). Guard it: `if ($?prompt) then … endif` in csh/tcsh, `case $- in *i*) … ;; esac` in sh/bash. (The remote watcher of `remote_files` tolerates such output; scp cannot.) File names with spaces or shell characters work: watchglass writes remote paths the way each scp needs them (backslash escapes with the classic protocol on Linux; on Windows, where Windows' scp turns backslashes into slashes, `?` wildcards for pulls and quotes for pushes; plain names with SFTP). A name holding both kinds of quotes cannot be pushed with the classic protocol from Windows; use `protocol = "sftp"` or rename it.
+- scp failing (wrong password: "Permission denied"; unknown host key: "Host key verification failed"; network) raises `watchglass.CommandFailed` with scp's last stderr lines, and `watchglass kit` exits 1 with them on stderr.
+- Anything watchglass refuses or a failed check (sha256, size, conflict, unset password variable, a check trying to transfer, no time left) raises `watchglass.TransferFailed` (exit 1 for `watchglass kit`).
+- An action that raises fails the poll: the watch backs off and retries, and observer events stay queued until a poll succeeds.
+- A size or sha256 mismatch on a pull raises `watchglass.transfer.TransferMismatch` (a `TransferFailed`): usually the remote file changed after it was reported.
+- A transfer whose remote **source is gone** (a pull of a file withdrawn after it was listed: moved, renamed or deleted) raises `watchglass.transfer.TransferMissing` (a `TransferFailed`), not `CommandFailed`. scp's and sftp's diagnostics say which side is missing, so a failure in the local staging folder is never mistaken for a withdrawal. `watchglass kit` exits 1 naming the file, and the `pull` recipe skips such an event by default (`on_missing`, see `watchglass docs recipes`). The match is on the English wording of those diagnostics: on a host whose locale is not English, run the service with `LC_ALL=C`, or a withdrawal reads as an ordinary failure and is retried (see the `pull` recipe).

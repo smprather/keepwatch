@@ -1,15 +1,15 @@
-"""The monitor's data layer: tests first (see docs/superpowers/plans/2026-10-06-keepwatch-plan-8-tui.md)."""
+"""The monitor's data layer: tests first (see docs/superpowers/plans/2026-10-06-watchglass-plan-8-tui.md)."""
 
 import ast
 import time
 from pathlib import Path
 
-from keepwatch.locks import hold_lock
-from keepwatch.logstore import LogWriter, make_record
-from keepwatch.offline import OfflineMarker, iso_time, write_offline
-from keepwatch.paths import ensure_private_dir, write_json_atomic
-from keepwatch.tui import monitor as monitor_module
-from keepwatch.tui.monitor import Monitor, Status, WatchRow, banner_text, pane_header_text
+from watchglass.locks import hold_lock
+from watchglass.logstore import LogWriter, make_record
+from watchglass.offline import OfflineMarker, iso_time, write_offline
+from watchglass.paths import ensure_private_dir, write_json_atomic
+from watchglass.tui import monitor as monitor_module
+from watchglass.tui.monitor import Monitor, Status, WatchRow, banner_text, pane_header_text
 
 
 def last_poll(at, outcome="true", failed=False, reason=None):

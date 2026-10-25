@@ -5,8 +5,8 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from keepwatch import __version__, installcheck
-from keepwatch.cli import cli
+from watchglass import __version__, installcheck
+from watchglass.cli import cli
 
 
 def run(*args):
@@ -15,12 +15,12 @@ def run(*args):
 
 def test_transient_reason(tmp_path):
     cache, temp, home = tmp_path / "cache", tmp_path / "temp", tmp_path / "home"
-    for directory in (cache / "archive-v0" / "x", temp / "env", home / ".local" / "share" / "uv" / "tools" / "keepwatch"):
+    for directory in (cache / "archive-v0" / "x", temp / "env", home / ".local" / "share" / "uv" / "tools" / "watchglass"):
         directory.mkdir(parents=True)
     kwargs = {"cache_dirs": [cache], "temp_dir": temp}
     assert "uv's cache" in installcheck.transient_reason(cache / "archive-v0" / "x", **kwargs)
     assert "temporary directory" in installcheck.transient_reason(temp / "env", **kwargs)
-    assert installcheck.transient_reason(home / ".local" / "share" / "uv" / "tools" / "keepwatch", **kwargs) is None
+    assert installcheck.transient_reason(home / ".local" / "share" / "uv" / "tools" / "watchglass", **kwargs) is None
 
 
 def test_uv_cache_dirs_include_the_variable(tmp_path):
@@ -29,10 +29,10 @@ def test_uv_cache_dirs_include_the_variable(tmp_path):
 
 
 def test_verify_command():
-    good = [sys.executable, "-c", f"print('keepwatch, version {__version__}')"]
+    good = [sys.executable, "-c", f"print('watchglass, version {__version__}')"]
     assert installcheck.verify_command(good, {**__import__("os").environ}) is None
-    wrong = [sys.executable, "-c", "print('keepwatch, version 1999.1.1')"]
-    assert "without reporting keepwatch" in installcheck.verify_command(wrong, {**__import__("os").environ})
+    wrong = [sys.executable, "-c", "print('watchglass, version 1999.1.1')"]
+    assert "without reporting watchglass" in installcheck.verify_command(wrong, {**__import__("os").environ})
     store = [sys.executable, "-c", "import sys; print('Python was not found; run without arguments to install from the Microsoft Store'); sys.exit(9009)"]
     problem = installcheck.verify_command(store, {**__import__("os").environ})
     code = 9009 if os.name == "nt" else 9009 & 0xFF  # POSIX exit statuses are 8-bit
@@ -47,10 +47,10 @@ def test_the_service_command_reports_this_version():
 
 
 def test_install_refuses_a_transient_environment(xdg, monkeypatch):
-    monkeypatch.setattr(installcheck, "transient_reason", lambda prefix, **kwargs: "this keepwatch runs from uv's cache (x)")
+    monkeypatch.setattr(installcheck, "transient_reason", lambda prefix, **kwargs: "this watchglass runs from uv's cache (x)")
     result = run("install", "--dry-run")
     assert result.exit_code == 1
-    assert "uv tool install keepwatch" in result.output and "--force" in result.output
+    assert "uv tool install watchglass" in result.output and "--force" in result.output
     assert run("install", "--dry-run", "--force").exit_code == 0
 
 
@@ -65,7 +65,7 @@ def test_install_refuses_a_broken_service_command(xdg, monkeypatch):
 def test_the_version_must_match_as_a_whole_word():
     import os
 
-    longer = [sys.executable, "-c", f"print('keepwatch, version {__version__}1')"]
+    longer = [sys.executable, "-c", f"print('watchglass, version {__version__}1')"]
     assert installcheck.verify_command(longer, os.environ) is not None
 
 
@@ -76,9 +76,18 @@ def test_pywinpty_is_a_default_windows_dependency():
     assert project["optional-dependencies"]["conpty"] == ["pywinpty>=2; sys_platform == 'win32'"]
 
 
+def test_project_is_published_as_watchglass():
+    """The rename is real in the metadata: name, console script, URLs and version agree."""
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert project["name"] == "watchglass"
+    assert project["version"] == __version__
+    assert project["scripts"] == {"watchglass": "watchglass.cli:main"}
+    assert project["urls"]["Repository"] == "https://github.com/smprather/watchglass"
+
+
 def test_install_checks_the_registered_program_too(xdg, monkeypatch, tmp_path):
     cache = tmp_path / "cache"
-    program = cache / "env" / "bin" / "keepwatch"
+    program = cache / "env" / "bin" / "watchglass"
     program.parent.mkdir(parents=True)
     monkeypatch.setattr(installcheck, "uv_cache_dirs", lambda env: [cache])
     monkeypatch.setattr(installcheck, "service_check_argv", lambda: [str(program), "--version"])

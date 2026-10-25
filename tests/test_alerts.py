@@ -1,7 +1,7 @@
 import sys
 
-from keepwatch.alerts import run_alert
-from keepwatch.config import Command
+from watchglass.alerts import run_alert
+from watchglass.config import Command
 
 
 def test_no_command_does_nothing():
@@ -15,7 +15,7 @@ def test_alert_receives_environment(tmp_path):
     records = []
     code = (
         'import os, pathlib; e = os.environ; pathlib.Path(e["OUT"]).write_text('
-        '"|".join([e["KEEPWATCH_ALERT_EVENT"], e["KEEPWATCH_WATCH"], e["KEEPWATCH_ALERT_REASON"]]))'
+        '"|".join([e["WATCHGLASS_ALERT_EVENT"], e["WATCHGLASS_WATCH"], e["WATCHGLASS_ALERT_REASON"]]))'
     )
     run_alert(Command(argv=(sys.executable, "-c", code)), event="offline", watch="psg", reason="5 failures",
               environment={"OUT": str(out)}, timeout=10, sink=records.append)

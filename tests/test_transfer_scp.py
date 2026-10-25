@@ -5,8 +5,9 @@ import socket
 
 import pytest
 
-from keepwatch import CommandFailed
-from keepwatch.transfer import (
+from scp_server import PASSWORD, ScpServer
+from watchglass import CommandFailed
+from watchglass.transfer import (
     Endpoint,
     ScpOptions,
     TransferFailed,
@@ -17,7 +18,6 @@ from keepwatch.transfer import (
     push,
     tcp_open,
 )
-from scp_server import PASSWORD, ScpServer
 
 pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
 REMOTE = "u@127.0.0.1:"
@@ -289,7 +289,7 @@ def test_a_failed_upload_sends_no_marker(tmp_path, server, ssh_config):
 
 
 def test_pull_mismatches_raise_transfer_mismatch(tmp_path, server, ssh_config):
-    from keepwatch.transfer import TransferMismatch
+    from watchglass.transfer import TransferMismatch
 
     (server.root / "b.gz").write_bytes(b"remote data")
     with pytest.raises(TransferMismatch):

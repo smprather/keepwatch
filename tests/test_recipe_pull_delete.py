@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from keepwatch.config import load_global_config, load_watch_config
-from keepwatch.ctx import Ledger
-from keepwatch.pollengine import PollEngine
-from keepwatch.runner import Runner
-from keepwatch.state import Outcome, WatchState
 from portable import PY, literal, toml_path
 from scp_server import ScpServer
+from watchglass.config import load_global_config, load_watch_config
+from watchglass.ctx import Ledger
+from watchglass.pollengine import PollEngine
+from watchglass.runner import Runner
+from watchglass.state import Outcome, WatchState
 
 pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
 # POSIX-only per test (chmod, symlinks, the fake_ssh shim and a real scp round trip). The ssh command line
@@ -134,7 +134,7 @@ def test_a_file_changed_before_its_pull_does_not_fail_the_poll(linux1, make_watc
 
 @pytest.mark.posix_only
 def test_a_changed_source_is_kept(linux1, make_watch, tmp_path, xdg):
-    from keepwatch.recipes import pull
+    from watchglass.recipes import pull
 
     source = linux1.root / "a.tar.gz"
     source.write_bytes(b"data")
@@ -156,7 +156,7 @@ def test_a_changed_source_is_kept(linux1, make_watch, tmp_path, xdg):
 
 @pytest.mark.posix_only
 def test_files_pulled_before_delete_remote_are_left_alone(linux1, make_watch, tmp_path, xdg):
-    from keepwatch.recipes import pull
+    from watchglass.recipes import pull
 
     source = linux1.root / "old.tar.gz"
     source.write_bytes(b"old")
@@ -168,7 +168,7 @@ def test_files_pulled_before_delete_remote_are_left_alone(linux1, make_watch, tm
 
 @pytest.mark.posix_only
 def test_a_refused_delete_is_kept_and_not_retried(linux1, make_watch, tmp_path, xdg):
-    from keepwatch.recipes import pull
+    from watchglass.recipes import pull
 
     if os.name == "nt":
         pytest.skip("symlinks")
@@ -189,7 +189,7 @@ def test_a_refused_delete_is_kept_and_not_retried(linux1, make_watch, tmp_path, 
 
 @pytest.mark.posix_only
 def test_an_entry_without_a_sha256_is_never_deleted(linux1, make_watch, tmp_path, xdg):
-    from keepwatch.recipes import pull
+    from watchglass.recipes import pull
 
     source = linux1.root / "old.tar.gz"
     source.write_bytes(b"old")
@@ -206,8 +206,8 @@ def test_an_entry_without_a_sha256_is_never_deleted(linux1, make_watch, tmp_path
 
 @pytest.mark.posix_only
 def test_a_timed_out_delete_keeps_the_results_it_had(tmp_path, caplog):
-    from keepwatch import Ctx
-    from keepwatch.recipes import pull
+    from watchglass import Ctx
+    from watchglass.recipes import pull
 
     slow = tmp_path / "slow_ssh.py"
     slow.write_text(

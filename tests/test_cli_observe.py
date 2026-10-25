@@ -2,9 +2,9 @@ import json
 
 from click.testing import CliRunner
 
-from keepwatch.cli import cli
-from keepwatch.output import format_record
 from portable import PY, literal
+from watchglass.cli import cli
+from watchglass.output import format_record
 
 FEED = """
 import json, time
@@ -56,7 +56,7 @@ def test_observe_a_watch_without_observers(make_watch):
     make_watch("w", config="")
     result = run("observe", "w", "--for", "1s")
     assert result.exit_code == 1
-    assert "has no observers" in result.output and "keepwatch docs observers" in result.output
+    assert "has no observers" in result.output and "watchglass docs observers" in result.output
 
 
 def test_observe_bad_options(make_watch):

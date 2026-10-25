@@ -4,7 +4,7 @@ from pathlib import Path
 
 from remote_watcher_selftest import WatcherTests  # noqa: F401  (pytest collects it from this module)
 
-SOURCE = Path(__file__).resolve().parents[1] / "src" / "keepwatch" / "remote_watcher.py"
+SOURCE = Path(__file__).resolve().parents[1] / "src" / "watchglass" / "remote_watcher.py"
 SELFTEST = Path(__file__).resolve().with_name("remote_watcher_selftest.py")
 FORBIDDEN = (
     "dataclass",
@@ -29,7 +29,7 @@ def test_the_watcher_is_ascii():
     SOURCE.read_text(encoding="ascii")
 
 
-def test_the_watcher_imports_nothing_keepwatch_could_shadow():
+def test_the_watcher_imports_nothing_watchglass_could_shadow():
     tree = ast.parse(SOURCE.read_text(encoding="ascii"))
     imported = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
     imported |= {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
@@ -49,11 +49,11 @@ def test_the_watcher_and_its_tests_avoid_newer_features():
         assert [word for word in FORBIDDEN if word in text] == [], path.name
 
 
-def test_the_watchers_defaults_match_keepwatch():
-    from keepwatch import observers
-    from keepwatch.config import ObserverConfig
+def test_the_watchers_defaults_match_watchglass():
+    from watchglass import observers
+    from watchglass.config import ObserverConfig
 
-    spec = importlib.util.spec_from_file_location("keepwatch_remote_watcher_copy", SOURCE)
+    spec = importlib.util.spec_from_file_location("watchglass_remote_watcher_copy", SOURCE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -69,15 +69,15 @@ def test_the_watchers_defaults_match_keepwatch():
 
 
 def _load_watcher():
-    spec = importlib.util.spec_from_file_location("keepwatch_remote_watcher_copy", SOURCE)
+    spec = importlib.util.spec_from_file_location("watchglass_remote_watcher_copy", SOURCE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def test_tree_mode_never_emits_a_name_keepwatch_cannot_encode(capsys):
-    """A single non-UTF-8 name used to poison its whole 500-entry chunk (keepwatch drops that record)."""
+def test_tree_mode_never_emits_a_name_watchglass_cannot_encode(capsys):
+    """A single non-UTF-8 name used to poison its whole 500-entry chunk (watchglass drops that record)."""
     import time
 
     module = _load_watcher()
