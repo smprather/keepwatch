@@ -10,12 +10,15 @@ dependencies = [
     "rich-click>=1.9",
     "textual>=8",
     "watchdog>=6",
+    # password_mode = "conpty" (type a password at a Windows pseudo-console, for servers that refuse SSH_ASKPASS).
+    # The PEP 508 environment marker is evaluated by uv and pip, so non-Windows installs skip pywinpty entirely
+    # (it ships Windows wheels only) while every Windows install/upgrade gets it without remembering an extra.
+    "pywinpty>=2; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
-# password_mode = "conpty" (type a password at a Windows pseudo-console, for servers that refuse SSH_ASKPASS):
-# pywinpty ships Windows wheels only, so it is an extra rather than a hard dependency — a hard one would break
-# every non-Windows install.
+# `conpty` is now just an alias: pywinpty above already installs on Windows, and `keepwatch[conpty]` keeps working
+# for installs and scripts written before issue 17.
 conpty = ["pywinpty>=2; sys_platform == 'win32'"]
 
 [project.scripts]
