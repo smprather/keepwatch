@@ -112,7 +112,27 @@ def test_a_recipe_watch_without_ssh_on_path_says_so(xdg, make_watch, monkeypatch
     """A recipe watch whose ssh is invisible to the service is the commonest production failure."""
     make_watch("relay", config='recipe = "pull"\n[settings]\nremote = "u@h"\nremote_dir = "/d"\nlocal_dir = "stage"\n')
     monkeypatch.setenv("PATH", "/nonexistent")
+    monkeypatch.setattr("watchglass.platform.hot_environment", lambda: {})  # keep the test's PATH authoritative
     result = run("validate", "--json")
     assert result.exit_code == 1
     problems = json.loads(result.output)["watches"][0]["problems"]
     assert any("needs OpenSSH 'ssh' on PATH" in problem for problem in problems), problems
+
+
+@pytest.mark.posix_only
+def test_validate_uses_the_environment_file_path(xdg, make_watch, tmp_path):
+    """A hook program on the environment_file's PATH must not be reported missing."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    helper = bindir / "helper"
+    helper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    helper.chmod(0o755)
+    env_file = tmp_path / "env"
+    env_file.write_text(f"PATH={bindir}\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    xdg.config_home.mkdir(parents=True, exist_ok=True)
+    xdg.config_file.write_text(f'environment_file = "{env_file}"\n', encoding="utf-8")
+    make_watch("w", config='[hooks]\ncheck = ["helper"]\n')
+    result = run("validate", "w")
+    assert result.exit_code == 0, result.output
+    assert "ok   w" in result.output

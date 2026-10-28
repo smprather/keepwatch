@@ -61,7 +61,7 @@ def call_for(xdg):
     from watchglass.runner import HookCall
 
     def make(watch_dir, hook="check", *, timeout=30.0, condition=False, payload=None,
-             capture_bytes=65536, environment=None, mode="call"):
+             capture_bytes=65536, environment=None, environment_file=None, mode="call"):
         watch = load_watch_config(watch_dir)
         return HookCall(
             watch=watch,
@@ -74,6 +74,7 @@ def call_for(xdg):
             timeout=timeout,
             capture_bytes=capture_bytes,
             environment=environment or {},
+            environment_file=environment_file,
             mode=mode,
         )
 

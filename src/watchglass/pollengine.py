@@ -246,6 +246,7 @@ class PollEngine:
             timeout=timeout,
             capture_bytes=self._global.log.capture_bytes,
             environment=self._global.environment,
+            environment_file=self._global.environment_file,
             events=events,
             on_message=functools.partial(self._emit_message, tag),
         )

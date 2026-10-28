@@ -10,6 +10,7 @@ The rest of watchglass calls these functions instead of OS-specific APIs.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -58,6 +59,95 @@ def default_app_dirs(env: Mapping[str, str], uid: int | None = None, app: str = 
     home = Path(env.get("HOME") or Path.home())
     runtime = (absolute_path(env.get("TMPDIR")) or Path("/tmp")) / f"{app}-{uid}"
     return home / ".config" / app, home / ".local" / "state" / app, runtime
+
+
+_REGISTRY_VAR = re.compile(r"%([^%]+)%")
+
+
+def _registry_values(winreg: Any, hive: int, path: str) -> list[tuple[str, str, int]]:
+    try:
+        with winreg.OpenKey(hive, path) as key:
+            count = winreg.QueryInfoKey(key)[1]
+            try:
+                return [winreg.EnumValue(key, index) for index in range(count)]
+            except OSError:
+                return []
+    except OSError:
+        return []
+
+
+def _combine_paths(machine: dict[str, str], user: dict[str, str]) -> None:
+    """Windows builds PATH from the machine and user values; a re-read must not drop either half."""
+    machine_key = next((key for key in machine if key.lower() == "path"), None)
+    user_key = next((key for key in user if key.lower() == "path"), None)
+    if machine_key is None or user_key is None:
+        return
+    seen: set[str] = set()
+    parts = []
+    for value in (machine[machine_key], user[user_key]):
+        for part in value.split(";"):
+            if part and part.lower() not in seen:
+                seen.add(part.lower())
+                parts.append(part)
+    user[user_key] = ";".join(parts)
+
+
+def _expand_registry(value: str, context: Mapping[str, str], depth: int = 0) -> str:
+    if depth >= 10:
+        return value
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1).lower()
+        return _expand_registry(context[name], context, depth + 1) if name in context else match.group(0)
+
+    return _REGISTRY_VAR.sub(replace, value)
+
+
+def hot_environment() -> dict[str, str]:
+    """Windows: the user and machine environment as the registry has it now, so `setx` is hot.
+
+    A process cannot observe another process's environment changes; reading HKCU/HKLM is how a running
+    watchglass service sees `setx RELAY_PASSWORD ...` without a restart. User values win case-insensitively;
+    `REG_EXPAND_SZ` values are expanded from the registry itself. Off Windows this is empty.
+    """
+    if not IS_WINDOWS:
+        return {}
+    import winreg
+
+    machine_raw = _registry_values(
+        winreg, winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+    )
+    user_raw = _registry_values(winreg, winreg.HKEY_CURRENT_USER, "Environment")
+
+    def readable(values: list[tuple[str, str, int]]) -> list[tuple[str, str, bool]]:
+        return [
+            (name, value, kind == winreg.REG_EXPAND_SZ)
+            for name, value, kind in values
+            if isinstance(name, str) and isinstance(value, str) and kind in (winreg.REG_SZ, winreg.REG_EXPAND_SZ)
+        ]
+
+    machine_values = readable(machine_raw)
+    machine_context = {name.lower(): value for name, value, _ in machine_values}
+    machine = {
+        name: _expand_registry(value, machine_context) if expand else value
+        for name, value, expand in machine_values
+    }
+    user_values = readable(user_raw)
+    user: dict[str, str] = {}
+    for name, value, expand in user_values:
+        context = {key.lower(): item for key, item in machine.items()}
+        context.update({other.lower(): item for other, item, _ in user_values if other.lower() != name.lower()})
+        user[name] = _expand_registry(value, context) if expand else value
+    _combine_paths(machine, user)
+    merged = dict(machine)
+    lower = {name.lower(): name for name in merged}
+    for name, value in user.items():
+        previous = lower.get(name.lower())
+        if previous is not None and previous != name:
+            merged.pop(previous, None)
+        merged[name] = value
+        lower[name.lower()] = name
+    return merged
 
 
 def pid_alive(pid: int) -> bool:

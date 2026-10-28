@@ -67,7 +67,7 @@ KEY_FACTS = {
     "failures": ["max_failures", "retry_after", "alert_command", "WATCHGLASS_ALERT_EVENT", "offline.json", "retry_base", "Trial polls"],
     "storage": ["ctx.data_dir", "ctx.run_dir", "file_key", "LedgerCorrupt", "watchglass rename", "%LOCALAPPDATA%"],
     "logging": ["watchglass.jsonl", "poll_id", "hook.end", "check.outcome", "observer.stopped", "extra=", "data_clipped", "observer.connected"],
-    "environment": ["/dev/null", "SIGTERM", "SSH_AUTH_SOCK", "BatchMode=yes", "[environment]", "Job Object", "watchglass stop", "Command Processor"],
+    "environment": ["/dev/null", "SIGTERM", "SSH_AUTH_SOCK", "BatchMode=yes", "[environment]", "environment_file", "setx", "Job Object", "watchglass stop", "Command Processor"],
     "dependencies": ["python_dependencies", "uv run", "--offline", "watchglass validate"],
     "reload": ["reload_interval", "last valid", "watch.removed", "offline.json"],
     "observers": ["[observe.", "./feed.py", "uv\", \"run\", \"--script", "ctx.events", "WATCHGLASS_EVENTS_FILE", "at-least-once", "heartbeat_timeout", "watchglass observe", "--events", "wake", "settle", "flush", "ledger", "FileNotFoundError", "64 MiB", "1 second after", "do not restart", "remote_files", "remote_python", "BatchMode", "known_hosts", "observer.connected", "Python 3.6", "ssh-agent", "not valid UTF-8", "IdentitiesOnly", "expire", "marker = \"sha256\""],

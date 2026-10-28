@@ -517,8 +517,9 @@ def _transfer_env(options: ScpOptions) -> Generator[dict[str, str]]:
     env = dict(os.environ)
     if options.password_env and options.password_env not in os.environ:
         raise TransferFailed(
-            f"password_env names {options.password_env}, which is not set in watchglass's environment "
-            "(on Windows: setx; for the service, restart it after setting the variable)"
+            f"password_env names {options.password_env}, which is not set in this hook's environment "
+            "(Windows: setx it and the next hook reads the registry; Linux: put it in the global "
+            "environment_file; then retry)"
         )
     with contextlib.ExitStack() as stack:
         if options.password_env and options.password_mode == "askpass":

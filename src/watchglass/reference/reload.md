@@ -7,6 +7,8 @@ The running service picks up changes without a restart. Every master tick (`relo
 
 **A broken edit never stops a working watch.** If a config file no longer parses or validates, the service keeps running the last valid version, logs one `config.error` record per distinct broken version (with file, line and the fix), and `watchglass status` shows the error. A brand-new watch whose config is invalid is not started until it is fixed. A broken global config at service start is fatal: `watchglass run` exits 1 with the error.
 
+**Environment changes need no reload.** The global `environment_file` and, on Windows, the registry environment are read before every hook (see `watchglass docs environment`), so a rotated password applies at the next hook. A systemd unit's `Environment=` is not re-read; use the environment file for a hot value.
+
 **Code needs no reload.** Every hook call starts a fresh process that imports watch.py and runs scripts from disk, so a code edit applies at that watch's next hook call, even sooner than a config edit.
 
 **Control files are read every second.** `watchglass enable` and `watchglass disable` work by deleting or writing the watch's `offline.json`; the watch's scheduler checks it about once a second.
