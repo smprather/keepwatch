@@ -26,7 +26,8 @@ the running service by themselves. watchglass therefore re-reads a hot source be
 
 - **Windows:** `HKCU\Environment` and the machine environment. `setx RELAY_PASSWORD "…"` is visible to the next
   hook, with no new terminal, `watchglass stop` or logon. `setx /M` writes the machine environment (user values
-  win). Deleting a variable from the registry leaves the service's old process value until a restart; set it to a
+  win). PATH is combined with the service's own PATH, so entries added by the service environment survive;
+  deleting a variable (or a PATH entry) from the registry leaves the old process value until a restart, so set a
   new value instead of deleting it.
 - **Linux:** put `environment_file = "~/.config/watchglass/env"` in the global config and write
   `RELAY_PASSWORD=…` in that file. It is re-read before every hook. Keep `password_env = "RELAY_PASSWORD"`; the

@@ -61,7 +61,7 @@ def test_windows_registry_values_win_case_insensitively(tmp_path, make_watch, mo
     monkeypatch.setenv("RELAY_PASSWORD", "old")
     watch = load_watch_config(make_watch("w"))
     env = base_environment({}, watch)
-    assert env["Path"] == "C:/new" and "PATH" not in env
+    assert env["Path"] == "/old;C:/new" and "PATH" not in env  # process-only entries survive
     assert env["RELAY_PASSWORD"] == "hot"
 
 

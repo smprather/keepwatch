@@ -253,6 +253,18 @@ def setting_variables(settings: Mapping[str, Any]) -> dict[str, str]:
     return variables
 
 
+def _combine_path_values(*values: str) -> str:
+    """Join PATH halves, dropping empty and duplicate entries (Windows PATH is case-insensitive)."""
+    seen: set[str] = set()
+    parts = []
+    for value in values:
+        for part in value.split(";"):
+            if part and part.lower() not in seen:
+                seen.add(part.lower())
+                parts.append(part)
+    return ";".join(parts)
+
+
 def _merge_environment(env: dict[str, str], values: Mapping[str, str]) -> None:
     """Merge `values` into `env`, treating names case-insensitively (Windows env vars are)."""
     lower = {key.lower(): key for key in env}
@@ -276,7 +288,15 @@ def base_environment(
     failed hook rather than silently falling back to a stale password.
     """
     env = {key: value for key, value in os.environ.items() if not key.startswith("WATCHGLASS_") or key == "WATCHGLASS_CONFIG"}
-    _merge_environment(env, platform.hot_environment())
+    hot = platform.hot_environment()
+    if hot:
+        hot_path = next((value for key, value in hot.items() if key.lower() == "path"), None)
+        if hot_path is not None:
+            process_path = next((value for key, value in env.items() if key.lower() == "path"), "")
+            hot = dict(hot)
+            hot_key = next(key for key in hot if key.lower() == "path")
+            hot[hot_key] = _combine_path_values(process_path, hot_path)
+    _merge_environment(env, hot)
     if environment_file is not None:
         env.update(load_environment_file(environment_file))
     env = {key: value for key, value in env.items() if not key.startswith("WATCHGLASS_") or key == "WATCHGLASS_CONFIG"}
