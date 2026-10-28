@@ -13,9 +13,37 @@
 A hook's environment is built in this order, later entries winning:
 
 1. the environment of the watchglass process (the service, or your shell for `watchglass poll`), minus any inherited `WATCHGLASS_*` variables;
-2. the global config's `[environment]`;
-3. the watch's `[environment]`;
-4. watchglass's own variables (see `watchglass docs executables`).
+2. **on Windows**, the user and machine environment as the registry has it now;
+3. the global `environment_file`, if set (read now);
+4. the global config's `[environment]`;
+5. the watch's `[environment]`;
+6. watchglass's own variables (see `watchglass docs executables`).
+
+### Rotating a password or other variable without a restart
+
+A process cannot see another process change its environment: `setx` and systemd's `Environment=` do not reach
+the running service by themselves. watchglass therefore re-reads a hot source before **every hook**:
+
+- **Windows:** `HKCU\Environment` and the machine environment. `setx RELAY_PASSWORD "…"` is visible to the next
+  hook, with no new terminal, `watchglass stop` or logon. `setx /M` writes the machine environment (user values
+  win). PATH is combined with the service's own PATH, so entries added by the service environment survive;
+  deleting a variable (or a PATH entry) from the registry leaves the old process value until a restart, so set a
+  new value instead of deleting it.
+- **Linux:** put `environment_file = "~/.config/watchglass/env"` in the global config and write
+  `RELAY_PASSWORD=…` in that file. It is re-read before every hook. Keep `password_env = "RELAY_PASSWORD"`; the
+  variable name does not change. Run `chmod 600` on the file: watchglass refuses a group- or world-readable one.
+  Do not rely on a systemd drop-in's `Environment=` or `systemctl --user set-environment` for a hot value: the
+  running unit's environment is not re-read, and a login shell would run rc files in the service.
+
+`environment_file` also works on Windows (read after the registry); protect it with the file's ACL instead of a
+POSIX mode. The format is one `KEY=VALUE` per line; `export` is optional, full-line `#` comments are ignored,
+an unquoted value may carry an inline comment after whitespace, and single or double quotes protect spaces and
+`#`. Values are literal: no variable expansion. Write the file atomically (temporary file, then rename) if a
+hook may read it while you edit.
+
+A missing, unreadable, malformed or insecure file fails the hook with a clear reason rather than silently using
+a stale password. A change applies to the next hook; a transfer already running keeps the password it started
+with.
 
 ## Under systemd (the login service)
 

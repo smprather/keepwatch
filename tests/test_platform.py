@@ -127,3 +127,88 @@ def test_windows_script_hooks_never_go_through_cmd_autorun(monkeypatch, tmp_path
     # a string hook is PowerShell's -Command, so cmd.exe never runs it either
     argv = platform.shell_argv("exit 3")
     assert argv[0] == "powershell.exe" and "-Command" in argv and argv[-1].endswith("exit 3")
+
+
+class _FakeKey:
+    def __init__(self, values):
+        self.values = values
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeWinreg:
+    HKEY_LOCAL_MACHINE = 1
+    HKEY_CURRENT_USER = 2
+    REG_SZ = 1
+    REG_EXPAND_SZ = 2
+
+    def __init__(self, data):
+        self.data = data
+
+    def OpenKey(self, hive, path):
+        return _FakeKey(self.data[(hive, path)])
+
+    def QueryInfoKey(self, key):
+        return (0, len(key.values), 0)
+
+    def EnumValue(self, key, index):
+        return key.values[index]
+
+
+def test_hot_environment_is_empty_off_windows(monkeypatch):
+    monkeypatch.setattr(platform, "IS_WINDOWS", False)
+    assert platform.hot_environment() == {}
+
+
+def test_hot_environment_reads_both_hives_and_expands(monkeypatch):
+    import sys
+    import types
+
+    machine = [
+        ("WG_ROOT", r"C:\base", 1),
+        ("WG_BIN", r"%WG_ROOT%\bin", 2),
+        ("WG_PROC", r"%PROC_ROOT%\x", 2),
+        ("PATH", r"C:\machine", 1),
+    ]
+    user = [
+        ("RELAY_PASSWORD", "s3cret", 1),
+        ("Path", r"C:\user", 1),
+        ("WG_USER", r"%WG_ROOT%\user", 2),
+    ]
+    fake = _FakeWinreg({
+        (1, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"): machine,
+        (2, "Environment"): user,
+    })
+    fake_module = types.ModuleType("winreg")
+    for name, value in {
+        "HKEY_LOCAL_MACHINE": 1,
+        "HKEY_CURRENT_USER": 2,
+        "REG_SZ": 1,
+        "REG_EXPAND_SZ": 2,
+        "OpenKey": fake.OpenKey,
+        "QueryInfoKey": fake.QueryInfoKey,
+        "EnumValue": fake.EnumValue,
+    }.items():
+        setattr(fake_module, name, value)
+    monkeypatch.setattr(platform, "IS_WINDOWS", True)
+    monkeypatch.setenv("PROC_ROOT", r"C:\process")
+    monkeypatch.setitem(sys.modules, "winreg", fake_module)
+
+    env = platform.hot_environment()
+
+    assert env["WG_BIN"] == r"C:\base\bin"
+    assert env["WG_USER"] == r"C:\base\user"
+    assert env["WG_PROC"] == r"C:\process\x"  # process vars expand too
+    assert env["RELAY_PASSWORD"] == "s3cret"
+    assert env["Path"] == r"C:\machine;C:\user" and "PATH" not in env  # Windows combines the halves
+
+
+@pytest.mark.windows_only
+def test_hot_environment_reads_the_real_registry():
+    env = platform.hot_environment()
+    assert env
+    assert any(name.lower() == "path" for name in env)

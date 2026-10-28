@@ -28,6 +28,7 @@ from watchglass import __version__, installcheck, platform, systemd, transfer, w
 from watchglass.config import (
     ConfigError,
     Discovery,
+    EnvironmentFileError,
     GlobalConfig,
     WatchConfig,
     WatchNotFound,
@@ -339,17 +340,21 @@ def observe(app: App, name: str, observer: str | None, duration: float | None, c
                 done.set()
 
     printer = level_filter(ConsolePrinter(make_console(stderr=True)), "INFO")
-    running = [
-        build_observer(
-            watch,
-            watch.observers[key],
-            deliver=deliver,
-            sink=printer,
-            environment=global_config.environment,
-            data_dir=app.paths.watch_data_dir(watch.name),
-        )
-        for key in ([observer] if observer else list(watch.observers))
-    ]
+    try:
+        running = [
+            build_observer(
+                watch,
+                watch.observers[key],
+                deliver=deliver,
+                sink=printer,
+                environment=global_config.environment,
+                environment_file=global_config.environment_file,
+                data_dir=app.paths.watch_data_dir(watch.name),
+            )
+            for key in ([observer] if observer else list(watch.observers))
+        ]
+    except EnvironmentFileError as exc:
+        _fail(str(exc))
     for item in running:
         item.start()
     deadline = None if seconds is None else time.monotonic() + seconds

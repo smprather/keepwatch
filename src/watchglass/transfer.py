@@ -515,10 +515,20 @@ def _transfer_env(options: ScpOptions) -> Generator[dict[str, str]]:
     askpass launcher (or it would take that path): both variables are removed from the child's environment.
     """
     env = dict(os.environ)
-    if options.password_env and options.password_env not in os.environ:
+    hot = platform.hot_environment()
+    if hot:
+        lower = {key.lower(): key for key in env}
+        for key, value in hot.items():
+            previous = lower.get(key.lower())
+            if previous is not None:
+                key = previous
+            env[key] = value
+            lower[key.lower()] = key
+    if options.password_env and options.password_env not in env:
         raise TransferFailed(
-            f"password_env names {options.password_env}, which is not set in watchglass's environment "
-            "(on Windows: setx; for the service, restart it after setting the variable)"
+            f"password_env names {options.password_env}, which is not set in this environment "
+            "(Windows: setx it; the next hook and this command read the registry. Linux: put it in the "
+            "global environment_file for hooks, or export it in this shell for watchglass kit; then retry)"
         )
     with contextlib.ExitStack() as stack:
         if options.password_env and options.password_mode == "askpass":

@@ -58,8 +58,12 @@ Always set: `StrictHostKeyChecking=yes` (**host keys must already be known**: co
 
 Never put a password in config.toml, a hook or a command line. Put it in an environment variable that the watchglass service sees, and name the variable in `password_env`:
 
-- **Windows:** `setx RELAY_PASSWORD "…"` (for your user), then restart the watchglass logon task (`watchglass stop`, then start it from Task Scheduler, or log off and on): processes only see variables that existed when they started.
-- **Linux:** `Environment=` in a systemd drop-in (`systemctl --user edit watchglass`), or the global `[environment]` table of watchglass's config if that file is private to you.
+- **Windows:** `setx RELAY_PASSWORD "…"` (for your user). watchglass reads `HKCU\Environment` before every
+  hook, so the next transfer uses the new password; no new terminal or restart. `setx /M` writes the machine
+  environment (user values win).
+- **Linux:** put `RELAY_PASSWORD=…` in the global `environment_file` (see `watchglass docs environment`) and
+  keep `chmod 600` on it. It is re-read before every hook. A systemd drop-in's `Environment=` is not re-read by
+  the running unit, so it needs a restart and is not the hot path.
 
 watchglass hands it to scp through `SSH_ASKPASS` (with `SSH_ASKPASS_REQUIRE=force`): a small launcher in a private temporary directory runs the helper's own file (`askpass.py`, standard library only, so even an interpreter that cannot import watchglass can run it) with the variable's name, and the helper prints its value. The password is never written to a file, passed as an argument or logged; only the variable's name is. The helper refuses to answer host-key questions ("yes/no"). Password and keyboard-interactive logins both work.
 

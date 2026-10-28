@@ -28,6 +28,7 @@ def test_missing_global_config_uses_defaults(xdg):
     assert cfg.reload_interval == 5.0
     assert cfg.alert_command is None
     assert cfg.log == LogSettings()
+    assert cfg.environment_file is None
     assert dict(cfg.defaults) == {} and dict(cfg.environment) == {}
 
 
@@ -37,6 +38,7 @@ def test_full_global_config(xdg, tmp_path, monkeypatch):
         watch_dirs = ["~/w1", "more", "$KW_TEST_DIR/w3"]
         reload_interval = "10s"
         alert_command = ["notify-send", "watchglass"]
+        environment_file = "env"
 
         [defaults]
         interval = "2m"
@@ -55,6 +57,7 @@ def test_full_global_config(xdg, tmp_path, monkeypatch):
     assert cfg.watch_dirs == (home / "w1", xdg.config_home / "more", tmp_path / "x" / "w3")
     assert cfg.reload_interval == 10.0
     assert cfg.alert_command == Command(argv=("notify-send", "watchglass"))
+    assert cfg.environment_file == xdg.config_home / "env"
     assert dict(cfg.defaults) == {"interval": 120.0, "max_failures": 8}
     assert dict(cfg.environment) == {"SSH_AUTH_SOCK": "/tmp/agent"}
     assert cfg.log == LogSettings(max_bytes=5000, backups=2, capture_bytes=1024)

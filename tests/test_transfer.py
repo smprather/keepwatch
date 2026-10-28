@@ -653,3 +653,17 @@ def test_pull_still_fails_when_the_part_does_not_verify(tmp_path, monkeypatch):
     fake_scp(monkeypatch, writes=stage / ".x.part")
     with pytest.raises(TransferFailed, match="expected 99"):
         pull("me@h:/x", stage, size=99, options=ScpOptions(preserve_mtime=True))
+
+
+def test_missing_password_env_says_how_to_make_it_hot(monkeypatch):
+    monkeypatch.delenv("RELAY_PASSWORD", raising=False)
+    with pytest.raises(TransferFailed, match="environment_file"):
+        with transfer._transfer_env(ScpOptions(password_env="RELAY_PASSWORD")):
+            pass
+
+
+def test_transfer_env_reads_the_windows_registry(monkeypatch):
+    monkeypatch.delenv("RELAY_PASSWORD", raising=False)
+    monkeypatch.setattr(transfer.platform, "hot_environment", lambda: {"RELAY_PASSWORD": "hot"})
+    with transfer._transfer_env(ScpOptions(password_env="RELAY_PASSWORD")) as env:
+        assert env["RELAY_PASSWORD"] == "hot"

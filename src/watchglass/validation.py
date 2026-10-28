@@ -14,6 +14,7 @@ from watchglass.config import (
     Command,
     ConfigError,
     Discovery,
+    EnvironmentFileError,
     GlobalConfig,
     WatchConfig,
     WatchNotFound,
@@ -22,7 +23,7 @@ from watchglass.config import (
 )
 from watchglass.hooks import CHECK, NO_CHECK, WATCH_PY, discover_python_hooks, resolve_hooks
 from watchglass.paths import Paths
-from watchglass.runner import HookCall, Runner
+from watchglass.runner import HookCall, Runner, base_environment
 
 
 @dataclass
@@ -39,7 +40,9 @@ class WatchCheck:
         return {"name": self.name, "path": str(self.path) if self.path else None, "ok": self.ok, "problems": self.problems}
 
 
-def missing_executable(command: Command, watch: WatchConfig, environment: Mapping[str, str]) -> str | None:
+def missing_executable(
+    command: Command, watch: WatchConfig, environment: Mapping[str, str], environment_file: Path | None = None
+) -> str | None:
     """Why a command hook's program cannot run, or None. Shell strings are checked when they run."""
     if command.argv is None:
         return None
@@ -51,7 +54,10 @@ def missing_executable(command: Command, watch: WatchConfig, environment: Mappin
         if not platform.IS_WINDOWS and not os.access(path, os.X_OK):
             return f"{program} is not executable (run: chmod +x {path})"
         return None
-    search = {**os.environ, **environment, **watch.environment}.get("PATH", "")
+    try:
+        search = base_environment(environment, watch, environment_file).get("PATH", "")
+    except EnvironmentFileError as exc:
+        return str(exc)
     return None if shutil.which(program, path=search) else f"'{program}' is not on PATH"
 
 
@@ -63,7 +69,13 @@ def check_watch(watch_dir: Path, global_config: GlobalConfig, runner: Runner, pa
         report.problems.extend(str(problem) for problem in exc.problems)
         return report
     if watch.recipe is not None:
-        search = {**os.environ, **global_config.environment, **watch.environment}.get("PATH", "")
+        try:
+            search = base_environment(
+                global_config.environment, watch, global_config.environment_file
+            ).get("PATH", "")
+        except EnvironmentFileError as exc:
+            report.problems.append(str(exc))
+            return report
         needs_ssh = watch.recipe == "pull" and not watch.settings.get("ssh_command")
         for program in ("ssh", "scp") if needs_ssh else ("scp",):
             if not shutil.which(program, path=search):
@@ -79,7 +91,7 @@ def check_watch(watch_dir: Path, global_config: GlobalConfig, runner: Runner, pa
     elif CHECK not in hooks:
         report.problems.append(f"{watch_dir}: {NO_CHECK}; see: watchglass docs python")
     for hook, command in watch.hooks.items():
-        missing = missing_executable(command, watch, global_config.environment)
+        missing = missing_executable(command, watch, global_config.environment, global_config.environment_file)
         if missing is not None:
             report.problems.append(f"{watch.config_file}: [hooks] {hook}: {missing}; see: watchglass docs executables")
     can_describe = source.is_file() and problem is None
@@ -101,6 +113,7 @@ def check_watch(watch_dir: Path, global_config: GlobalConfig, runner: Runner, pa
                 timeout=max(watch.check_timeout, 120.0) if watch.python_dependencies else watch.check_timeout,
                 capture_bytes=global_config.log.capture_bytes,
                 environment=global_config.environment,
+                environment_file=global_config.environment_file,
                 mode="describe",
             )
         )

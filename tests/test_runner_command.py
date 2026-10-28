@@ -207,3 +207,24 @@ def test_close_terminates_at_once_and_refuses_new_hooks_on_windows(make_watch, c
     assert results[0].reason == "terminated by watchglass"
     refused = runner.run(call_for(watch_dir))
     assert (refused.status, refused.reason) == ("error", "watchglass is shutting down")
+
+
+def test_a_command_hook_gets_the_environment_file(make_watch, call_for, tmp_path):
+    env_file = tmp_path / "env"
+    env_file.write_text("RELAY_PASSWORD=old\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    check = py('import os, pathlib; pathlib.Path("seen").write_text(os.environ["RELAY_PASSWORD"])')
+    watch_dir = make_watch("cmd", config=f"[hooks]\ncheck = {check}\n")
+    result = Runner().run(call_for(watch_dir, environment_file=env_file))
+    assert result.status == "true"
+    assert (watch_dir / "seen").read_text(encoding="utf-8") == "old"
+
+
+def test_a_bad_environment_file_fails_the_hook_clearly(make_watch, call_for, tmp_path):
+    env_file = tmp_path / "env"
+    env_file.write_text("not a line\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    watch_dir = make_watch("cmd", config=f"[hooks]\ncheck = {exits(0)}\n")
+    result = Runner().run(call_for(watch_dir, environment_file=env_file))
+    assert result.status == "error"
+    assert "expected KEY=VALUE" in result.reason and "Traceback" not in result.reason

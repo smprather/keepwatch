@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import IO, Any, cast
 
 from watchglass import __version__, platform
-from watchglass.config import Command, ExitCodes, WatchConfig
+from watchglass.config import Command, EnvironmentFileError, ExitCodes, WatchConfig, load_environment_file
 from watchglass.durations import format_duration
 from watchglass.hooks import CHECK
 from watchglass.locks import hold_lock
@@ -51,6 +51,7 @@ class HookCall:
     timeout: float
     capture_bytes: int = 65_536
     environment: Mapping[str, str] = field(default_factory=dict)
+    environment_file: Path | None = None
     mode: str = "call"
     events: tuple[dict[str, Any], ...] = ()
     on_message: Callable[[dict[str, Any]], None] | None = field(default=None, compare=False)
@@ -252,10 +253,57 @@ def setting_variables(settings: Mapping[str, Any]) -> dict[str, str]:
     return variables
 
 
-def base_environment(environment: Mapping[str, str], watch: WatchConfig) -> dict[str, str]:
+def _combine_path_values(*values: str) -> str:
+    """Join PATH halves, dropping empty and duplicate entries (Windows PATH is case-insensitive)."""
+    seen: set[str] = set()
+    parts = []
+    for value in values:
+        for part in value.split(";"):
+            if part and part.lower() not in seen:
+                seen.add(part.lower())
+                parts.append(part)
+    return ";".join(parts)
+
+
+def _merge_environment(env: dict[str, str], values: Mapping[str, str]) -> None:
+    """Merge `values` into `env`, treating names case-insensitively (Windows env vars are)."""
+    lower = {key.lower(): key for key in env}
+    for key, value in values.items():
+        previous = lower.get(key.lower())
+        if previous is not None:
+            key = previous  # keep the spelling the child process already has (PATH, not Path)
+        env[key] = value
+        lower[key.lower()] = key
+
+
+def base_environment(
+    environment: Mapping[str, str], watch: WatchConfig, environment_file: Path | None = None
+) -> dict[str, str]:
     """What hooks and observers start from: the service's environment without inherited WATCHGLASS_*
-    (except WATCHGLASS_CONFIG), then the global [environment], the watch's [environment] and WATCHGLASS_SETTING_*."""
+    (except WATCHGLASS_CONFIG), the Windows registry's current environment, the environment_file, then the
+    global [environment], the watch's [environment] and WATCHGLASS_SETTING_*.
+
+    The registry and the file are read here, per call, so `setx` and a rewritten file reach the next hook
+    without restarting the service. A bad file raises EnvironmentFileError, which Runner turns into a clear
+    failed hook rather than silently falling back to a stale password.
+    """
     env = {key: value for key, value in os.environ.items() if not key.startswith("WATCHGLASS_") or key == "WATCHGLASS_CONFIG"}
+    hot = platform.hot_environment()
+    if hot:
+        hot_path = next((value for key, value in hot.items() if key.lower() == "path"), None)
+        if hot_path is not None:
+            process_path = next((value for key, value in env.items() if key.lower() == "path"), "")
+            hot = dict(hot)
+            hot_key = next(key for key in hot if key.lower() == "path")
+            hot[hot_key] = _combine_path_values(process_path, hot_path)
+    _merge_environment(env, hot)
+    if environment_file is not None:
+        values = load_environment_file(environment_file)
+        if platform.IS_WINDOWS:
+            _merge_environment(env, values)
+        else:
+            env.update(values)
+    env = {key: value for key, value in env.items() if not key.startswith("WATCHGLASS_") or key == "WATCHGLASS_CONFIG"}
     env.update(environment)
     env.update(watch.environment)
     env.update(setting_variables(watch.settings))
@@ -360,6 +408,8 @@ class Runner:
             if is_command:
                 return self._run_command(call, call.watch.hooks[call.hook])
             return self._run_python(call)
+        except EnvironmentFileError as exc:
+            return self._error(call, "command" if is_command else "python", call.hook, started, str(exc))
         except Exception as exc:
             result = self._error(
                 call,
@@ -387,7 +437,7 @@ class Runner:
         )
 
     def _environment(self, call: HookCall) -> dict[str, str]:
-        env = base_environment(call.environment, call.watch)
+        env = base_environment(call.environment, call.watch, call.environment_file)
         env.update(
             {
                 "WATCHGLASS_WATCH": call.watch.name,

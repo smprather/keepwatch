@@ -39,6 +39,10 @@ class ConfigProblem:
         return f"{where}: {self.message}; see: watchglass docs {self.topic}"
 
 
+class EnvironmentFileError(Exception):
+    """An environment_file that cannot be read, is not private, or is malformed."""
+
+
 class ConfigError(Exception):
     """One or more problems in a configuration file."""
 
@@ -530,6 +534,56 @@ def _conpty_problems(collector: _Collector, values: Mapping[str, Any]) -> None:
             table="settings",
             topic="recipes",
         )
+
+
+_ENV_LINE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+_ENV_INLINE_COMMENT = re.compile(r"\s+#.*$")
+
+
+def parse_environment_file(text: str, path: Path) -> dict[str, str]:
+    """Parse a dotenv-style file: KEY=VALUE, full-line comments, optional export, quotes, inline comments."""
+    values: dict[str, str] = {}
+    for number, raw in enumerate(text.lstrip("\ufeff").splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _ENV_LINE.match(line)
+        if match is None:
+            raise EnvironmentFileError(f"{path}:{number}: expected KEY=VALUE")
+        key, rest = match.groups()
+        rest = rest.strip()
+        if rest[:1] in ("'", '"'):
+            quote = rest[0]
+            end = rest.find(quote, 1)
+            if end < 0:
+                raise EnvironmentFileError(f"{path}:{number}: unmatched quote")
+            value = rest[1:end]
+            tail = rest[end + 1:].strip()
+            if tail and not tail.startswith("#"):
+                raise EnvironmentFileError(f"{path}:{number}: unexpected text after the quoted value")
+        else:
+            value = _ENV_INLINE_COMMENT.sub("", rest).strip()
+        values[key] = value
+    return values
+
+
+def load_environment_file(path: Path) -> dict[str, str]:
+    """Read an environment file now, so a changed password is visible to the next hook."""
+    try:
+        info = path.stat()
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise EnvironmentFileError(f"cannot read environment_file {path}: {exc.strerror or exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise EnvironmentFileError(
+            f"environment_file {path} is not valid UTF-8 ({exc.reason} at byte {exc.start})"
+        ) from exc
+    if not platform.IS_WINDOWS and info.st_mode & 0o077:
+        raise EnvironmentFileError(
+            f"environment_file {path} is accessible by other users (mode {info.st_mode & 0o777:o}); "
+            f"run: chmod 600 {path}"
+        )
+    return parse_environment_file(text, path)
 
 
 def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any], watch_dir: Path) -> dict[str, Any]:
@@ -1134,6 +1188,7 @@ class GlobalConfig:
     alert_command: Command | None = None
     defaults: Mapping[str, Any] = field(default_factory=dict)
     environment: Mapping[str, str] = field(default_factory=dict)
+    environment_file: Path | None = None
     log: LogSettings = LogSettings()
 
 
@@ -1146,6 +1201,15 @@ GLOBAL_KEYS = (
         "Default: $XDG_CONFIG_HOME/watchglass/watches.",
     ),
     Key("reload_interval", "interval", 5.0, "Master tick: how often config changes are picked up."),
+    Key(
+        "environment_file",
+        "str",
+        None,
+        "A dotenv file re-read before every hook, so a changed password or environment variable applies "
+        "without a restart. Relative paths are relative to this config; `~` and environment variables expand. "
+        "On Linux this is the hot source for `password_env`; on Windows `setx` values are also read from the "
+        "registry.",
+    ),
     Key("alert_command", "command", None, "Run when a watch goes offline or comes back online."),
 )
 
@@ -1233,6 +1297,7 @@ def load_global_config(path: Path, paths: Paths) -> GlobalConfig:
     alert_command = None
     defaults: dict[str, Any] = {}
     environment: dict[str, str] = {}
+    environment_file: Path | None = None
     log = LogSettings()
     for name, value in data.items():
         if name == "watch_dirs":
@@ -1247,6 +1312,13 @@ def load_global_config(path: Path, paths: Paths) -> GlobalConfig:
             defaults = _defaults_table(collector, value)
         elif name == "environment":
             environment = _string_table(collector, value, "environment")
+        elif name == "environment_file":
+            converted = _convert(collector, by_name[name], value)
+            if converted is not _INVALID:
+                if not converted.strip():
+                    collector.add("'environment_file' must not be empty", key=name)
+                else:
+                    environment_file = _observed_path(converted, path.parent)
         elif name == "log":
             log = _log_table(collector, value)
         else:
@@ -1260,6 +1332,7 @@ def load_global_config(path: Path, paths: Paths) -> GlobalConfig:
         alert_command=alert_command,
         defaults=MappingProxyType(defaults),
         environment=MappingProxyType(environment),
+        environment_file=environment_file,
         log=log,
     )
 
