@@ -136,3 +136,24 @@ def test_validate_uses_the_environment_file_path(xdg, make_watch, tmp_path):
     result = run("validate", "w")
     assert result.exit_code == 0, result.output
     assert "ok   w" in result.output
+
+
+@pytest.mark.posix_only
+def test_recipe_validation_uses_the_environment_file_path(xdg, make_watch, tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    scp = bindir / "scp"
+    scp.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    scp.chmod(0o755)
+    env_file = tmp_path / "env"
+    env_file.write_text(f"PATH={bindir}\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    xdg.config_home.mkdir(parents=True, exist_ok=True)
+    xdg.config_file.write_text(f'environment_file = "{env_file}"\n', encoding="utf-8")
+    make_watch(
+        "relay",
+        config='recipe = "pull"\n[settings]\nremote = "u@h"\nremote_dir = "/d"\nlocal_dir = "stage"\n'
+        'ssh_command = ["true"]\n',
+    )
+    result = run("validate", "relay")
+    assert result.exit_code == 0, result.output

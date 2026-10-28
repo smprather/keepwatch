@@ -61,7 +61,7 @@ def test_windows_registry_values_win_case_insensitively(tmp_path, make_watch, mo
     monkeypatch.setenv("RELAY_PASSWORD", "old")
     watch = load_watch_config(make_watch("w"))
     env = base_environment({}, watch)
-    assert env["Path"] == "/old;C:/new" and "PATH" not in env  # process-only entries survive
+    assert env["PATH"] == "/old;C:/new" and "Path" not in env  # process spelling + entries survive
     assert env["RELAY_PASSWORD"] == "hot"
 
 
@@ -96,3 +96,29 @@ def test_a_malformed_environment_file_names_the_line(tmp_path):
 def test_a_missing_environment_file_is_a_clear_error(tmp_path):
     with pytest.raises(EnvironmentFileError, match="cannot read"):
         load_environment_file(tmp_path / "missing")
+
+
+def test_environment_file_is_case_insensitive_on_windows(tmp_path, make_watch, monkeypatch):
+    monkeypatch.setattr(platform, "IS_WINDOWS", True)
+    monkeypatch.setattr(platform, "hot_environment", lambda: {})
+    monkeypatch.setenv("RELAY_PASSWORD", "old")
+    path = write_env(tmp_path, "relay_password=new\n")
+    watch = load_watch_config(make_watch("w"))
+    env = base_environment({}, watch, path)
+    assert env["RELAY_PASSWORD"] == "new" and "relay_password" not in env
+
+
+def test_environment_file_must_be_utf8(tmp_path):
+    path = tmp_path / "env"
+    path.write_bytes(b"RELAY_PASSWORD=\xff\n")
+    with pytest.raises(EnvironmentFileError, match="not valid UTF-8"):
+        load_environment_file(path)
+
+
+def test_observer_environment_uses_the_file(tmp_path, make_watch):
+    from watchglass.observers import observer_environment
+
+    path = write_env(tmp_path, "RELAY_PASSWORD=observer\n")
+    watch = load_watch_config(make_watch("w"))
+    env = observer_environment(watch, "feed", environment={}, data_dir=tmp_path, environment_file=path)
+    assert env["RELAY_PASSWORD"] == "observer"

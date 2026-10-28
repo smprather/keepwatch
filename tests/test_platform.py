@@ -171,6 +171,7 @@ def test_hot_environment_reads_both_hives_and_expands(monkeypatch):
     machine = [
         ("WG_ROOT", r"C:\base", 1),
         ("WG_BIN", r"%WG_ROOT%\bin", 2),
+        ("WG_PROC", r"%PROC_ROOT%\x", 2),
         ("PATH", r"C:\machine", 1),
     ]
     user = [
@@ -194,12 +195,14 @@ def test_hot_environment_reads_both_hives_and_expands(monkeypatch):
     }.items():
         setattr(fake_module, name, value)
     monkeypatch.setattr(platform, "IS_WINDOWS", True)
+    monkeypatch.setenv("PROC_ROOT", r"C:\process")
     monkeypatch.setitem(sys.modules, "winreg", fake_module)
 
     env = platform.hot_environment()
 
     assert env["WG_BIN"] == r"C:\base\bin"
     assert env["WG_USER"] == r"C:\base\user"
+    assert env["WG_PROC"] == r"C:\process\x"  # process vars expand too
     assert env["RELAY_PASSWORD"] == "s3cret"
     assert env["Path"] == r"C:\machine;C:\user" and "PATH" not in env  # Windows combines the halves
 

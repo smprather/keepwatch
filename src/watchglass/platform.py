@@ -112,7 +112,10 @@ def hot_environment() -> dict[str, str]:
     """
     if not IS_WINDOWS:
         return {}
-    import winreg
+    try:
+        import winreg
+    except ImportError:  # a test that monkeypatches IS_WINDOWS on another OS
+        return {}
 
     machine_raw = _registry_values(
         winreg, winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
@@ -127,7 +130,8 @@ def hot_environment() -> dict[str, str]:
         ]
 
     machine_values = readable(machine_raw)
-    machine_context = {name.lower(): value for name, value, _ in machine_values}
+    machine_context = {name.lower(): value for name, value in os.environ.items()}
+    machine_context.update({name.lower(): value for name, value, _ in machine_values})
     machine = {
         name: _expand_registry(value, machine_context) if expand else value
         for name, value, expand in machine_values
@@ -135,7 +139,8 @@ def hot_environment() -> dict[str, str]:
     user_values = readable(user_raw)
     user: dict[str, str] = {}
     for name, value, expand in user_values:
-        context = {key.lower(): item for key, item in machine.items()}
+        context = dict(machine_context)
+        context.update({key.lower(): item for key, item in machine.items()})
         context.update({other.lower(): item for other, item, _ in user_values if other.lower() != name.lower()})
         user[name] = _expand_registry(value, context) if expand else value
     _combine_paths(machine, user)

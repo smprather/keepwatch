@@ -574,6 +574,10 @@ def load_environment_file(path: Path) -> dict[str, str]:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise EnvironmentFileError(f"cannot read environment_file {path}: {exc.strerror or exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise EnvironmentFileError(
+            f"environment_file {path} is not valid UTF-8 ({exc.reason} at byte {exc.start})"
+        ) from exc
     if not platform.IS_WINDOWS and info.st_mode & 0o077:
         raise EnvironmentFileError(
             f"environment_file {path} is accessible by other users (mode {info.st_mode & 0o777:o}); "

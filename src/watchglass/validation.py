@@ -69,7 +69,13 @@ def check_watch(watch_dir: Path, global_config: GlobalConfig, runner: Runner, pa
         report.problems.extend(str(problem) for problem in exc.problems)
         return report
     if watch.recipe is not None:
-        search = {**os.environ, **global_config.environment, **watch.environment}.get("PATH", "")
+        try:
+            search = base_environment(
+                global_config.environment, watch, global_config.environment_file
+            ).get("PATH", "")
+        except EnvironmentFileError as exc:
+            report.problems.append(str(exc))
+            return report
         needs_ssh = watch.recipe == "pull" and not watch.settings.get("ssh_command")
         for program in ("ssh", "scp") if needs_ssh else ("scp",):
             if not shutil.which(program, path=search):

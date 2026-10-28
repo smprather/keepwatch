@@ -133,10 +133,11 @@ class EventQueue:
 
 
 def observer_environment(
-    watch: WatchConfig, name: str, *, environment: Mapping[str, str], data_dir: Path
+    watch: WatchConfig, name: str, *, environment: Mapping[str, str], data_dir: Path,
+    environment_file: Path | None = None,
 ) -> dict[str, str]:
     """What an observer's program runs with: a hook's environment without the per-poll variables."""
-    env = base_environment(environment, watch)
+    env = base_environment(environment, watch, environment_file)
     env.update(
         {
             "WATCHGLASS_WATCH": watch.name,
@@ -860,12 +861,15 @@ def build_observer(
     sink: Sink,
     environment: Mapping[str, str],
     data_dir: Path,
+    environment_file: Path | None = None,
 ) -> Observer:
     """The Observer for one [observe.<name>] table (not started)."""
     if config.kind in ("command", "remote_files", "remote_tree"):
         with contextlib.suppress(OSError):
             data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        env = observer_environment(watch, config.name, environment=environment, data_dir=data_dir)
+        env = observer_environment(
+            watch, config.name, environment=environment, data_dir=data_dir, environment_file=environment_file
+        )
         if config.kind == "command":
             return CommandObserver(watch, config, deliver=deliver, sink=sink, env=env)
         if config.kind == "remote_tree":

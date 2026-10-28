@@ -270,8 +270,8 @@ def _merge_environment(env: dict[str, str], values: Mapping[str, str]) -> None:
     lower = {key.lower(): key for key in env}
     for key, value in values.items():
         previous = lower.get(key.lower())
-        if previous is not None and previous != key:
-            env.pop(previous, None)
+        if previous is not None:
+            key = previous  # keep the spelling the child process already has (PATH, not Path)
         env[key] = value
         lower[key.lower()] = key
 
@@ -298,7 +298,11 @@ def base_environment(
             hot[hot_key] = _combine_path_values(process_path, hot_path)
     _merge_environment(env, hot)
     if environment_file is not None:
-        env.update(load_environment_file(environment_file))
+        values = load_environment_file(environment_file)
+        if platform.IS_WINDOWS:
+            _merge_environment(env, values)
+        else:
+            env.update(values)
     env = {key: value for key, value in env.items() if not key.startswith("WATCHGLASS_") or key == "WATCHGLASS_CONFIG"}
     env.update(environment)
     env.update(watch.environment)

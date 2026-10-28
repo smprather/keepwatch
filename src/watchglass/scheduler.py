@@ -142,8 +142,19 @@ class WatchRunner:
         config = self._config
         if self._stop.is_set() or not config.enabled or self.offline is not None or not config.observers:
             return None
-        environment = self._engine.global_config.environment
-        return (config.observers, config.watch_dir, config.shell, config.environment, config.settings, environment)
+        global_config = self._engine.global_config
+        environment_file = global_config.environment_file
+        signature = None
+        if environment_file is not None:
+            try:
+                info = environment_file.stat()
+                signature = (info.st_mtime_ns, info.st_size, info.st_mode)
+            except OSError:
+                signature = None
+        return (
+            config.observers, config.watch_dir, config.shell, config.environment, config.settings,
+            global_config.environment, environment_file, signature,
+        )
 
     def sync_observers(self) -> None:
         """Start, stop or restart this watch's observers to match its config and state. Runner thread only."""
@@ -164,6 +175,7 @@ class WatchRunner:
                 deliver=functools.partial(self.add_event, wake=observer_config.wake),
                 sink=self._sink,
                 environment=self._engine.global_config.environment,
+                environment_file=self._engine.global_config.environment_file,
                 data_dir=self._paths.watch_data_dir(self.name),
             )
             with self._observers_lock:

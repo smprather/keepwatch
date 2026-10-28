@@ -9,5 +9,5 @@ action_timeout = "2h"
 [settings]
 local_dir = "~/relay/staging"   # the staging folder: the SAME path in relay-pull and relay-push
 dest = "me@linux2.example:incoming/"
-password_env = "RELAY_PASSWORD"   # Windows: setx RELAY_PASSWORD "...", then restart watchglass
+password_env = "RELAY_PASSWORD"   # Windows: setx it; Linux: global environment_file (see docs environment)
 pattern = "*.tar.gz"
