@@ -29,6 +29,7 @@ from watchglass.hooks import CHECK
 from watchglass.locks import hold_lock
 from watchglass.platform import HookProcess
 from watchglass.protocol import PROTOCOL_VERSION, decode_lines, normalize_payload
+from watchglass.rejections import rejection_reason
 from watchglass.state import Outcome
 
 KILL_GRACE = 5.0
@@ -66,6 +67,7 @@ class HookResult:
     payload: Any = None
     reason: str | None = None
     exit_code: int | None = None
+    permanent_reason: str | None = None
     signal: int | None = None
     exception: dict[str, str] | None = None
     stdout: str = ""
@@ -682,7 +684,12 @@ class Runner:
                 **common,
             )
         status = result.get("status")
-        details: dict[str, Any] = {"reason": result.get("reason"), "exception": result.get("exception")}
+        permanent = result.get("permanent_reason")
+        details: dict[str, Any] = {
+            "reason": result.get("reason"),
+            "exception": result.get("exception"),
+            "permanent_reason": permanent if isinstance(permanent, str) else None,
+        }
         if call.mode == "describe":
             return HookResult(status="ok" if status == "ok" else "error", hooks=result.get("hooks"), **details, **common)
         if call.hook == CHECK:
@@ -762,6 +769,7 @@ class Runner:
                 "target": target,
                 **self._captured(out, err, returncode, started),
             }
+            permanent = rejection_reason(cast(str, common.get("stderr") or ""))
             if timed_out:
                 return HookResult(status="timeout", reason=f"timed out after {format_duration(call.timeout)}", **common)
             stopped = self._stopped_reason(process, returncode)
@@ -770,7 +778,9 @@ class Runner:
             if call.hook != CHECK:
                 if returncode == 0:
                     return HookResult(status="ok", **common)
-                return HookResult(status="failed", reason=f"exit code {returncode}", **common)
+                return HookResult(
+                    status="failed", reason=f"exit code {returncode}", permanent_reason=permanent, **common
+                )
             status = classify_exit(returncode, call.watch.exit_codes)
             if status == "error":
                 codes = call.watch.exit_codes
@@ -780,6 +790,7 @@ class Runner:
                         f"exit code {returncode} is not listed in [check_exit_codes] "
                         f"(true={list(codes.true)}, false={list(codes.false)}, unknown={list(codes.unknown)})"
                     ),
+                    permanent_reason=permanent,
                     **common,
                 )
             payload, problem = self._read_payload(payload_out)

@@ -36,6 +36,7 @@ from watchglass.logstore import Sink, make_record
 from watchglass.offline import iso_time
 from watchglass.platform import HookProcess
 from watchglass.protocol import clip
+from watchglass.rejections import rejection_reason
 from watchglass.remote import AUTO_PYTHON as AUTO_PYTHON
 from watchglass.remote import ssh_argv, watcher_source
 from watchglass.runner import DRAIN_GRACE, KILL_GRACE, base_environment
@@ -161,6 +162,8 @@ class Observer:
         self.name = config.name
         self.restarts = 0
         self.last_event: float | None = None
+        self.permanent_reason: str | None = None
+        self.rejection_tail: list[str] = []
         self._deliver = deliver
         self._sink = sink
         self._stop = threading.Event()
@@ -229,6 +232,20 @@ class Observer:
                 stderr_tail=stderr_tail,
             )
         )
+        if self.permanent_reason is None:
+            permanent = rejection_reason("\n".join(stderr_tail))
+            if permanent is not None:
+                self.permanent_reason = permanent
+                self.rejection_tail = list(stderr_tail)
+                self._sink(
+                    make_record(
+                        "observer.rejected",
+                        level="CRITICAL",
+                        **self._tag(),
+                        reason=permanent,
+                        stderr_tail=self.rejection_tail,
+                    )
+                )
 
     def _loop(self) -> None:
         delay = BACKOFF_START
@@ -239,6 +256,10 @@ class Observer:
             except Exception as exc:
                 self._crash(exc)
             if self._stop.is_set():
+                break
+            if self.permanent_reason is not None and self.watch.max_auth_failures > 0:
+                # A rejected credential/host key is permanent: restarting only repeats a failed login and
+                # burns lockout budget. The scheduler sees this and parks the watch (issue 24).
                 break
             if time.monotonic() - started >= RESET_AFTER:
                 delay = BACKOFF_START

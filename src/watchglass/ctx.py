@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from watchglass import platform
 from watchglass.durations import parse_duration
 from watchglass.protocol import clip
+from watchglass.rejections import rejection_reason
 
 if TYPE_CHECKING:
     from watchglass.transfer import Transfer
@@ -40,12 +41,17 @@ class Unknown(Exception):
 
 
 class CommandFailed(Exception):
-    """Raised by Ctx.run() when a command exits nonzero and check=True."""
+    """Raised by Ctx.run() when a command exits nonzero and check=True.
+
+    `permanent_reason` is set when stderr is an ssh/scp rejection (a wrong credential or host key): retrying
+    cannot help, so the scheduler parks the watch at once instead of backing off (issue 24).
+    """
 
     def __init__(self, argv: Sequence[str] | str, returncode: int, stderr: str) -> None:
         self.argv = argv
         self.returncode = returncode
         self.stderr = stderr
+        self.permanent_reason = rejection_reason(stderr)
         shown = argv if isinstance(argv, str) else " ".join(argv)
         tail = stderr.strip().splitlines()[-5:]
         detail = f"; stderr: {' | '.join(tail)}" if tail else ""

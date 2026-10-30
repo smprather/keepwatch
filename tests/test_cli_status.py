@@ -72,6 +72,28 @@ def test_status_without_a_service(xdg, make_watch):
     assert data["watches"]["a"]["known_to_service"] is False
 
 
+def test_status_shows_a_permanent_rejection_as_not_an_outage(xdg, make_watch):
+    """Issue 24: status must say retrying cannot help and that the watch makes no trial polls."""
+    make_watch("w", config='retry_after = "10m"\n[hooks]\ncheck = ["true"]\n')
+    write_offline(
+        xdg,
+        "w",
+        OfflineMarker(
+            reason="authentication failed; fix the credential, then: watchglass enable w",
+            since="2026-10-30T10:00:00.000-05:00",
+            last_failure="on_true failed: Permission denied (publickey,password).",
+            permanent=True,
+        ),
+    )
+    result = run("status")
+    assert result.exit_code == 0
+    assert "authentication failed; fix the credential, then: watchglass enable w" in result.output
+    assert "(permanent: no trial polls)" in result.output
+    data = json.loads(run("status", "--json").output)
+    assert data["watches"]["w"]["offline"]["permanent"] is True
+    assert data["watches"]["w"]["offline"]["by_user"] is False
+
+
 def test_status_with_a_running_service(xdg, make_watch):
     make_watch("a", config='[hooks]\ncheck = ["true"]\n')
     ensure_private_dir(xdg.runtime)

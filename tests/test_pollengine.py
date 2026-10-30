@@ -137,6 +137,38 @@ def test_missing_check_and_duplicate_hooks(make_watch, engine_for):
     assert report.outcome is Outcome.ERROR and "defined both" in report.reason
 
 
+def test_a_permanent_rejection_reaches_the_report(make_watch, engine_for):
+    """A rejected credential from a Python hook is marked permanent, counting toward max_auth_failures."""
+    watch_dir = make_watch("rejected", files={"watch.py": '''
+        from watchglass import CommandFailed
+
+        def check(ctx):
+            return True
+
+        def on_true(ctx):
+            raise CommandFailed(["ssh"], 255, "u@host: Permission denied (publickey,password).\\n")
+    '''})
+    report = engine_for([]).poll(load_watch_config(watch_dir), WatchState(False))
+    assert report.failed and report.permanent_reason == "authentication failed"
+    assert report.after.rejections == 1 and report.after.failures == 1
+    assert report.to_dict()["permanent_reason"] == "authentication failed"
+
+
+def test_an_ordinary_failure_is_not_permanent(make_watch, engine_for):
+    watch_dir = make_watch("outage", files={"watch.py": '''
+        from watchglass import CommandFailed
+
+        def check(ctx):
+            return True
+
+        def on_true(ctx):
+            raise CommandFailed(["ssh"], 255, "ssh: connect to host h port 22: Connection refused\\n")
+    '''})
+    report = engine_for([]).poll(load_watch_config(watch_dir), WatchState(False))
+    assert report.failed and report.permanent_reason is None
+    assert report.after.rejections == 0
+
+
 def test_report_to_dict(make_watch, engine_for):
     watch_dir = make_watch("d", config='[hooks]\ncheck = "exit 1"\n')
     data = engine_for([]).poll(load_watch_config(watch_dir), WatchState(False)).to_dict()

@@ -17,7 +17,8 @@ from watchglass.observers import EventQueue, Observer, build_observer, stop_all
 from watchglass.offline import OfflineMarker, clear_offline, iso_time, read_offline, write_offline
 from watchglass.paths import Paths
 from watchglass.pollengine import PollEngine, PollReport
-from watchglass.state import ANSWERS, initial_state, next_delay, should_go_offline
+from watchglass.rejections import AUTHENTICATION_FAILED, HOST_KEY_FAILED
+from watchglass.state import ANSWERS, initial_state, next_delay, should_go_offline, should_park_for_rejection
 from watchglass.transfer import read_activity
 
 Alert = Callable[[str, str, str], None]
@@ -40,7 +41,11 @@ class LastPoll:
 def _failure_summary(report: PollReport) -> str:
     for result in report.results:
         if not result.succeeded:
-            return f"{result.hook} {result.status}: {result.reason}"
+            detail = result.reason
+            lines = [line.strip() for line in (result.stderr or "").splitlines() if line.strip()]
+            if lines and (not detail or lines[-1] not in detail):
+                detail = f"{detail}; {lines[-1]}" if detail else lines[-1]
+            return f"{result.hook} {result.status}: {detail}"
     return f"check {report.outcome.value}: {report.reason}"
 
 
@@ -153,12 +158,28 @@ class WatchRunner:
                 signature = None
         return (
             config.observers, config.watch_dir, config.shell, config.environment, config.settings,
-            global_config.environment, environment_file, signature,
+            global_config.environment, environment_file, signature, config.max_auth_failures,
         )
+
+    def _observer_rejection(self) -> tuple[str, str] | None:
+        """The first observer whose ssh login (or command) was rejected, with the detail for offline.json."""
+        with self._observers_lock:
+            running = dict(self._observers)
+        for name, observer in sorted(running.items()):
+            reason = observer.permanent_reason
+            if reason is not None:
+                tail = observer.rejection_tail[-1] if observer.rejection_tail else reason
+                return reason, f"observer {name}: {tail}"
+        return None
 
     def sync_observers(self) -> None:
         """Start, stop or restart this watch's observers to match its config and state. Runner thread only."""
         self._apply_pending()
+        if self.offline is None and self._config.max_auth_failures > 0:
+            found = self._observer_rejection()
+            if found is not None:
+                # An observer's rejected credential is as permanent as a hook's: no restart, no trial polls.
+                self._park(self._clock(), found[0], found[1])
         key = self._observers_wanted()
         if key == self._observer_key:
             return
@@ -202,7 +223,7 @@ class WatchRunner:
         if self.offline is not None and marker is None:
             self.offline = None
             self.last_trial = None
-            self.state = replace(self.state, failures=0)
+            self.state = replace(self.state, failures=0, rejections=0)
             self.next_due = now
             self._went_online("enabled by user")
         elif self.offline is None and marker is not None:
@@ -214,6 +235,7 @@ class WatchRunner:
                     watch=self.name,
                     reason=marker.reason,
                     by_user=marker.by_user,
+                    permanent=marker.permanent,
                 )
             )
         else:
@@ -225,7 +247,7 @@ class WatchRunner:
         if not config.enabled:
             return None
         if self.offline is not None:
-            if self.offline.by_user or config.retry_after is None:
+            if self.offline.by_user or self.offline.permanent or config.retry_after is None:
                 return None
             base = self.last_trial if self.last_trial is not None else self.offline.since_epoch()
             return max(base + self._trial_delay(config) - now, 0.0)
@@ -237,6 +259,39 @@ class WatchRunner:
     def _trial_delay(self, config: WatchConfig) -> float:
         """This watch's next trial-poll wait (see `trial_delay`)."""
         return trial_delay(float(config.retry_after or 0.0), config.retry_base, self.state.failures)
+
+    def _park(self, finished: float, rejection: str | None, last_failure: str | None) -> None:
+        """Write offline.json and say why: an ordinary failure limit, or a permanent rejection (no trial polls)."""
+        if rejection is None:
+            reason = f"{self.state.failures} consecutive failed polls"
+        else:
+            fix = {
+                AUTHENTICATION_FAILED: "fix the credential",
+                HOST_KEY_FAILED: "fix known_hosts",
+            }.get(rejection, "fix it")
+            reason = f"{rejection}; {fix}, then: watchglass enable {self.name}"
+        marker = OfflineMarker(
+            reason=reason,
+            since=iso_time(finished),
+            last_failure=last_failure,
+            permanent=rejection is not None,
+        )
+        write_offline(self._paths, self.name, marker)
+        self.offline = marker
+        if marker.permanent:
+            self.last_trial = None
+        self._sink(
+            make_record(
+                "watch.offline",
+                level="CRITICAL",
+                watch=self.name,
+                reason=marker.reason,
+                by_user=False,
+                permanent=marker.permanent,
+                last_failure=marker.last_failure,
+            )
+        )
+        self._alert("offline", self.name, f"{marker.reason}; last: {marker.last_failure}")
 
     def poll_once(self, now: float) -> PollReport | None:
         """Poll if due (a trial poll when offline with retry_after). Returns None when not due."""
@@ -287,26 +342,18 @@ class WatchRunner:
                 self.last_trial = None
                 self.next_due = finished + config.interval
                 self._went_online("trial poll succeeded")
+            elif report.permanent_reason is not None and should_park_for_rejection(
+                self.state.rejections, config.max_auth_failures
+            ):
+                # A trial poll discovered the credential is rejected: upgrade the marker so no further trial
+                # poll runs (retrying cannot succeed, and each attempt is the damage).
+                self._park(finished, report.permanent_reason, _failure_summary(report))
             return report
-        if report.failed and should_go_offline(self.state.failures, config.max_failures):
-            marker = OfflineMarker(
-                reason=f"{self.state.failures} consecutive failed polls",
-                since=iso_time(finished),
-                last_failure=_failure_summary(report),
-            )
-            write_offline(self._paths, self.name, marker)
-            self.offline = marker
-            self._sink(
-                make_record(
-                    "watch.offline",
-                    level="CRITICAL",
-                    watch=self.name,
-                    reason=marker.reason,
-                    by_user=False,
-                    last_failure=marker.last_failure,
-                )
-            )
-            self._alert("offline", self.name, f"{marker.reason}; last: {marker.last_failure}")
+        rejection = report.permanent_reason if report.failed else None
+        if rejection is not None and should_park_for_rejection(self.state.rejections, config.max_auth_failures):
+            self._park(finished, rejection, _failure_summary(report))
+        elif report.failed and should_go_offline(self.state.failures, config.max_failures):
+            self._park(finished, None, _failure_summary(report))
         self.next_due = finished + next_delay(config.interval, self.state.failures)
         return report
 
@@ -322,6 +369,7 @@ class WatchRunner:
             "condition": self.state.condition,
             "pending_edge": self.state.pending_edge.value if self.state.pending_edge else None,
             "failures": self.state.failures,
+            "rejections": self.state.rejections,
             "offline": self.offline.to_dict() if self.offline else None,
             "last_poll": asdict(self.last_poll) if self.last_poll else None,
             "next_poll": None if wait is None else iso_time(now + wait),
@@ -361,6 +409,7 @@ class WatchRunner:
                 "running": observer.running,
                 "restarts": observer.restarts,
                 "last_event": iso_time(observer.last_event) if observer.last_event is not None else None,
+                "permanent_reason": observer.permanent_reason,
             }
             for name, observer in sorted(running.items())
         }

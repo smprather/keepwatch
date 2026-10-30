@@ -17,16 +17,17 @@ Every record has `ts` (local time, RFC 3339 with offset), `level` (`DEBUG`, `INF
 | `command` | from `ctx.run`: `argv`, `shell`, `exit_code`, `timed_out`, `duration`, `stdout`, `stderr`, `*_truncated` |
 | `plugin.log` | from `ctx.log`: `level`, `logger`, `message`, `fields`, `traceback` |
 | `plugin.event` | from `ctx.event`: `level`, `message`, `fields` — a plain-language headline |
-| `hook.end` | `hook`, `kind`, `target`, `status`, `reason`, `payload`, `exit_code`, `signal`, `exception` (type, message, traceback), `stdout`, `stderr`, `*_truncated`, `duration` |
+| `hook.end` | `hook`, `kind`, `target`, `status`, `reason`, `permanent_reason`, `payload`, `exit_code`, `signal`, `exception` (type, message, traceback), `stdout`, `stderr`, `*_truncated`, `duration` |
 | `check.outcome` | `outcome`, `reason`, `payload`, `condition_before`, `condition_after`, `pending_edge`, `actions`, `faked` |
-| `poll.end` | `failed`, `failures`, `condition`, `pending_edge`, `dry_run` |
-| `watch.offline` / `watch.online` | `reason`, `by_user`, `last_failure` |
+| `poll.end` | `failed`, `failures`, `rejections`, `permanent_reason`, `condition`, `pending_edge`, `dry_run` |
+| `watch.offline` / `watch.online` | `reason`, `by_user`, `permanent`, `last_failure` |
 | `watch.crash` | `error`, `traceback` (a bug in watchglass itself; the watch retries after a minute) |
 | `observer.started` | `observer`, `kind`; `argv` and `pid` (command) or `path`, `native`, `native_error` (files) |
 | `observer.connected` | `observer`, `remote`, `dir`, `python`, `version`, `inotify`: a remote_files observer's ssh connection is up |
 | `observer.event` | DEBUG: `observer`, `data` (the event as the source produced it), or `data_clipped` (its JSON, shortened) when that is over 4 KiB |
 | `observer.output` | `observer`, `stream`, `text`; `suppressed` on the record counting lines over the limit |
 | `observer.stopped` / `observer.restarting` | `observer`; `reason`, `exit_code`, `duration`, `stderr_tail` / `delay` |
+| `observer.rejected` | `observer`, `reason` (`authentication failed` or `host key verification failed`), `stderr_tail`: the source's login was rejected (see `watchglass docs failures`) |
 | `observer.dropped` | `observer`, `dropped` (total so far), `cap`, `max_bytes`: the event queue was full |
 | `observer.crash` | `observer`, `error`, `traceback` (a bug in watchglass itself; the observer restarts) |
 | `alert.end` | `alert_event`, `command`, `status`, `exit_code`, `reason`, `stdout`, `stderr`, `duration` |

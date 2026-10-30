@@ -6,7 +6,7 @@ import pytest
 from scp_server import ScpServer
 from watchglass import Ctx, TransferFailed
 from watchglass.ctx import CommandFailed
-from watchglass.transfer import TransferMissing
+from watchglass.transfer import TransferAuthFailed, TransferMissing
 
 pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
 
@@ -99,17 +99,17 @@ def test_a_local_side_failure_is_not_reported_as_a_withdrawn_source(tmp_path, se
     assert ".staged.bin.part" in (caught.value.stderr or "")
 
 
-def test_a_pull_that_fails_for_another_reason_is_not_a_withdrawal(tmp_path, server):
-    """A refused host key is a CommandFailed, not a withdrawal: it is not a permanent condition to skip."""
+def test_a_refused_host_key_is_a_permanent_rejection_not_a_withdrawal(tmp_path, server):
+    """A refused host key is classified permanent (issue 24), never a withdrawal."""
     (server.root / "here.bin").write_bytes(b"payload")
     ctx = make_ctx(tmp_path, [])
     empty = tmp_path / "empty_known_hosts"
     empty.write_text("", encoding="utf-8")
     options = {**key_kwargs(server, tmp_path), "known_hosts": empty}
-    with pytest.raises(CommandFailed) as caught:
+    with pytest.raises(TransferAuthFailed, match="Host key verification failed") as caught:
         ctx.transfer.pull("u@127.0.0.1:here.bin", "stage", **options)
     assert not isinstance(caught.value, TransferMissing)
-    assert "Host key verification failed" in (caught.value.stderr or "")
+    assert caught.value.permanent_reason == "host key verification failed"
 
 
 def test_the_hook_deadline_caps_the_timeout(tmp_path):

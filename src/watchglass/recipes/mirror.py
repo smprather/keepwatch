@@ -24,7 +24,7 @@ from watchglass.ctx import CommandFailed, Ctx, Unknown
 from watchglass.recipes import file_budget
 from watchglass.recipes.pull import cleanup_parts
 from watchglass.remote import ssh_run_argv
-from watchglass.transfer import TransferFailed
+from watchglass.transfer import TransferAuthFailed, TransferFailed
 
 CHECKPOINT = "mirror"
 TOLERANCE = 2.0  # seconds: FAT and NTFS round mtimes to two
@@ -380,6 +380,8 @@ def on_true_push(ctx: Ctx) -> None:
                     deadline=time.time() + budget,
                     **options,
                 )
+            except TransferAuthFailed:
+                raise  # permanent: repeating it for the rest of the queue would only burn lockout budget
             except (CommandFailed, TransferFailed, OSError) as exc:
                 error = error or exc
                 ctx.log.warning("pushing %s failed (%s); the rest of the queue is still tried", relative, exc)
@@ -460,6 +462,8 @@ def on_true_pull(ctx: Ctx) -> None:
                     **options,
                 )
                 info = _repair_mtime(ctx, final, times.get(relative), settings["mtime_tolerance"])
+            except TransferAuthFailed:
+                raise  # permanent: repeating it for the rest of the queue would only burn lockout budget
             except (CommandFailed, TransferFailed, OSError) as exc:
                 error = error or exc
                 ctx.log.warning("pulling %s failed (%s); the rest of the queue is still tried", relative, exc)

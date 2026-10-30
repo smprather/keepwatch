@@ -15,7 +15,48 @@ After the k-th consecutive failed poll, the wait before the next poll is
 min(max(interval, 60s) * 2^(k-1), max(interval, 1h))
 ```
 
-With the default `max_failures = 5` the waits are 1m, 2m, 4m and 8m, so a watch goes offline after about 15 minutes of continuous failure whatever its interval. The slow retry also keeps a failing `scp` from producing a burst of failed ssh logins, which tools like fail2ban punish with an IP ban.
+With the default `max_failures = 5` the waits are 1m, 2m, 4m and 8m, so a watch goes offline after about 15 minutes of continuous failure whatever its interval. The slow retry keeps a failing `scp` from producing a burst of failed ssh logins, which tools like fail2ban punish with an IP ban. Spacing is not enough when the credential itself is wrong, though: that case is handled before the backoff (see *Rejected credentials and host keys* below).
+
+## Rejected credentials and host keys
+
+Some failures are permanent. Retrying asks the same server the same question and gets the same no, while every
+attempt spends the account's lockout budget (fail2ban, an AD policy). watchglass detects the shapes ssh and scp
+print for a rejected login:
+
+```text
+Permission denied (publickey,password).
+Permission denied (publickey,password,keyboard-interactive).
+Permission denied (publickey).
+Too many authentication failures
+Received disconnect from <host>: ... Too many authentication failures
+Host key verification failed
+REMOTE HOST IDENTIFICATION HAS CHANGED
+Host key for <host> has changed ...
+```
+
+A *file-level* `Permission denied` names a path (`/in/a.bin: Permission denied`) and is not one of these; neither
+is an outage (`Connection refused`, a timeout, DNS). Those keep the ordinary backoff and trial polls.
+
+The first rejection (`max_auth_failures = 1`, the default; `0` disables this) parks the watch **at once**, even
+with `max_failures = 5`:
+
+- it goes offline with `permanent = true` in `offline.json`, and its reason says what to fix, e.g.
+  `authentication failed; fix the credential, then: watchglass enable NAME`;
+- it makes **no trial polls**, however long it waits: `retry_after` is not used for this state;
+- `status` shows the reason with `(permanent: no trial polls)`, the TUI notes that `watchglass enable` is needed,
+  and the `watch.offline` record carries `permanent: true`;
+- the marker survives a service restart, so a restart does not quietly resume the login attempts;
+- `watchglass enable NAME` clears it after you have fixed the credential (or `known_hosts`).
+
+An observer's rejected login is treated the same way: it logs `observer.rejected`, and with `max_auth_failures`
+nonzero it is not restarted and the watch is parked, so a `remote_files` source cannot keep retrying on its own.
+
+A larger `max_auth_failures` tolerates that many consecutive rejections from hooks first; an observer's first
+rejection parks the watch as soon as the limit is nonzero (it cannot keep trying without repeating the login).
+An ordinary failure in between does not reset the count; a poll that succeeds does. The recipes stop their queue
+at the first rejection rather than trying the remaining files, so one poll costs one login attempt. In watch code,
+`ctx.transfer` raises `watchglass.transfer.TransferAuthFailed` (a `TransferFailed`) and `ctx.run` raises
+`CommandFailed` with its `permanent_reason` set; command hooks are classified from the same stderr shapes.
 
 ## Trial polls
 

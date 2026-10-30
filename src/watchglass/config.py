@@ -111,6 +111,14 @@ WATCH_KEYS = (
         "Consecutive failed polls before the watch goes offline. 0 disables the limit.",
         True,
     ),
+    Key(
+        "max_auth_failures",
+        "int",
+        1,
+        "Consecutive rejections of the credential or host key before the watch is parked offline at once "
+        "(no trial polls: retrying cannot succeed and burns lockout budget). 0 disables the immediate park.",
+        True,
+    ),
     Key("retry_after", "interval", None, "While offline, make one trial poll this often.", True),
     Key(
         "retry_base",
@@ -774,6 +782,7 @@ class WatchConfig:
     check_timeout: float = 60.0
     action_timeout: float = 60.0
     max_failures: int = 5
+    max_auth_failures: int = 1
     retry_after: float | None = None
     retry_base: float | None = None
     python_dependencies: tuple[str, ...] = ()

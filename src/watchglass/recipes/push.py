@@ -17,7 +17,7 @@ from typing import Any
 
 from watchglass.ctx import CommandFailed, Ctx, Unknown
 from watchglass.recipes import file_budget
-from watchglass.transfer import TransferFailed, format_bytes, parse_endpoint
+from watchglass.transfer import TransferAuthFailed, TransferFailed, format_bytes, parse_endpoint
 
 LEDGER = "pushed"
 
@@ -121,6 +121,10 @@ def on_true(ctx: Ctx) -> None:
                 started = time.monotonic()
                 remote = ctx.transfer.push(path, settings["dest"], marker=settings["marker"],
                                            resume=settings["resume"], deadline=time.time() + budget, **options)
+            except TransferAuthFailed:
+                # A wrong password or refused key is permanent; trying the rest of the queue would repeat the
+                # same failed login (and burn lockout budget). Let the scheduler park the watch at once.
+                raise
             except (TransferFailed, CommandFailed, OSError) as exc:
                 error = error or exc
                 ctx.event(f"pushing {path.name} failed ({exc}); the rest of the queue is still tried",

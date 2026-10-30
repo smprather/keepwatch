@@ -34,6 +34,7 @@ class WatchState:
     condition: bool
     pending_edge: Edge | None = None
     failures: int = 0
+    rejections: int = 0  # consecutive permanent failures (a rejected credential or host key)
 
 
 def initial_state(initial_condition: bool) -> WatchState:
@@ -77,19 +78,30 @@ def plan_poll(state: WatchState, outcome: Outcome, defined_hooks: Collection[str
     return Plan(replace(state, condition=condition, pending_edge=pending), outcome, tuple(actions), False)
 
 
-def finish_poll(plan: Plan, results: Sequence[tuple[str, bool]]) -> tuple[WatchState, bool]:
-    """Fold action results (hook, succeeded) into the state. Returns (state, poll_failed)."""
+def finish_poll(
+    plan: Plan, results: Sequence[tuple[str, bool]], rejection: str | None = None
+) -> tuple[WatchState, bool]:
+    """Fold action results (hook, succeeded) into the state. Returns (state, poll_failed).
+
+    `rejection` is the short reason a failure is permanent (a rejected credential or host key); the count
+    survives ordinary failures and resets only on a poll that succeeds, so default `max_auth_failures = 1`
+    parks the watch on its first rejection while a larger value tolerates that many.
+    """
     failed = plan.check_failed or any(not succeeded for _, succeeded in results)
     pending = plan.state.pending_edge
     if pending is not None and (EDGE_HOOKS[pending], True) in results:
         pending = None
+    rejections = plan.state.rejections
     if failed:
         failures = plan.state.failures + 1
+        if rejection is not None:
+            rejections += 1
     elif plan.outcome in ANSWERS:
         failures = 0
+        rejections = 0
     else:
         failures = plan.state.failures
-    return replace(plan.state, pending_edge=pending, failures=failures), failed
+    return replace(plan.state, pending_edge=pending, failures=failures, rejections=rejections), failed
 
 
 def next_delay(interval: float, failures: int) -> float:
@@ -106,3 +118,8 @@ def next_delay(interval: float, failures: int) -> float:
 
 def should_go_offline(failures: int, max_failures: int) -> bool:
     return max_failures > 0 and failures >= max_failures
+
+
+def should_park_for_rejection(rejections: int, max_auth_failures: int) -> bool:
+    """Whether this many consecutive credential/host-key rejections park the watch (0 disables it)."""
+    return max_auth_failures > 0 and rejections >= max_auth_failures

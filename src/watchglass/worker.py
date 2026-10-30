@@ -60,6 +60,19 @@ def _exception_info(exc: BaseException) -> dict[str, str]:
     }
 
 
+def _exception_result(exc: BaseException) -> dict[str, Any]:
+    """A failed hook: the exception, plus the permanent classification when it carries one (issue 24)."""
+    result: dict[str, Any] = {
+        "status": "error",
+        "reason": f"{type(exc).__name__}: {exc}",
+        "exception": _exception_info(exc),
+    }
+    permanent = getattr(exc, "permanent_reason", None)
+    if isinstance(permanent, str) and permanent:
+        result["permanent_reason"] = permanent
+    return result
+
+
 def _load_module(watch_dir: Path) -> Any:
     spec = importlib.util.spec_from_file_location("watchglass_watch", watch_dir / WATCH_PY)
     if spec is None or spec.loader is None:
@@ -144,7 +157,7 @@ def run_request(request: dict[str, Any], send: Send) -> dict[str, Any]:
             "exception": _exception_info(exc),
         }
     except BaseException as exc:
-        return {"status": "error", "reason": f"{type(exc).__name__}: {exc}", "exception": _exception_info(exc)}
+        return _exception_result(exc)
     if hook == CHECK:
         return interpret_check_return(value)
     return {"status": "ok"}

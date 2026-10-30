@@ -65,6 +65,7 @@ class PollReport:
     faked: bool = False
     dry_run: bool = False
     trial: bool = False
+    permanent_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -77,12 +78,14 @@ class PollReport:
             "condition_after": self.after.condition,
             "pending_edge": self.after.pending_edge.value if self.after.pending_edge else None,
             "failures": self.after.failures,
+            "rejections": self.after.rejections,
             "planned_actions": list(self.planned),
             "results": [{"hook": result.hook, "status": result.status, "reason": result.reason} for result in self.results],
             "failed": self.failed,
             "faked": self.faked,
             "dry_run": self.dry_run,
             "trial": self.trial,
+            "permanent_reason": self.permanent_reason,
         }
 
 
@@ -128,6 +131,7 @@ class PollEngine:
         faked = fake is not None
         self._sink(make_record("poll.start", **tag, condition=state.condition, faked=faked, dry_run=dry_run, trial=trial, events=len(events)))
         hooks, problem = watch_hooks(watch.watch_dir, watch.hooks, watch.recipe)
+        check_permanent: str | None = None
         if problem is None and fake is None and CHECK not in hooks:
             problem = NO_CHECK
         if problem is not None:
@@ -137,6 +141,8 @@ class PollEngine:
         else:
             result = self._run(watch, CHECK, poll_id, state.condition, None, watch.check_timeout, events, on_hook)
             outcome, reason, payload = result.outcome(), result.reason, result.payload
+            if result.status in FAILED_STATUSES:
+                check_permanent = result.permanent_reason
         plan = plan_poll(state, outcome, hooks)
         answered = outcome in (Outcome.TRUE, Outcome.FALSE, Outcome.UNKNOWN)
         self._sink(
@@ -155,6 +161,7 @@ class PollEngine:
             )
         )
         results: list[HookResult] = []
+        rejection: str | None = None
         if dry_run:
             after, failed = finish_poll(plan, [(hook, True) for hook in plan.actions])
         else:
@@ -164,7 +171,13 @@ class PollEngine:
                 results.append(result)
                 if not result.succeeded:
                     break
-            after, failed = finish_poll(plan, [(result.hook, result.succeeded) for result in results])
+            rejection = check_permanent or next(
+                (result.permanent_reason for result in results if not result.succeeded and result.permanent_reason),
+                None,
+            )
+            after, failed = finish_poll(
+                plan, [(result.hook, result.succeeded) for result in results], rejection=rejection
+            )
         self._sink(
             make_record(
                 "poll.end",
@@ -172,6 +185,8 @@ class PollEngine:
                 **tag,
                 failed=failed,
                 failures=after.failures,
+                rejections=after.rejections,
+                permanent_reason=rejection if not dry_run else None,
                 condition=after.condition,
                 pending_edge=_edge(after),
                 dry_run=dry_run,
@@ -191,6 +206,7 @@ class PollEngine:
             faked=faked,
             dry_run=dry_run,
             trial=trial,
+            permanent_reason=rejection if not dry_run else None,
         )
 
     def _emit_message(self, tag: dict[str, Any], message: dict[str, Any]) -> None:

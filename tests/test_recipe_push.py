@@ -3,6 +3,7 @@ import os
 import shutil
 import socket
 import time
+from pathlib import Path
 
 import pytest
 
@@ -61,6 +62,40 @@ def closed_port():
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+def password_push_watch(make_watch, server, tmp_path):
+    config = tmp_path / "ssh_config"
+    config.write_text("", encoding="utf-8")
+    return load_watch_config(
+        make_watch(
+            "relay-push",
+            config=(
+                f'recipe = "push"\n[settings]\nlocal_dir = {toml_path(tmp_path / "stage")}\ndest = "u@127.0.0.1:"\n'
+                f"port = {server.port}\nknown_hosts = {toml_path(server.known_hosts)}\n"
+                f'password_env = "KW_TEST_PASSWORD"\n'
+                f"ssh_options = ['-F', {toml_path(config)}, '-o', 'IdentityAgent=none', "
+                "'-o', 'PubkeyAuthentication=no']\nsettle = '1s'\n"
+            ),
+        )
+    )
+
+
+def test_a_rejected_password_stops_the_queue_after_one_attempt(make_watch, server, tmp_path, xdg, monkeypatch):
+    """Issue 24: a wrong password is permanent, so the queue must not try it again for the second file."""
+    staged(tmp_path, "a.tar.gz")
+    staged(tmp_path, "b.tar.gz")
+    monkeypatch.setenv("KW_TEST_PASSWORD", "wrong")
+    records = []
+    global_config = load_global_config(xdg.config_file, xdg)
+    engine = PollEngine(runner=Runner(), paths=xdg, global_config=global_config, sink=records.append, pid=os.getpid())
+    report = engine.poll(password_push_watch(make_watch, server, tmp_path), WatchState(False))
+    assert report.failed and report.permanent_reason == "authentication failed"
+    assert report.after.rejections == 1
+    attempts = [r for r in records if r["event"] == "command" and Path(r["argv"][0]).name.startswith("scp")]
+    assert len(attempts) == 1, attempts
+    assert "Permission denied" in attempts[0]["stderr"]
+    assert not list(server.root.iterdir())
 
 
 def test_push_recipe_uploads_with_a_marker_then_deletes(make_watch, server, tmp_path, xdg):

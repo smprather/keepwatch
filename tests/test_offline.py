@@ -35,6 +35,11 @@ def test_offline_marker_round_trip(xdg):
     write_offline(xdg, "w", marker)
     assert read_offline(xdg, "w") == marker
     assert json.loads(xdg.offline_file("w").read_text())["by_user"] is False
+    permanent = OfflineMarker(reason="authentication failed; fix the credential", since=iso_time(1_000_000),
+                              last_failure="on_true failed: Permission denied", permanent=True)
+    write_offline(xdg, "w", permanent)
+    assert read_offline(xdg, "w") == permanent
+    assert json.loads(xdg.offline_file("w").read_text())["permanent"] is True
     assert clear_offline(xdg, "w") is True
     assert clear_offline(xdg, "w") is False
     assert read_offline(xdg, "w") is None

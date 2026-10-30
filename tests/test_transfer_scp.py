@@ -10,6 +10,7 @@ from watchglass import CommandFailed
 from watchglass.transfer import (
     Endpoint,
     ScpOptions,
+    TransferAuthFailed,
     TransferFailed,
     TransferMissing,
     _reget_source_missing,
@@ -129,17 +130,18 @@ def test_pull_conflicts(tmp_path, server, ssh_config):
     assert (stage / "b.tar.gz").read_bytes() == b"new" and (stage / "b-1.tar.gz").read_bytes() == b"new"
 
 
-def test_wrong_password_fails(tmp_path, server, ssh_config, monkeypatch):
+def test_wrong_password_is_a_permanent_rejection(tmp_path, server, ssh_config, monkeypatch):
     local = tmp_path / "a.gz"
     local.write_bytes(b"x")
     options = password_options(server, ssh_config, monkeypatch)
     monkeypatch.setenv("KW_TEST_PASSWORD", "wrong")
-    with pytest.raises(CommandFailed, match="Permission denied"):
+    with pytest.raises(TransferAuthFailed, match="Permission denied") as caught:
         push(local, REMOTE, options=options)
+    assert caught.value.permanent_reason == "authentication failed"
     assert not (server.root / "a.gz").exists()
 
 
-def test_unknown_host_key_is_refused(tmp_path, server, ssh_config):
+def test_unknown_host_key_is_a_permanent_rejection(tmp_path, server, ssh_config):
     local = tmp_path / "a.gz"
     local.write_bytes(b"x")
     empty = tmp_path / "empty_known_hosts"
@@ -151,8 +153,9 @@ def test_unknown_host_key_is_refused(tmp_path, server, ssh_config):
         ssh_options=("-F", str(ssh_config), "-o", "IdentityAgent=none"),
         timeout=60,
     )
-    with pytest.raises(CommandFailed, match="Host key verification failed"):
+    with pytest.raises(TransferAuthFailed, match="Host key verification failed") as caught:
         push(local, REMOTE, options=options)
+    assert caught.value.permanent_reason == "host key verification failed"
 
 
 def test_missing_remote_file(tmp_path, server, ssh_config):

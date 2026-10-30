@@ -384,11 +384,14 @@ def _note(entry: dict[str, Any], state: str) -> str:
     if isinstance(exists, bool) and not exists:
         return "missing directory"
     pending = _count(entry.get("pending_events"))
+    offline = entry.get("offline")
+    if isinstance(offline, dict):
+        if offline.get("by_user"):
+            return "offline by user"
+        if offline.get("permanent"):
+            return "permanent: fix it, then watchglass enable"
     if pending > 0:
         return f"+{pending} events"
-    offline = entry.get("offline")
-    if isinstance(offline, dict) and offline.get("by_user"):
-        return "offline by user"
     if state == "transferring":
         activity = entry.get("transfer")
         name = activity.get("name") if isinstance(activity, dict) else None

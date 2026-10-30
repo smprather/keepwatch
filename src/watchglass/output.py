@@ -206,7 +206,7 @@ def _watch_removed(record: dict[str, Any], level: int) -> str:
 
 
 def _watch_offline(record: dict[str, Any], level: int) -> str:
-    line = f"OFFLINE: {record.get('reason')}"
+    line = f"OFFLINE{' (permanent, no trial polls)' if record.get('permanent') else ''}: {record.get('reason')}"
     if record.get("last_failure"):
         line += f"; last failure: {record['last_failure']}"
     return line
@@ -255,6 +255,14 @@ def _observer_stopped(record: dict[str, Any], level: int) -> str:
 
 def _observer_restarting(record: dict[str, Any], level: int) -> str:
     return f"observer {record.get('observer')} restarting in {format_duration(float(record.get('delay') or 0))}"
+
+
+def _observer_rejected(record: dict[str, Any], level: int) -> str:
+    line = f"observer {record.get('observer')} rejected: {record.get('reason')}"
+    tail = record.get("stderr_tail") or []
+    if tail:
+        line += _block("stderr", "\n".join(tail))
+    return line
 
 
 def _observer_output(record: dict[str, Any], level: int) -> str:
@@ -310,6 +318,7 @@ _FORMATTERS: dict[str, Callable[[dict[str, Any], int], str]] = {
     "observer.connected": _observer_connected,
     "observer.stopped": _observer_stopped,
     "observer.restarting": _observer_restarting,
+    "observer.rejected": _observer_rejected,
     "observer.output": _observer_output,
     "observer.event": _observer_event,
     "observer.dropped": _observer_dropped,

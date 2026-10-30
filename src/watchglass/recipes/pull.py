@@ -23,7 +23,14 @@ from typing import Any, cast
 from watchglass.ctx import CommandFailed, Ctx, as_text
 from watchglass.recipes import file_budget
 from watchglass.remote import ssh_argv, watcher_source
-from watchglass.transfer import TransferFailed, TransferMismatch, TransferMissing, format_bytes, with_known_hosts
+from watchglass.transfer import (
+    TransferAuthFailed,
+    TransferFailed,
+    TransferMismatch,
+    TransferMissing,
+    format_bytes,
+    with_known_hosts,
+)
 
 LEDGER = "pulled"
 TO_DELETE = "to_delete"
@@ -235,6 +242,9 @@ def on_true(ctx: Ctx) -> None:
                         deadline=time.time() + budget,
                         **options,
                     )
+                except TransferAuthFailed:
+                    # Permanent: stop the queue instead of repeating the same failed login for every file.
+                    raise
                 except TransferMismatch as exc:
                     # The file changed after it was reported; its new version comes as a new event.
                     ctx.event(f"{item['name']} changed on {settings['remote']} after it was reported ({exc}); "

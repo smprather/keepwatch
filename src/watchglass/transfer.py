@@ -29,6 +29,7 @@ from watchglass.ctx import CommandFailed
 from watchglass.durations import format_duration
 from watchglass.offline import iso_time
 from watchglass.paths import write_json_atomic
+from watchglass.rejections import rejection_reason
 
 PROTOCOLS = ("scp", "sftp")
 PASSWORD_MODES = ("askpass", "conpty")
@@ -119,6 +120,39 @@ class TransferMismatch(TransferFailed):
 
 class TransferMissing(TransferFailed):
     """A pull's remote source is gone (withdrawn after it was listed or reported); retrying it cannot help."""
+
+
+class TransferAuthFailed(TransferFailed):
+    """The destination rejected this machine's credential or host key; retrying cannot help (issue 24).
+
+    `permanent_reason` is `authentication failed` or `host key verification failed`. The hooks that run a
+    recipe report it to the scheduler, which parks the watch at once and makes no trial polls; a human fixes
+    the credential or known_hosts, then runs `watchglass enable`.
+    """
+
+    def __init__(
+        self,
+        argv: Sequence[str] | str,
+        returncode: int,
+        stderr: str,
+        permanent_reason: str,
+    ) -> None:
+        self.argv = argv
+        self.returncode = returncode
+        self.stderr = stderr
+        self.permanent_reason = permanent_reason
+        shown = argv if isinstance(argv, str) else " ".join(argv)
+        tail = stderr.strip().splitlines()[-5:]
+        detail = f"; stderr: {' | '.join(tail)}" if tail else ""
+        super().__init__(f"command exited {returncode}: {shown}{detail}")
+
+
+def _failed_command(argv: Sequence[str] | str, returncode: int, stderr: str) -> CommandFailed | TransferAuthFailed:
+    """The error for a failed local scp/sftp run: a permanent rejection, or an ordinary CommandFailed."""
+    reason = rejection_reason(stderr)
+    if reason is not None:
+        return TransferAuthFailed(argv, returncode, stderr, reason)
+    return CommandFailed(argv, returncode, stderr)
 
 
 @dataclass(frozen=True)
@@ -592,7 +626,7 @@ def _sftp_reget(source: Endpoint, part: Path, options: ScpOptions, report: Repor
     if returncode != 0:
         if _reget_source_missing(stderr, source):
             raise _withdrawn(source, stderr)
-        raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
+        raise _failed_command(argv, returncode if returncode is not None else -1, stderr)
 
 
 def _sftp_reput(local: Path, target: Endpoint, options: ScpOptions, report: Report | None) -> None:
@@ -610,7 +644,7 @@ def _sftp_reput(local: Path, target: Endpoint, options: ScpOptions, report: Repo
     if timed_out:
         raise TransferFailed(f"sftp timed out after {format_duration(limit or 0)}: {local} -> {target.scp_arg()}")
     if returncode != 0:
-        raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
+        raise _failed_command(argv, returncode if returncode is not None else -1, stderr)
 
 
 def _run(
@@ -742,7 +776,7 @@ def copy(
     report: Report | None = None,
     warn: Callable[[str], None] | None = None,
 ) -> None:
-    """Copy one file with scp. Raises CommandFailed when scp fails; a remote source that is gone raises TransferMissing (a TransferFailed), and a transfer that cannot be attempted raises TransferFailed.
+    """Copy one file with scp. Raises CommandFailed when scp fails; a rejected credential or host key raises TransferAuthFailed (a TransferFailed with `permanent_reason`), a remote source that is gone raises TransferMissing (a TransferFailed), and a transfer that cannot be attempted raises TransferFailed.
 
     With `preserve_mtime`, scp's `-p` carries the source's times and mode bits. A destination that refuses the
     times (`set times:` in scp's stderr, as Windows' OpenSSH does after a pull whose bytes arrived) is a warning
@@ -777,7 +811,7 @@ def copy(
             return
         if src.remote and _source_missing(stderr, dst, src):
             raise _withdrawn(src, stderr)
-        raise CommandFailed(argv, returncode if returncode is not None else -1, stderr)
+        raise _failed_command(argv, returncode if returncode is not None else -1, stderr)
 
 
 def sha256_file(path: str | os.PathLike[str]) -> str:

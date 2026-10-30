@@ -128,7 +128,10 @@ def format_status(document: dict[str, Any], now: float) -> list[str]:
             lines.append(f"    {in_flight_text(entry['in_flight'], entry.get('transfer'), now=now)}")
         offline = entry.get("offline")
         if offline:
-            lines.append(f"    offline since {offline['since']}: {offline['reason']}")
+            detail = f"    offline since {offline['since']}: {offline['reason']}"
+            if offline.get("permanent"):
+                detail += " (permanent: no trial polls)"
+            lines.append(detail)
             if offline.get("last_failure"):
                 lines.append(f"    last failure: {offline['last_failure']}")
         if entry.get("config_error"):

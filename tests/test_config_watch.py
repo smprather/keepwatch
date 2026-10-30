@@ -24,6 +24,7 @@ def test_empty_config_gives_defaults(tmp_path):
     assert cfg.name == "w"
     assert (cfg.interval, cfg.check_timeout, cfg.action_timeout) == (60.0, 60.0, 60.0)
     assert cfg.max_failures == 5
+    assert cfg.max_auth_failures == 1
     assert cfg.retry_after is None
     assert cfg.enabled is True and cfg.initial_condition is False
     assert cfg.exit_codes == ExitCodes()
@@ -38,6 +39,7 @@ def test_full_config(tmp_path):
         retry_after = "1h"
         initial_condition = true
         max_failures = 3
+        max_auth_failures = 2
         python_dependencies = ["requests>=2.32"]
 
         [hooks]
@@ -56,6 +58,7 @@ def test_full_config(tmp_path):
     '''))
     assert cfg.interval == 30.0 and cfg.action_timeout == 900.0 and cfg.retry_after == 3600.0
     assert cfg.initial_condition is True and cfg.max_failures == 3
+    assert cfg.max_auth_failures == 2
     assert cfg.python_dependencies == ("requests>=2.32",)
     assert cfg.hooks["check"] == Command(shell="./check.sh")
     assert cfg.hooks["check"].to_argv() == platform.shell_argv("./check.sh")

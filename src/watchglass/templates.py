@@ -8,6 +8,7 @@ interval = "60s"
 # check_timeout = "60s"
 # action_timeout = "60s"
 # max_failures = 5
+# max_auth_failures = 1
 # retry_after = "1h"
 # python_dependencies = ["requests>=2.32"]
 
@@ -160,6 +161,7 @@ GLOBAL_CONFIG = '''# watchglass global config. Every key: watchglass docs config
 # check_timeout = "60s"
 # action_timeout = "60s"
 # max_failures = 5
+# max_auth_failures = 1
 # retry_after = "1h"
 # initial_condition = false
 

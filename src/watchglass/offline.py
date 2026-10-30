@@ -29,6 +29,7 @@ class OfflineMarker:
     since: str
     by_user: bool = False
     last_failure: str | None = None
+    permanent: bool = False  # a rejected credential/host key: no trial polls will ever succeed (issue 24)
 
     def since_epoch(self) -> float:
         try:
@@ -49,6 +50,7 @@ def read_offline(paths: Paths, watch: str) -> OfflineMarker | None:
             since=str(data["since"]),
             by_user=bool(data.get("by_user", False)),
             last_failure=data.get("last_failure"),
+            permanent=bool(data.get("permanent", False)),
         )
     except FileNotFoundError:
         return None

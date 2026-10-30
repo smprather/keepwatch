@@ -6,7 +6,7 @@ import pytest
 from portable import PY, literal
 from watchglass import observers
 from watchglass.config import load_global_config, load_watch_config
-from watchglass.offline import OfflineMarker, clear_offline, iso_time, write_offline
+from watchglass.offline import OfflineMarker, clear_offline, iso_time, read_offline, write_offline
 from watchglass.pollengine import PollEngine
 from watchglass.runner import Runner
 from watchglass.scheduler import WatchRunner
@@ -163,6 +163,62 @@ def test_a_full_queue_drops_the_oldest_with_a_warning(make_watch, runner_for):
     [dropped] = kinds(records, "observer.dropped")
     assert (dropped["level"], dropped["observer"], dropped["dropped"], dropped["cap"]) == ("WARNING", "feed", 1, 2)
     assert dropped["max_bytes"] == runner.events.max_bytes
+
+
+REJECTED_FEED = """
+import sys
+sys.stderr.write("u@host: Permission denied (publickey,password).\\n")
+sys.stderr.flush()
+sys.exit(255)
+"""
+TRANSIENT_FEED = """
+import sys
+sys.stderr.write("ssh: connect to host 10.0.0.1 port 22: Connection refused\\n")
+sys.stderr.flush()
+sys.exit(255)
+"""
+
+
+def test_a_rejected_observer_credential_parks_the_watch(xdg, make_watch, runner_for):
+    """Issue 24 through the observer path: a rejected ssh login must not be restarted forever either."""
+    watch_dir = make_watch(
+        "w", config=feed_config(), files={"watch.py": RECORDING_WATCH, "feed.py": REJECTED_FEED}
+    )
+    records = []
+    runner = runner_for(watch_dir, records, time.time)
+    runner.start()
+    try:
+        assert wait_for(lambda: read_offline(xdg, "w") is not None)
+        assert wait_for(lambda: kinds(records, "observer.rejected"))
+    finally:
+        runner.stop()
+        assert runner.join(20)
+    marker = read_offline(xdg, "w")
+    assert marker is not None and marker.permanent is True
+    assert marker.reason == "authentication failed; fix the credential, then: watchglass enable w"
+    rejected = kinds(records, "observer.rejected")[0]
+    assert rejected["level"] == "CRITICAL" and rejected["observer"] == "feed"
+    assert "Permission denied" in " ".join(rejected["stderr_tail"])
+    assert not kinds(records, "observer.restarting")  # the login is not attempted again
+    assert runner.seconds_until_due(time.time()) is None
+    assert runner.poll_once(time.time()) is None
+
+
+def test_a_transient_observer_failure_still_restarts(xdg, make_watch, runner_for):
+    """Only the rejection shapes are permanent; an outage keeps the observer's ordinary restart/backoff."""
+    watch_dir = make_watch(
+        "w", config=feed_config(), files={"watch.py": RECORDING_WATCH, "feed.py": TRANSIENT_FEED}
+    )
+    records = []
+    runner = runner_for(watch_dir, records, time.time)
+    runner.start()
+    try:
+        assert wait_for(lambda: kinds(records, "observer.restarting"))
+        assert not kinds(records, "observer.rejected")
+        assert read_offline(xdg, "w") is None
+    finally:
+        runner.stop()
+        assert runner.join(20)
 
 
 def test_observer_events_wake_the_running_watch(make_watch, runner_for):

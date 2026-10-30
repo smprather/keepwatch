@@ -153,6 +153,23 @@ def test_offline_beats_parked(xdg, make_watch):
     assert monitor_module.note_text(row) == ""
 
 
+def test_an_offline_permanent_rejection_says_enable_is_needed(xdg, make_watch):
+    """A rejected credential is not an outage: the note says no retry will help."""
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    publish(xdg, status_document(watches={"a": entry(next_poll=None)}))
+    write_offline(xdg, "a", OfflineMarker(
+        reason="authentication failed; fix the credential, then: watchglass enable a",
+        since=iso_time(time.time() - 100), permanent=True,
+    ))
+    monitor = Monitor(xdg, xdg.config_file)
+    with running(xdg):
+        monitor.refresh()
+        row = monitor.status().watches[0]
+    assert row.state == "offline"
+    assert row.offline is not None and row.offline["permanent"] is True
+    assert monitor_module.note_text(row) == "permanent: fix it, then watchglass enable"
+
+
 def test_invalid_watches_and_orphaned_state_get_rows(xdg, make_watch):
     make_watch("broken", config='[hooks]\ncheck = ["true"]\n')
     publish(xdg, status_document(invalid={"broken": "config.toml:4: unknown key 'x'"}, watches={}))

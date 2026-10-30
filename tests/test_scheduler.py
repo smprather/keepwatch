@@ -113,6 +113,89 @@ def test_disable_and_enable_through_marker_files(xdg, make_watch, runner_for):
     assert alerts == [("online", "w", "enabled by user")]
 
 
+def test_a_rejected_credential_parks_at_once_and_makes_no_trial_polls(xdg, make_watch, runner_for):
+    """Issue 24: a wrong password is permanent; retrying it burns lockout budget. One poll parks the watch."""
+    rejected = py('import sys; sys.stderr.write("Permission denied (publickey,password).\\n"); sys.exit(255)')
+    watch_dir = make_watch(
+        "w",
+        config=f'max_failures = 5\nretry_after = "10m"\n[hooks]\ncheck = ["true"]\non_true = {rejected}\n',
+    )
+    clock, records, alerts = Clock(), [], []
+    runner = runner_for(watch_dir, records, alerts, clock)
+    report = runner.poll_once(clock())
+    assert report.failed and report.permanent_reason == "authentication failed"
+    assert runner.state.rejections == 1 and runner.state.failures == 1
+    marker = read_offline(xdg, "w")
+    assert marker is not None and marker.permanent is True and marker.by_user is False
+    assert marker.reason == "authentication failed; fix the credential, then: watchglass enable w"
+    assert marker.last_failure is not None and "Permission denied" in marker.last_failure
+    (offline,) = events(records, "watch.offline")
+    assert offline["permanent"] is True and offline["level"] == "CRITICAL"
+    assert alerts == [("offline", "w", f"{marker.reason}; last: {marker.last_failure}")]
+
+    # No trial poll, ever, however long the watch waits: retrying cannot succeed.
+    clock.now += 10_000_000
+    assert runner.seconds_until_due(clock()) is None
+    assert runner.poll_once(clock()) is None
+    snap = runner.snapshot(clock())
+    assert snap["next_poll"] is None and snap["offline"]["permanent"] is True
+
+    # The permanent marker survives a restart: a fresh runner makes no trial polls either.
+    restarted = runner_for(watch_dir, [], [], clock)
+    assert restarted.offline is not None and restarted.offline.permanent is True
+    assert restarted.seconds_until_due(clock()) is None
+    assert restarted.poll_once(clock()) is None
+
+
+def test_a_rejected_credential_can_be_tolerated_or_disabled(xdg, make_watch, runner_for):
+    """max_auth_failures = 2 waits for the second rejection; 0 turns the immediate park off entirely."""
+    rejected = py('import sys; sys.stderr.write("Permission denied (publickey,password).\\n"); sys.exit(255)')
+
+    def make(limit):
+        return load_watch_config(
+            make_watch(
+                f"w{limit}",
+                config=(
+                    f'max_auth_failures = {limit}\nmax_failures = 5\nretry_after = "10m"\n'
+                    f'[hooks]\ncheck = ["true"]\non_true = {rejected}\n'
+                ),
+            )
+        )
+
+    clock = Clock()
+    twice = runner_for(make(2).watch_dir, [], [], clock)
+    twice.poll_once(clock())
+    assert read_offline(xdg, "w2") is None and twice.state.rejections == 1
+    clock.now += 60  # the ordinary backoff before the second poll
+    twice.poll_once(clock())
+    assert read_offline(xdg, "w2").permanent is True
+
+    clock = Clock()
+    off = runner_for(make(0).watch_dir, [], [], clock)
+    off.poll_once(clock())
+    assert read_offline(xdg, "w0") is None and off.state.rejections == 1
+
+
+def test_an_ordinary_failure_is_still_retried_normally(xdg, make_watch, runner_for):
+    """The classifier must not turn an outage into a permanent park."""
+    failing = py('import sys; sys.stderr.write("ssh: connect to host h port 22: Connection refused\\n"); sys.exit(255)')
+    watch_dir = make_watch(
+        "w",
+        config=f'max_failures = 2\nretry_after = "10m"\n[hooks]\ncheck = ["true"]\non_true = {failing}\n',
+    )
+    clock = Clock()
+    runner = runner_for(watch_dir, [], [], clock)
+    runner.poll_once(clock())
+    assert runner.state.rejections == 0 and read_offline(xdg, "w") is None
+    clock.now += 60
+    runner.poll_once(clock())
+    marker = read_offline(xdg, "w")
+    assert marker is not None and marker.permanent is False
+    assert marker.reason == "2 consecutive failed polls"
+    clock.now += 10 * 60
+    assert runner.seconds_until_due(clock()) is not None  # trial polls continue
+
+
 def test_offline_survives_restart(xdg, make_watch, runner_for):
     watch_dir = make_watch("w", config='[hooks]\ncheck = ["true"]\n')
     write_offline(xdg, "w", OfflineMarker(reason="5 consecutive failed polls", since=iso_time(1_000_000.0)))
