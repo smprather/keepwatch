@@ -79,6 +79,8 @@ remote = "me@linux1"
 remote_dir = "/home/me/Downloads"
 local_dir = 'C:/Users/me/Downloads'
 delete = false              # propagate the source's deletions
+settle = "30s"              # a file must be unchanged this long before it is copied;
+                            # 0 copies whatever is on disk now, including a file mid-download
 ignore = [".git", "__pycache__", "*.tmp"]
 mtime_tolerance = 2.0       # seconds; FAT and NTFS round mtimes to two
 ```
@@ -98,6 +100,25 @@ blocks rsync).
   (`reachable_host`/`reachable_port`, else `remote`/`port`; `reachable_timeout`). **No answer means unknown**: no
   failure, no backoff, the tree simply waits. A walk that could not read a subtree is `unknown` too, never a
   deletion — a partial view must not look like a source that lost files.
+- **`settle` is the knob for a folder something else writes to.** A file modified less than `settle` ago
+  (default `0`, which copies it immediately, even mid-download) is **deferred**: it is neither copied nor
+  treated as deleted, and the next poll looks again. Set it a little longer than the pause between writes —
+  `30s` for a download, hours for a recorder that flushes occasionally. Deferring is compatible with
+  `delete = true`: a synced file that is being rewritten is kept on both sides until it settles. It is not a
+  guarantee against a writer that pauses longer than the window and then continues.
+- **There is deliberately no `resume`.** sftp's `reput` assumes the remote partial is a prefix of the local
+  file; a mirror-owned destination cannot prove that when an upload was interrupted before it wrote a byte
+  (the file there may be a complete older version), and a marker or checksum would have to be written into the
+  mirrored tree. The supported way to avoid re-copying a growing file is `settle`; a failed push is retried by
+  the next diff.
+- **A file that changes while it is being copied is not recorded as synced.** The bytes that landed are not a
+  coherent snapshot of the current file, so it stays out of the checkpoint and the next poll copies it again
+  (with `settle`, that usually means waiting for the writer to finish). This is what makes a deferred file
+  converge rather than being reported current at an old size.
+- **Files are written in place**, as rsync does: scp truncates and rewrites the destination name, so a reader
+  there can see a partial file while a push runs. The checkpoint records only a complete, unchanged copy, but
+  if readers must never see a partial, mirror into a staging tree and move files there, or use the `pull`/`push`
+  recipes, which stage through `.NAME.part` and markers.
 - **pull** is driven by one live ssh connection running watchglass's remote watcher in tree mode: it reports the
   difference against the checkpoint (`files`, `dirs`, `gone`) and each of those wakes the watch. A file deleted on
   the source while watchglass was down is still reported when the connection returns, because the checkpoint is the

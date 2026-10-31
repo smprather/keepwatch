@@ -471,6 +471,37 @@ def poll(xdg, watch, state=None):
     return engine.poll(watch, state or WatchState(False))
 
 
+def test_settle_with_delete_keeps_a_synced_file_that_is_being_written(tmp_path):
+    """Issue 25, end to end: the file is in the checkpoint but inside settle, so it is not a deletion."""
+    tree(tmp_path, "a.txt")
+    ctx = FakeCtx(tmp_path, settings(tmp_path, delete=True, settle=60.0))
+    ctx.checkpoint("mirror").save(saved(["a.txt"]))
+    condition, payload = mirror.check(ctx)
+    assert condition is False
+    assert payload["deleted"] == [] and payload["copy"] == []
+    assert "a.txt" in mirror.files_of(ctx.checkpoint("mirror").value)
+
+
+def test_a_file_that_changes_during_its_copy_is_not_promoted(tmp_path, monkeypatch):
+    """Issue 26: recording the pre-copy stat would call a mixed/older upload synced; defer it instead."""
+    tree(tmp_path, "a.txt")
+    ctx = FakeCtx(tmp_path, settings(tmp_path))
+    _, payload = mirror.check(ctx)
+    ctx.payload = payload
+    original = ctx.transfer.push
+
+    def push_while_growing(path, remote_dir, **options):
+        result = original(path, remote_dir, **options)
+        Path(path).write_bytes(b"payload has grown")
+        return result
+
+    monkeypatch.setattr(ctx.transfer, "push", push_while_growing)
+    mirror.on_true(ctx)
+    assert "a.txt" not in mirror.files_of(ctx.checkpoint("mirror").value)
+    condition, payload = mirror.check(ctx)
+    assert condition is True and payload["copy"] == ["a.txt"]
+
+
 def test_a_real_push_copies_the_file_with_its_mtime_and_promotes(make_watch, server, tmp_path, xdg):
     """The end-to-end proof: a real poll, a real scp, and a checkpoint that then calls the tree level."""
     old = time.time() - 600

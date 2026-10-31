@@ -31,6 +31,20 @@ def test_a_path_the_walk_did_not_see_is_deleted():
     assert mirror.plan_push({}, set(), {"a.txt": [2, 10.0]}, set()).deleted == ("a.txt",)
 
 
+def test_an_unsettled_file_is_neither_copied_nor_deleted():
+    """Issue 25: a file inside settle is deferred, not evidence that the source lost it."""
+    plan = mirror.plan_push({}, set(), {"a.txt": [2, 10.0]}, set(), unsettled={"a.txt"})
+    assert plan.copy == ()
+    assert plan.deleted == ()
+
+
+def test_an_unsettled_file_is_not_copied_even_if_the_walk_reports_it():
+    """Defensive: the walk omits it, but a stale/other caller must not turn it into a copy either."""
+    plan = mirror.plan_push({"a.txt": [3, 20.0]}, set(), {"a.txt": [2, 10.0]}, set(), unsettled={"a.txt"})
+    assert plan.copy == ()
+    assert plan.deleted == ()
+
+
 def test_deleted_directories_are_reported_deepest_first():
     assert mirror.plan_push({}, set(), {}, {"a", "a/b"}).deleted == ("a/b", "a")
 
@@ -86,7 +100,7 @@ def test_walk_local_is_recursive_and_reports_relative_posix_paths(tmp_path):
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "a.txt").write_bytes(b"hello")
     (tmp_path / "b.txt").write_bytes(b"x")
-    files, dirs, problems = mirror.walk_local(tmp_path, (), 0.0)
+    files, dirs, problems, _ = mirror.walk_local(tmp_path, (), 0.0)
     assert sorted(files) == ["b.txt", "sub/a.txt"]
     assert files["sub/a.txt"][0] == 5
     assert dirs == {"sub"} and problems == []
@@ -98,15 +112,27 @@ def test_walk_local_prunes_ignored_names(tmp_path):
     (tmp_path / "keep").mkdir()
     (tmp_path / "keep" / "a.txt").write_bytes(b"x")
     (tmp_path / "skip.tmp").write_bytes(b"x")
-    files, dirs, _ = mirror.walk_local(tmp_path, (".git", "*.tmp"), 0.0)
+    files, dirs, _, _ = mirror.walk_local(tmp_path, (".git", "*.tmp"), 0.0)
     assert sorted(files) == ["keep/a.txt"]
     assert dirs == {"keep"}
 
 
 def test_walk_local_skips_a_file_still_being_written(tmp_path):
     (tmp_path / "fresh.txt").write_bytes(b"x")
-    files, _, _ = mirror.walk_local(tmp_path, (), 60.0, now=time.time())
+    files, _, _, unsettled = mirror.walk_local(tmp_path, (), 60.0, now=time.time())
     assert files == {}
+    assert unsettled == {"fresh.txt"}
+
+
+def test_walk_local_calls_an_unsettled_file_unsettled_not_gone(tmp_path):
+    """Issue 25: the walk must carry the third state (exists but not reported) to the diff."""
+    (tmp_path / "old.txt").write_bytes(b"x")
+    (tmp_path / "fresh.txt").write_bytes(b"x")
+    old = time.time() - 3600
+    os.utime(tmp_path / "old.txt", (old, old))
+    files, _, _, unsettled = mirror.walk_local(tmp_path, (), 60.0, now=time.time())
+    assert sorted(files) == ["old.txt"]
+    assert unsettled == {"fresh.txt"}
 
 
 def test_walk_local_reports_an_unreadable_subtree(tmp_path):
@@ -119,7 +145,7 @@ def test_walk_local_reports_an_unreadable_subtree(tmp_path):
         pytest.skip("needs a POSIX user that is not root")
     os.chmod(locked, 0)
     try:
-        files, _, problems = mirror.walk_local(tmp_path, (), 0.0)
+        files, _, problems, _ = mirror.walk_local(tmp_path, (), 0.0)
     finally:
         os.chmod(locked, 0o700)
     assert "ok.txt" in files
@@ -164,7 +190,7 @@ def test_walk_local_prunes_a_symlinked_directory(tmp_path):
     (tmp_path / "real").mkdir()
     (tmp_path / "real" / "a.txt").write_text("x")
     os.symlink(tmp_path / "real", tmp_path / "link")
-    files, dirs, problems = mirror.walk_local(tmp_path, (), 0.0)
+    files, dirs, problems, _ = mirror.walk_local(tmp_path, (), 0.0)
     assert problems == []
     assert dirs == {"real"}
     assert sorted(files) == ["real/a.txt"]

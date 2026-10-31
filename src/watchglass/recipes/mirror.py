@@ -77,18 +77,24 @@ def plan_push(
     state_dirs: Iterable[str],
     *,
     tolerance: float = TOLERANCE,
+    unsettled: Iterable[str] = (),
 ) -> Plan:
-    """Diff a local walk against the checkpoint: what to copy, what to create, what the source no longer has."""
+    """Diff a local walk against the checkpoint: what to copy, what to create, what the source no longer has.
+
+    `unsettled` are paths the walk deliberately withheld (a file modified inside `settle`): they exist, so
+    they are neither a copy nor a deletion. The caller defers them to a later poll (issue 25).
+    """
+    held = set(unsettled)
     dirs = set(live_dirs)
     copy = tuple(
         sorted(
             path
             for path, state in live_files.items()
-            if path not in state_files or _changed(state, state_files[path], tolerance)
+            if path not in held and (path not in state_files or _changed(state, state_files[path], tolerance))
         )
     )
     mkdir = tuple(sorted(dirs - set(state_dirs), key=_depth))
-    live = set(live_files) | dirs
+    live = (set(live_files) | dirs | held)
     deleted = tuple(sorted((set(state_files) | set(state_dirs)) - live, key=lambda path: (-_depth(path), path)))
     return Plan(mkdir=mkdir, copy=copy, deleted=deleted)
 
@@ -164,18 +170,21 @@ def dirs_of(document: Mapping[str, Any]) -> list[str]:
 
 def walk_local(
     root: Path, ignore: Sequence[str], settle: float, *, now: float | None = None
-) -> tuple[dict[str, list[float]], set[str], list[str]]:
+) -> tuple[dict[str, list[float]], set[str], list[str], set[str]]:
     """Walk `root` for the push direction: relative POSIX paths, ignored names pruned, symlinks skipped.
 
-    Returns (files {relative: [size, mtime]}, dirs {relative}, problems). A subtree that cannot be read is a
-    problem and never an absence: the check answers Unknown when the list is not empty.
+    Returns (files {relative: [size, mtime]}, dirs {relative}, problems, unsettled). A file modified inside
+    `settle` is *unsettled*: it exists but is deliberately not reported, so the diff must neither copy nor
+    delete it. A subtree that cannot be read is a problem and never an absence: the check answers Unknown
+    when the list is not empty.
     """
     files: dict[str, list[float]] = {}
     dirs: set[str] = set()
     problems: list[str] = []
+    unsettled: set[str] = set()
     wall = time.time() if now is None else now
     if not root.is_dir():
-        return files, dirs, [f"{root}: not a directory"]
+        return files, dirs, [f"{root}: not a directory"], unsettled
     for current, dirnames, filenames in os.walk(root, onerror=lambda exc: problems.append(_problem(exc))):
         relative_dir = os.path.relpath(current, root)
         prefix = "" if relative_dir == "." else relative_dir.replace(os.sep, "/") + "/"
@@ -198,9 +207,10 @@ def walk_local(
             if not stat.S_ISREG(info.st_mode):
                 continue
             if settle and wall - info.st_mtime < settle:
+                unsettled.add(prefix + name)
                 continue
             files[prefix + name] = [info.st_size, info.st_mtime]
-    return files, dirs, problems
+    return files, dirs, problems, unsettled
 
 
 def _problem(exc: OSError, path: str | None = None) -> str:
@@ -283,11 +293,20 @@ def check_push(ctx: Ctx) -> tuple[bool, dict[str, Any]]:
     host, port = reachable(settings)
     if not ctx.transfer.tcp_open(host, port, settings["reachable_timeout"]):
         raise Unknown(f"{host}:{port} is not reachable; the tree waits")
-    files, dirs, problems = walk_local(Path(settings["local_dir"]), settings["ignore"], settings["settle"])
+    files, dirs, problems, unsettled = walk_local(
+        Path(settings["local_dir"]), settings["ignore"], settings["settle"]
+    )
     if problems:
         raise Unknown("cannot read " + "; ".join(problems[:3]) + (" (and more)" if len(problems) > 3 else ""))
     document = ctx.checkpoint(CHECKPOINT).value or {}
-    plan = plan_push(files, dirs, files_of(document), dirs_of(document), tolerance=settings["mtime_tolerance"])
+    plan = plan_push(
+        files,
+        dirs,
+        files_of(document),
+        dirs_of(document),
+        tolerance=settings["mtime_tolerance"],
+        unsettled=unsettled,
+    )
     return (not plan.empty()), plan.as_dict()
 
 
@@ -348,13 +367,13 @@ def on_true_push(ctx: Ctx) -> None:
     files = files_of(document)
     dirs = set(dirs_of(document))
     options = transfer_options(settings)
-    pending: list[tuple[str, int]] = []
+    landed: list[tuple[str, int]] = []
     error: Exception | None = None
 
     def promote(force: bool = False) -> None:
-        if force or should_promote(pending):
+        if force or should_promote(landed):
             state.save(as_document(files, dirs))
-            pending.clear()
+            landed.clear()
 
     try:
         if plan.mkdir:
@@ -365,7 +384,7 @@ def on_true_push(ctx: Ctx) -> None:
         for index, relative in enumerate(plan.copy):
             source = Path(settings["local_dir"]) / relative
             try:
-                info = source.stat()  # recorded before the copy: a change during it is copied again next poll
+                before = source.stat()
             except OSError:
                 continue  # gone since the check
             if ctx.remaining <= 0:
@@ -386,8 +405,18 @@ def on_true_push(ctx: Ctx) -> None:
                 error = error or exc
                 ctx.log.warning("pushing %s failed (%s); the rest of the queue is still tried", relative, exc)
                 continue
-            files[relative] = [info.st_size, info.st_mtime]
-            pending.append((relative, info.st_size))
+            try:
+                after = source.stat()
+            except OSError:
+                ctx.log.warning("%s disappeared while it was being copied; the next poll sees it gone", relative)
+                continue
+            if (after.st_size, after.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+                # The bytes that landed are not a coherent snapshot of the current file. Recording this
+                # version would claim a mixed/older copy is synced; leave it out and copy it again next poll.
+                ctx.log.warning("%s changed while it was being copied; the next poll copies it again", relative)
+                continue
+            files[relative] = [after.st_size, after.st_mtime]
+            landed.append((relative, after.st_size))
             promote()
         if plan.deleted:
             lost_dirs = [path for path in plan.deleted if path in dirs]

@@ -473,7 +473,14 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
             "Two files whose sizes match and whose mtimes differ by no more than this are the same file "
             "(FAT and NTFS round mtimes to two seconds).",
         ),
-        Key("settle", "duration", 0.0, "Skip files modified this recently: 0 mirrors what is there now."),
+        Key(
+            "settle",
+            "duration",
+            0.0,
+            "A file modified this recently is deferred: it is neither copied nor treated as deleted. `0` copies "
+            "it even while it is still being written (a partial download is copied and then copied again as it "
+            "grows); set a value longer than the pause between writes to mirror a live folder.",
+        ),
         Key(
             "file_timeout",
             "duration",
