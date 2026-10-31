@@ -29,20 +29,25 @@ class _Server(asyncssh.SSHServer):
 
 
 class _CountingSftpServer(asyncssh.SFTPServer):
-    """The SFTP server the harness serves, remembering where every read started.
+    """The SFTP server the harness serves, remembering where every read and write started.
 
-    A resumed transfer's first read is at the partial file's size; a restart starts at zero, so a test can
-    tell them apart (see `resume` in the pull recipe).
+    A resumed transfer's first read/write is at the partial file's size; a restart starts at zero, so a test
+    can tell them apart (see `resume` in the pull and mirror recipes).
     """
 
-    def __init__(self, channel, *, chroot: str, reads: list[int]) -> None:
+    def __init__(self, channel, *, chroot: str, reads: list[int], writes: list[int]) -> None:
         # asyncssh annotates chroot as bytes; the harness has always passed str(self.root) and it works
         super().__init__(channel, chroot=cast(Any, chroot))
         self._reads = reads
+        self._writes = writes
 
     def read(self, file_obj, offset, size):
         self._reads.append(offset)
         return super().read(file_obj, offset, size)
+
+    def write(self, file_obj, offset, data):
+        self._writes.append(offset)
+        return super().write(file_obj, offset, data)
 
 
 class ScpServer:
@@ -50,6 +55,7 @@ class ScpServer:
         self.root = root
         self.chroot = chroot
         self.reads: list[int] = []  # every SFTP read offset served (see _CountingSftpServer)
+        self.writes: list[int] = []  # every SFTP write offset served
         self.client_key = workdir / "client_key"
         self.known_hosts = workdir / "known_hosts"
         self.port = 0
@@ -98,7 +104,9 @@ class ScpServer:
             authorized_client_keys=authorized,
             allow_scp=True,
             sftp_factory=(
-                (lambda channel: _CountingSftpServer(channel, chroot=str(self.root), reads=self.reads))
+                (lambda channel: _CountingSftpServer(
+                    channel, chroot=str(self.root), reads=self.reads, writes=self.writes
+                ))
                 if self.chroot
                 else asyncssh.SFTPServer
             ),

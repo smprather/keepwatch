@@ -27,6 +27,7 @@ At least one side must be remote. **Two remote endpoints** (copying linux1 → l
 | Python | Command hook | What it does |
 |---|---|---|
 | `ctx.transfer.copy(src, dst)` | `watchglass kit copy SRC DST` | One scp; nothing else. |
+| `ctx.transfer.upload(local, remote, resume=)` | — | Upload to one exact remote path with sftp's `put`; `resume=True` continues an existing partial with `reput`. The caller must have verified that the partial is a prefix of the local file (the `mirror` recipe does: hidden temp, remote sha256, then `os.replace`). |
 | `ctx.transfer.pull(remote, local_dir, size=, sha256=, on_conflict=)` | `watchglass kit pull REMOTE DIR [--size N] [--sha256 HEX] [--on-conflict …]` | Copies to `DIR/.NAME.part`, checks size and sha256 when given, then renames to `DIR/NAME`. A failed check deletes the part file, so a half or wrong file never appears under its real name. Returns / prints the final path. `resume = true` is refused without `protocol = "sftp"` and a `sha256`: sftp's `reget` is what continues the partial, and only the sha256 proves the resumed bytes are the file that was asked for. |
 | `ctx.transfer.push(path, remote_dir, marker=)` | `watchglass kit push PATH REMOTE_DIR [--marker sha256\|none]` | Uploads `NAME`, then, once that succeeded, `NAME.sha256` in `sha256sum` format. Returns / prints the remote path. |
 | `ctx.transfer.tcp_open(host, port=22, timeout=5)` | `watchglass kit tcp-open HOST [--port N]` | Whether the port accepts a TCP connection (exit 0 open, 1 closed). Allowed in a check. |

@@ -4,10 +4,12 @@ The batching and promotion cases use a fake ctx that captures the ssh command li
 test drives a real poll through the engine against the test scp server, so a file really lands with its mtime.
 """
 
+import hashlib
 import logging
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -37,6 +39,7 @@ class FakeTransfer(Transfer):
         self.fail = {str(name) for name in fail}
         self.pushes = []
         self.pulls = []
+        self.uploads = []
         self.probes = []  # (host, port, timeout) of every probe the recipe made
 
     def tcp_open(self, host, port=22, timeout=5.0):
@@ -48,6 +51,11 @@ class FakeTransfer(Transfer):
             raise TransferFailed(f"cannot push {Path(path).name}")
         self.pushes.append((str(path), remote_dir, {**options, "marker": marker, "resume": resume}))
         return f"{remote_dir}/{Path(path).name}"
+
+    def upload(self, path, remote, *, resume=False, **options):
+        if Path(path).name in self.fail:
+            raise TransferFailed(f"cannot upload {Path(path).name}")
+        self.uploads.append((str(path), remote, resume, options))
 
     def pull(self, remote, local_dir, *, size=None, sha256=None, on_conflict="skip-identical", resume=False, **options):
         name = str(remote).rsplit(":", 1)[-1].rsplit("/", 1)[-1]
@@ -148,6 +156,7 @@ def settings(tmp_path, **overrides):
         "settle": 0.0,
         "file_timeout": 0.0,
         "protocol": "scp",
+        "resume": False,
         "password_env": None,
         "password_mode": "askpass",
         "part_max_age": 7 * 86400.0,
@@ -500,6 +509,172 @@ def test_a_file_that_changes_during_its_copy_is_not_promoted(tmp_path, monkeypat
     assert "a.txt" not in mirror.files_of(ctx.checkpoint("mirror").value)
     condition, payload = mirror.check(ctx)
     assert condition is True and payload["copy"] == ["a.txt"]
+
+
+def test_a_resumable_push_continues_a_verified_prefix(tmp_path, monkeypatch):
+    data = b"payload"
+    tree(tmp_path, "a.txt", data=data)
+    ctx = FakeCtx(tmp_path, settings(tmp_path, resume=True, protocol="sftp"))
+    source = tmp_path / "tree" / "a.txt"
+    answers = iter([(3, hashlib.sha256(data[:3]).hexdigest()), (7, hashlib.sha256(data).hexdigest())])
+    monkeypatch.setattr(mirror, "_remote_hash", lambda *args, **kwargs: next(answers))
+    finals, removed = [], []
+    monkeypatch.setattr(
+        mirror, "_remote_finalize", lambda ctx, settings, temp, final: finals.append((temp, final))
+    )
+    monkeypatch.setattr(mirror, "_remote_remove", lambda *args: removed.append(args))
+    mirror._resumable_push(ctx, ctx.settings, source, "a.txt", mirror.transfer_options(ctx.settings), 60.0, source.stat())
+    assert ctx.transfer.uploads and ctx.transfer.uploads[0][2] is True
+    assert not removed
+    assert finals[0][1] == "/tree/a.txt"
+
+
+def test_a_resumable_push_restarts_when_the_prefix_changed(tmp_path, monkeypatch):
+    data = b"payload"
+    tree(tmp_path, "a.txt", data=data)
+    ctx = FakeCtx(tmp_path, settings(tmp_path, resume=True, protocol="sftp"))
+    source = tmp_path / "tree" / "a.txt"
+    answers = iter([(3, hashlib.sha256(b"XXX").hexdigest()), (7, hashlib.sha256(data).hexdigest())])
+    monkeypatch.setattr(mirror, "_remote_hash", lambda *args, **kwargs: next(answers))
+    removed = []
+    monkeypatch.setattr(mirror, "_remote_finalize", lambda *args: None)
+    monkeypatch.setattr(mirror, "_remote_remove", lambda *args: removed.append(args))
+    mirror._resumable_push(ctx, ctx.settings, source, "a.txt", mirror.transfer_options(ctx.settings), 60.0, source.stat())
+    assert removed
+    assert ctx.transfer.uploads and ctx.transfer.uploads[0][2] is False
+
+
+def test_a_resumable_push_finalizes_a_complete_temp_without_uploading(tmp_path, monkeypatch):
+    data = b"payload"
+    tree(tmp_path, "a.txt", data=data)
+    ctx = FakeCtx(tmp_path, settings(tmp_path, resume=True, protocol="sftp"))
+    source = tmp_path / "tree" / "a.txt"
+    monkeypatch.setattr(
+        mirror, "_remote_hash", lambda *args, **kwargs: (7, hashlib.sha256(data).hexdigest())
+    )
+    finals = []
+    monkeypatch.setattr(
+        mirror, "_remote_finalize", lambda ctx, settings, temp, final: finals.append((temp, final))
+    )
+    monkeypatch.setattr(mirror, "_remote_remove", lambda *args: None)
+    mirror._resumable_push(ctx, ctx.settings, source, "a.txt", mirror.transfer_options(ctx.settings), 60.0, source.stat())
+    assert not ctx.transfer.uploads
+    assert finals
+
+
+def test_a_resumable_push_discards_an_upload_that_does_not_verify(tmp_path, monkeypatch):
+    data = b"payload"
+    tree(tmp_path, "a.txt", data=data)
+    ctx = FakeCtx(tmp_path, settings(tmp_path, resume=True, protocol="sftp"))
+    source = tmp_path / "tree" / "a.txt"
+    answers = iter([None, (6, hashlib.sha256(b"wrong!").hexdigest())])
+    monkeypatch.setattr(mirror, "_remote_hash", lambda *args, **kwargs: next(answers))
+    removed = []
+    monkeypatch.setattr(mirror, "_remote_finalize", lambda *args: None)
+    monkeypatch.setattr(mirror, "_remote_remove", lambda *args: removed.append(args))
+    with pytest.raises(TransferFailed, match="did not verify"):
+        mirror._resumable_push(ctx, ctx.settings, source, "a.txt", mirror.transfer_options(ctx.settings), 60.0, source.stat())
+    assert removed
+    assert ctx.transfer.uploads and ctx.transfer.uploads[0][2] is False
+
+
+def test_uploading_path_is_a_hidden_temp_beside_the_target():
+    settings = {"remote_dir": "/tree"}
+    assert mirror.uploading_path(settings, "sub/a.bin") == (
+        "/tree/sub/.a.bin.watchglass-" + hashlib.sha256(b"sub/a.bin").hexdigest()[:8] + ".part"
+    )
+
+
+def test_a_source_that_grows_during_a_push_keeps_its_temp_and_resumes_next_poll(tmp_path, monkeypatch):
+    """Issue 26's case: the first upload is a coherent old version; the next poll continues it."""
+    data = b"payload"
+    grown = data + b" more"
+    tree(tmp_path, "a.txt", data=data)
+    ctx = FakeCtx(tmp_path, settings(tmp_path, resume=True, protocol="sftp"))
+    source = tmp_path / "tree" / "a.txt"
+    answers = iter([
+        None, (len(data), hashlib.sha256(data).hexdigest()),
+        (len(data), hashlib.sha256(data).hexdigest()), (len(grown), hashlib.sha256(grown).hexdigest()),
+    ])
+    monkeypatch.setattr(mirror, "_remote_hash", lambda *args, **kwargs: next(answers))
+    finals = []
+    monkeypatch.setattr(
+        mirror, "_remote_finalize", lambda ctx, settings, temp, final: finals.append((temp, final))
+    )
+    monkeypatch.setattr(mirror, "_remote_remove", lambda *args: None)
+    uploads = []
+    original = ctx.transfer.upload
+
+    def upload(path, remote, *, resume=False, **options):
+        uploads.append(resume)
+        original(path, remote, resume=resume, **options)
+        if len(uploads) == 1:
+            Path(path).write_bytes(grown)  # the writer appends during the first upload
+
+    monkeypatch.setattr(ctx.transfer, "upload", upload)
+    before = source.stat()
+    assert mirror._resumable_push(ctx, ctx.settings, source, "a.txt", mirror.transfer_options(ctx.settings), 60.0, before) is False
+    assert not finals
+    before = source.stat()
+    assert mirror._resumable_push(ctx, ctx.settings, source, "a.txt", mirror.transfer_options(ctx.settings), 60.0, before) is True
+    assert uploads == [False, True]
+    assert finals
+
+
+def test_a_rejected_resume_helper_login_keeps_its_permanent_classification(tmp_path, monkeypatch):
+    """Issue 24 through the resume helper: a rejected login must park, not be retried as a missing Python."""
+    ctx = FakeCtx(tmp_path, settings(tmp_path, resume=True, protocol="sftp"))
+
+    def run(*args, **kwargs):
+        raise CommandFailed(["ssh"], 255, "u@host: Permission denied (publickey,password).\n")
+
+    monkeypatch.setattr(ctx, "run", run)
+    with pytest.raises(CommandFailed) as caught:
+        mirror._remote_hash(ctx, ctx.settings, "/tree/x.part")
+    assert caught.value.permanent_reason == "authentication failed"
+
+
+def test_the_remote_helper_modes_round_trip(tmp_path, monkeypatch):
+    """The hash/finalize/remove options and JSON answers, without an ssh server (the helper runs locally)."""
+    data = b"payload"
+    temp = tmp_path / "temp.bin"
+    temp.write_bytes(data)
+    final = tmp_path / "final.bin"
+    ctx = FakeCtx(tmp_path, settings(tmp_path, resume=True, protocol="sftp"))
+
+    def run(argv, *, timeout=None, check=True, input=None, env=None, cwd=None):
+        completed = subprocess.run(
+            [sys.executable, "-u", "-"], input=(input or "").encode(), capture_output=True, timeout=timeout
+        )
+        if check and completed.returncode != 0:
+            raise CommandFailed(argv, completed.returncode, completed.stderr.decode("utf-8", "replace"))
+        return subprocess.CompletedProcess(argv, completed.returncode, completed.stdout.decode(), completed.stderr.decode())
+
+    monkeypatch.setattr(ctx, "run", run)
+    assert mirror._remote_hash(ctx, ctx.settings, str(temp)) == (7, hashlib.sha256(data).hexdigest())
+    mirror._remote_finalize(ctx, ctx.settings, str(temp), str(final))
+    assert final.read_bytes() == data and not temp.exists()
+    mirror._remote_remove(ctx, ctx.settings, str(final))
+    assert not final.exists()
+
+
+def test_on_true_push_with_resume_finalizes_and_promotes(tmp_path, monkeypatch):
+    data = b"payload"
+    tree(tmp_path, "a.txt", data=data)
+    ctx = FakeCtx(tmp_path, settings(tmp_path, resume=True, protocol="sftp"))
+    answers = iter([None, (7, hashlib.sha256(data).hexdigest())])
+    monkeypatch.setattr(mirror, "_remote_hash", lambda *args, **kwargs: next(answers))
+    finals = []
+    monkeypatch.setattr(
+        mirror, "_remote_finalize", lambda ctx, settings, temp, final: finals.append((temp, final))
+    )
+    monkeypatch.setattr(mirror, "_remote_remove", lambda *args: None)
+    _, payload = mirror.check(ctx)
+    ctx.payload = payload
+    mirror.on_true(ctx)
+    assert ctx.transfer.uploads and ctx.transfer.uploads[0][2] is False
+    assert finals and finals[0][1] == "/tree/a.txt"
+    assert mirror.files_of(ctx.checkpoint("mirror").value)["a.txt"][0] == 7
 
 
 def test_a_real_push_copies_the_file_with_its_mtime_and_promotes(make_watch, server, tmp_path, xdg):

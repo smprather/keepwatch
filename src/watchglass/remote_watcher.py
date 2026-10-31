@@ -33,6 +33,13 @@ a regular file directly in `dir` (resolved, never through a symlink) whose size 
 sha256, when the item carries one); prints
 {"event": "deleted" | "gone" | "changed" | "refused" | "failed", "path", "reason"?, "index"} per file, then
 {"event": "done"}.
+
+File-operation modes (used by the mirror's resumable push; one JSON line and exit):
+  {"mode": "hash", "path"}                         -> {"event": "hash", "size", "sha256"} |
+                                                       {"event": "missing" | "refused" | "failed", ...}
+  {"mode": "finalize", "path", "target"}           -> os.replace(path, target); {"event": "finalized"} |
+                                                       {"event": "missing" | "failed", ...}
+  {"mode": "remove", "path"}                        -> {"event": "removed" | "gone" | "failed", ...}
 Exit status: 0 when stdout is closed (watchglass went away), 2 for bad options, a missing directory or an
 error while scanning (the message goes to stderr).
 """
@@ -65,6 +72,8 @@ DEFAULTS = {
     "files": [],
     "expected_files": [],
     "expected_dirs": [],
+    "path": None,
+    "target": None,
 }
 SETTLE_STEP = 1.0  # rescan this often while a file is settling
 MIN_RESCAN = 0.5  # at most two scans a second, however many notifications arrive
@@ -557,6 +566,63 @@ def delete_files(options, output):
     return 0
 
 
+def hash_path(options, output):
+    """One file's size and sha256, for a mirror's resumable push (see the module docstring)."""
+    path = str(options["path"]).encode("utf-8", "surrogateescape")
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError:
+        output.send({"event": "missing"})
+        return 0
+    except OSError as exc:
+        output.send({"event": "failed", "reason": exc.strerror or str(exc)})
+        return 0
+    if not stat.S_ISREG(before.st_mode):
+        output.send({"event": "refused", "reason": "not a regular file"})
+        return 0
+    try:
+        digest = sha256_of(path, output, options["heartbeat"])
+        after = os.lstat(path)
+    except OSError as exc:
+        output.send({"event": "failed", "reason": exc.strerror or str(exc)})
+        return 0
+    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+        output.send({"event": "changed"})
+        return 0
+    output.send({"event": "hash", "size": after.st_size, "sha256": digest})
+    return 0
+
+
+def finalize_path(options, output):
+    """Atomically replace `target` with the uploaded temp (`os.replace`: one name, never a partial final)."""
+    path = str(options["path"]).encode("utf-8", "surrogateescape")
+    target = str(options["target"]).encode("utf-8", "surrogateescape")
+    try:
+        os.replace(path, target)
+    except FileNotFoundError:
+        output.send({"event": "missing"})
+        return 0
+    except OSError as exc:
+        output.send({"event": "failed", "reason": exc.strerror or str(exc)})
+        return 0
+    output.send({"event": "finalized"})
+    return 0
+
+
+def remove_path(options, output):
+    """Delete an abandoned temp file; a missing one is not an error."""
+    path = str(options["path"]).encode("utf-8", "surrogateescape")
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        output.send({"event": "gone"})
+    except OSError as exc:
+        output.send({"event": "failed", "reason": exc.strerror or str(exc)})
+    else:
+        output.send({"event": "removed"})
+    return 0
+
+
 def parse_options(text):
     try:
         given = json.loads(text)
@@ -569,12 +635,18 @@ def parse_options(text):
         raise ValueError("unknown option(s): " + ", ".join(unknown))
     options = dict(DEFAULTS)
     options.update(given)
-    if options["mode"] not in ("watch", "delete", "tree"):
-        raise ValueError("option 'mode' must be watch, delete or tree")
+    if options["mode"] not in ("watch", "delete", "tree", "hash", "finalize", "remove"):
+        raise ValueError("option 'mode' must be watch, delete, tree, hash, finalize or remove")
     if options["mode"] != "tree":
         tree_only = sorted(set(given) & set(TREE_ONLY))
         if tree_only:
             raise ValueError("option(s) need mode 'tree': " + ", ".join(tree_only))
+    if options["mode"] in ("hash", "finalize", "remove"):
+        if not options["path"]:
+            raise ValueError("option 'path' is required")
+        if options["mode"] == "finalize" and not options["target"]:
+            raise ValueError("option 'target' is required")
+        return options
     if not options["dir"]:
         raise ValueError("option 'dir' is required")
     return options
@@ -604,6 +676,13 @@ def main(argv):
     if options["mode"] == "delete":
         try:
             return delete_files(options, Output(sys.stdout))
+        except Closed:
+            silence_stdout()
+            return 0
+    if options["mode"] in ("hash", "finalize", "remove"):
+        operation = {"hash": hash_path, "finalize": finalize_path, "remove": remove_path}[options["mode"]]
+        try:
+            return operation(options, Output(sys.stdout))
         except Closed:
             silence_stdout()
             return 0

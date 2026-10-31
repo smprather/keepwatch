@@ -326,6 +326,11 @@ def sftp_reput_batch(local: Path, target: Endpoint) -> str:
     return f"reput {_quoted_for_sftp(str(local))} {_quoted_for_sftp(target.path)}\n"
 
 
+def sftp_put_batch(local: Path, target: Endpoint) -> str:
+    """The sftp batch that uploads `local` to `target`, replacing whatever is there."""
+    return f"put {_quoted_for_sftp(str(local))} {_quoted_for_sftp(target.path)}\n"
+
+
 def _set_times_only(stderr: str) -> bool:
     """Whether scp failed only on the times it sets after the data (the data itself arrived).
 
@@ -635,6 +640,24 @@ def _sftp_reput(local: Path, target: Endpoint, options: ScpOptions, report: Repo
     with tempfile.TemporaryDirectory(prefix="watchglass-sftp-", dir=_askpass_dir()) as work:
         batch = Path(work) / "reput.batch"
         batch.write_text(sftp_reput_batch(local, target), encoding="utf-8")
+        argv = sftp_argv(target, options, batch)
+        started = time.monotonic()
+        with _transfer_env(options) as env:
+            returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options)
+    if report is not None:
+        report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
+    if timed_out:
+        raise TransferFailed(f"sftp timed out after {format_duration(limit or 0)}: {local} -> {target.scp_arg()}")
+    if returncode != 0:
+        raise _failed_command(argv, returncode if returncode is not None else -1, stderr)
+
+
+def _sftp_put(local: Path, target: Endpoint, options: ScpOptions, report: Report | None) -> None:
+    """Upload `local` to `target` whole with sftp's put (the non-resuming side of `upload`)."""
+    limit = _deadline_limit(options, "sftp", f"{local} -> {target.scp_arg()}")
+    with tempfile.TemporaryDirectory(prefix="watchglass-sftp-", dir=_askpass_dir()) as work:
+        batch = Path(work) / "put.batch"
+        batch.write_text(sftp_put_batch(local, target), encoding="utf-8")
         argv = sftp_argv(target, options, batch)
         started = time.monotonic()
         with _transfer_env(options) as env:
@@ -1006,6 +1029,37 @@ def push(
     return target.scp_arg()
 
 
+def upload(
+    source: str | os.PathLike[str] | Endpoint,
+    destination: str | os.PathLike[str] | Endpoint,
+    *,
+    options: ScpOptions = ScpOptions(),
+    report: Report | None = None,
+    resume: bool = False,
+) -> None:
+    """Upload one local file to an exact remote path; with `resume`, continue an existing partial with sftp's reput.
+
+    This is the mirror's resumable primitive: `push` writes a marker and adds the file name to a directory,
+    while `upload` addresses the exact path and never renames. `resume` needs `protocol="sftp"` and assumes the
+    caller has verified that the remote partial is a prefix of this file (see `recipes/mirror.py`); it is not
+    a blind last-writer-wins upload.
+    """
+    src, dst = _endpoint(source), _endpoint(destination)
+    if src.remote:
+        raise ValueError(f"upload needs a local source, got {src.scp_arg()!r}")
+    if not dst.remote:
+        raise ValueError(f"upload needs a remote destination, got {dst.scp_arg()!r}")
+    local = Path(src.path)
+    if not local.is_file():
+        raise TransferFailed(f"{local} is not a file")
+    if options.protocol != "sftp":
+        raise ValueError("upload needs protocol='sftp': it addresses an exact path and resumes with sftp's reput")
+    if resume:
+        _sftp_reput(local, dst, options, report)
+    else:
+        _sftp_put(local, dst, options, report)
+
+
 def tcp_open(host: str, port: int = 22, timeout: float = 5.0) -> bool:
     """True when host:port accepts a TCP connection within `timeout` seconds."""
     try:
@@ -1068,6 +1122,23 @@ class Transfer:
         """Copy one file with scp; one side must be remote (user@host:path or scp://user@host:port/path)."""
         scp = self._options(options)
         copy(self._local(source), self._local(destination), options=scp, report=self._report, warn=self._warn)
+
+    def upload(
+        self,
+        path: str | os.PathLike[str],
+        remote: str,
+        *,
+        resume: bool = False,
+        **options: Any,
+    ) -> None:
+        """Upload one local file to an exact remote path; `resume=True` continues a partial with sftp's reput.
+
+        This is the primitive a resumable mirror uses; unlike `push`, it writes no marker and does not name a
+        directory. Only resume when the remote partial is known to be a prefix of this file (see
+        `watchglass docs recipes`); resume needs `protocol="sftp"`.
+        """
+        scp = self._options(options)
+        upload(self._local(path), remote, options=scp, report=self._report, resume=resume)
 
     def pull(
         self,

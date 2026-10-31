@@ -11,6 +11,8 @@ subtree answers Unknown, and a pull deletes only on a `gone` the watcher stated.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
+import json
 import os
 import shlex
 import stat
@@ -23,10 +25,11 @@ from typing import Any
 from watchglass.ctx import CommandFailed, Ctx, Unknown
 from watchglass.recipes import file_budget
 from watchglass.recipes.pull import cleanup_parts
-from watchglass.remote import ssh_run_argv
-from watchglass.transfer import TransferAuthFailed, TransferFailed
+from watchglass.remote import ssh_argv, ssh_run_argv, watcher_source
+from watchglass.transfer import TransferAuthFailed, TransferFailed, with_known_hosts
 
 CHECKPOINT = "mirror"
+HASH_CHUNK = 1024 * 1024
 TOLERANCE = 2.0  # seconds: FAT and NTFS round mtimes to two
 PROMOTE_FILES = 500  # entries landed since the last save ...
 PROMOTE_BYTES = 64 * 1024 * 1024  # ... or bytes of file, before the checkpoint is saved
@@ -354,6 +357,171 @@ def on_true(ctx: Ctx) -> None:
         on_true_push(ctx)
 
 
+def uploading_path(settings: Mapping[str, Any], relative: str) -> str:
+    """The remote temp a resumable push uploads to before `os.replace` onto the real name."""
+    parent = remote_path(settings, relative, parent=True)
+    if not parent.endswith("/"):
+        parent += "/"
+    name = relative.rsplit("/", 1)[-1]
+    token = hashlib.sha256(relative.encode("utf-8", "surrogateescape")).hexdigest()[:8]
+    return f"{parent}.{name}.watchglass-{token}.part"
+
+
+def _remote_messages(ctx: Ctx, settings: Mapping[str, Any], options: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Run the remote helper in `options`' mode and return its JSON messages (heartbeats included)."""
+    argv = ssh_argv(
+        str(settings["remote"]),
+        port=settings["port"],
+        identity=settings["identity"],
+        ssh_options=with_known_hosts(settings["ssh_options"], settings["known_hosts"]),
+        ssh_command=settings["ssh_command"],
+        remote_python=settings["remote_python"],
+    )
+    try:
+        completed = ctx.run(argv, input=watcher_source(options))
+    except CommandFailed as exc:
+        if exc.permanent_reason:
+            raise  # a rejected credential/host key: let the scheduler park the watch (issue 24)
+        raise TransferFailed(
+            f"{settings['remote']}: a resumable mirror needs Python 3.6+ on the destination for its helper "
+            f"(set remote_python, or turn resume off): {exc}"
+        ) from exc
+    messages = []
+    for line in completed.stdout.splitlines():
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(message, dict) and isinstance(message.get("event"), str):
+            messages.append(message)
+    return messages
+
+
+def _remote_hash(ctx: Ctx, settings: Mapping[str, Any], path: str) -> tuple[int, str] | None:
+    """(size, sha256) of the remote temp, or None when it does not exist."""
+    try:
+        for message in _remote_messages(ctx, settings, {"mode": "hash", "path": path, "heartbeat": 10.0}):
+            event = message["event"]
+            if event == "hash":
+                return int(message["size"]), str(message["sha256"])
+            if event == "missing":
+                return None
+            if event in ("failed", "refused", "changed"):
+                raise TransferFailed(f"hashing {path} on {settings['remote']} failed: {message.get('reason') or event}")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise TransferFailed(f"the remote helper sent a malformed hash answer for {path}: {exc}") from exc
+    raise TransferFailed(f"no hash answer from {settings['remote']} for {path}")
+
+
+def _remote_finalize(ctx: Ctx, settings: Mapping[str, Any], temp: str, final: str) -> None:
+    """Rename the verified temp onto the real name (os.replace: atomically, never a partial final)."""
+    for message in _remote_messages(
+        ctx, settings, {"mode": "finalize", "path": temp, "target": final}
+    ):
+        event = message["event"]
+        if event == "finalized":
+            return
+        if event in ("missing", "failed"):
+            raise TransferFailed(f"finalizing {final} on {settings['remote']} failed: {message.get('reason') or event}")
+    raise TransferFailed(f"no finalize answer from {settings['remote']} for {final}")
+
+
+def _remote_remove(ctx: Ctx, settings: Mapping[str, Any], path: str) -> None:
+    """Best-effort removal of an abandoned temp; a failure only means the next push overwrites it."""
+    try:
+        for message in _remote_messages(ctx, settings, {"mode": "remove", "path": path}):
+            event = message["event"]
+            if event == "heartbeat":
+                continue
+            if event == "failed":
+                ctx.log.warning("could not remove %s on %s: %s", path, settings["remote"], message.get("reason"))
+            return
+    except CommandFailed as exc:
+        if exc.permanent_reason:
+            raise
+        ctx.log.warning("could not remove %s on %s: %s", path, settings["remote"], exc)
+    except TransferFailed as exc:
+        ctx.log.warning("could not remove %s on %s: %s", path, settings["remote"], exc)
+
+
+def _hash_source(path: Path, prefix: int) -> tuple[int, str, str]:
+    """(size, sha256 of the first `prefix` bytes, sha256 of the whole file), read once.
+
+    The prefix hash proves that a remote partial is a prefix of the current file before `reput` continues it.
+    """
+    whole = hashlib.sha256()
+    head = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(HASH_CHUNK)
+            if not chunk:
+                break
+            if size < prefix:
+                head.update(chunk[: prefix - size])
+            whole.update(chunk)
+            size += len(chunk)
+    return size, head.hexdigest(), whole.hexdigest()
+
+
+def _resumable_push(
+    ctx: Ctx,
+    settings: Mapping[str, Any],
+    source: Path,
+    relative: str,
+    options: Mapping[str, Any],
+    budget: float,
+    before: os.stat_result,
+) -> bool:
+    """Upload one file through a verified remote temp, resuming only when the partial is a proven prefix.
+
+    Returns True when the temp was verified and renamed onto the real name. False when the source changed while
+    it was being copied: the verified temp is kept, so the next poll continues it instead of starting over.
+    """
+    final = remote_path(settings, relative)
+    temp = uploading_path(settings, relative)
+    proof = _remote_hash(ctx, settings, temp)
+    local_size, prefix_hash, full_hash = _hash_source(source, proof[0] if proof is not None else 0)
+    resume = False
+    if proof is not None:
+        remote_size, remote_hash = proof
+        if remote_size <= local_size and remote_hash == prefix_hash:
+            if remote_size == local_size and remote_hash == full_hash:
+                _remote_finalize(ctx, settings, temp, final)  # a previous attempt got it all
+                return True
+            resume = True
+        else:
+            # The temp is not a prefix of this version (rewritten, truncated, or larger): start over.
+            _remote_remove(ctx, settings, temp)
+    ctx.transfer.upload(
+        str(source),
+        f"{settings['remote']}:{temp}",
+        resume=resume,
+        deadline=time.time() + budget,
+        **options,
+    )
+    check = _remote_hash(ctx, settings, temp)
+    if check != (local_size, full_hash):
+        if check is not None:
+            _remote_remove(ctx, settings, temp)
+        shown = "missing" if check is None else f"{check[0]} bytes/{check[1][:12]}…"
+        raise TransferFailed(
+            f"{relative}: the uploaded copy did not verify "
+            f"({shown} vs {local_size}/{full_hash[:12]}…); it will be retried"
+        )
+    try:
+        after = source.stat()
+    except OSError:
+        after = None
+    if after is None or (after.st_size, after.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+        # The upload is a coherent snapshot of the old version; keep its temp so the next poll can continue it
+        # when the writer has appended, instead of re-uploading those bytes.
+        ctx.log.warning("%s changed while it was being copied; keeping the verified temp for the next poll", relative)
+        return False
+    _remote_finalize(ctx, settings, temp, final)
+    return True
+
+
 def on_true_push(ctx: Ctx) -> None:
     """Push the plan: directories, then each changed file, then deletions, promoting the checkpoint as work lands.
 
@@ -367,6 +535,7 @@ def on_true_push(ctx: Ctx) -> None:
     files = files_of(document)
     dirs = set(dirs_of(document))
     options = transfer_options(settings)
+    resumable = bool(settings["resume"])
     landed: list[tuple[str, int]] = []
     error: Exception | None = None
 
@@ -386,25 +555,35 @@ def on_true_push(ctx: Ctx) -> None:
             try:
                 before = source.stat()
             except OSError:
+                if resumable:
+                    _remote_remove(ctx, settings, uploading_path(settings, relative))
                 continue  # gone since the check
             if ctx.remaining <= 0:
                 error = error or TransferFailed("no time left for the rest of this queue (raise action_timeout)")
                 break
             budget = file_budget(ctx.remaining, len(plan.copy) - index, settings["file_timeout"])
             try:
-                ctx.transfer.push(
-                    str(source),
-                    f"{settings['remote']}:{remote_path(settings, relative, parent=True)}",
-                    marker="none",
-                    deadline=time.time() + budget,
-                    **options,
-                )
+                if resumable:
+                    finalized = _resumable_push(ctx, settings, source, relative, options, budget, before)
+                else:
+                    ctx.transfer.push(
+                        str(source),
+                        f"{settings['remote']}:{remote_path(settings, relative, parent=True)}",
+                        marker="none",
+                        deadline=time.time() + budget,
+                        **options,
+                    )
+                    finalized = True
             except TransferAuthFailed:
                 raise  # permanent: repeating it for the rest of the queue would only burn lockout budget
             except (CommandFailed, TransferFailed, OSError) as exc:
+                if isinstance(exc, CommandFailed) and exc.permanent_reason:
+                    raise  # a rejected login from the remote helper: park instead of trying the next file
                 error = error or exc
                 ctx.log.warning("pushing %s failed (%s); the rest of the queue is still tried", relative, exc)
                 continue
+            if not finalized:
+                continue  # the verified temp is kept; the next poll resumes it
             try:
                 after = source.stat()
             except OSError:
@@ -421,6 +600,11 @@ def on_true_push(ctx: Ctx) -> None:
         if plan.deleted:
             lost_dirs = [path for path in plan.deleted if path in dirs]
             lost_files = [path for path in plan.deleted if path not in lost_dirs]
+            if resumable and lost_files:
+                # An abandoned upload temp for a source that is gone is internal state, never user data.
+                temps = [uploading_path(settings, path) for path in lost_files]
+                for group in batches(temps):
+                    run_ssh(ctx, settings, "rm -f " + " ".join(shlex.quote(path) for path in group))
             if settings["delete"] and (lost_files or lost_dirs):
                 for group in batches(lost_files):
                     run_ssh(ctx, settings, "rm -f " + " ".join(shlex.quote(remote_path(settings, path)) for path in group))

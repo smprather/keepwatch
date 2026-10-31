@@ -46,6 +46,21 @@ def test_a_push_recipe_that_resumes_needs_sftp_and_a_marker(xdg, make_watch):
     assert watch.settings["resume"] is True
 
 
+def test_a_mirror_that_resumes_needs_sftp_and_the_push_direction(xdg, make_watch):
+    base = (
+        'recipe = "mirror"\n[settings]\ndirection = "push"\nremote = "u@host"\n'
+        'remote_dir = "/r"\nlocal_dir = "."\n'
+    )
+    with pytest.raises(ConfigError, match="protocol"):
+        load_watch_config(make_watch("mirror-scp", config=base + "resume = true\n"))
+    with pytest.raises(ConfigError, match="direction"):
+        load_watch_config(
+            make_watch("mirror-pull", config=base.replace('"push"', '"pull"') + 'protocol = "sftp"\nresume = true\n')
+        )
+    watch = load_watch_config(make_watch("mirror-sftp", config=base + 'protocol = "sftp"\nresume = true\n'))
+    assert watch.settings["resume"] is True
+
+
 def test_a_trial_delay_survives_a_long_outage():
     """The offline accordion must clamp, not overflow: a big failure count is an ordinary long outage."""
     from watchglass.scheduler import trial_delay

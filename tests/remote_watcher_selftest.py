@@ -400,6 +400,37 @@ class WatcherTests(unittest.TestCase):
         lines = [json.loads(line) for line in out.decode("ascii").splitlines()]
         self.assertEqual([(line["index"], line["event"]) for line in lines[:-1]], [(0, "deleted"), (1, "gone")])
 
+    def result(self, options):
+        code, out, err = self.run_once(options)
+        self.assertEqual(code, 0, err)
+        lines = [json.loads(line) for line in out.decode("ascii").splitlines()]
+        self.assertEqual(len(lines), 1, lines)
+        return lines[0]
+
+    def test_hash_mode_reports_the_size_and_sha256(self):
+        path = self.write("part.bin", b"hello")
+        result = self.result({"mode": "hash", "path": path})
+        self.assertEqual(result, {"event": "hash", "size": 5, "sha256": hashlib.sha256(b"hello").hexdigest()})
+
+    def test_hash_mode_reports_a_missing_file(self):
+        result = self.result({"mode": "hash", "path": os.path.join(self.dir, "never.bin")})
+        self.assertEqual(result, {"event": "missing"})
+
+    def test_finalize_mode_replaces_the_target(self):
+        target = self.write("final.bin", b"old")
+        temp = self.write("temp.bin", b"new")
+        result = self.result({"mode": "finalize", "path": temp, "target": target})
+        self.assertEqual(result, {"event": "finalized"})
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"new")
+        self.assertFalse(os.path.exists(temp))
+
+    def test_remove_mode_deletes_the_file_or_reports_it_gone(self):
+        path = self.write("part.bin")
+        self.assertEqual(self.result({"mode": "remove", "path": path}), {"event": "removed"})
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual(self.result({"mode": "remove", "path": path}), {"event": "gone"})
+
 
 class TreeTests(unittest.TestCase):
     """mode = "tree": a recursive walk against an expected state, with chunked deltas (issue 11)."""

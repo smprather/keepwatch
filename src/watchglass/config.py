@@ -489,6 +489,17 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
             "one slow file cannot starve the rest; a positive value caps every file harder.",
         ),
         Key("protocol", "str", "scp", "`scp` (classic; scp-only servers accept it) or `sftp`."),
+        Key(
+            "resume",
+            "bool",
+            False,
+            "Continue an interrupted push instead of re-uploading from zero: needs `protocol = \"sftp\"` and "
+            "`direction = \"push\"`. watchglass uploads to a hidden temp next to the target, verifies the temp's "
+            "sha256 on the destination before continuing it, and renames it into place only when the whole file "
+            "verifies. Needs Python 3.6+ and **key authentication** on the destination for watchglass's remote "
+            "helper (`password_env`/`password_mode` are not used by that helper; on a password-only destination "
+            "use `settle`); large files are hashed on both sides, so `action_timeout` may need raising.",
+        ),
         Key("password_env", "str", None, "Name of the environment variable holding the destination password."),
         Key(
             "password_mode",
@@ -660,6 +671,24 @@ def _recipe_settings(collector: _Collector, recipe: str, raw: Mapping[str, Any],
             )
     if recipe in ("mirror", "push"):
         _conpty_problems(collector, values)
+    if recipe == "mirror" and values["resume"]:
+        if values["protocol"] != "sftp":
+            collector.add(
+                'resume = true needs protocol = "sftp": scp cannot continue a partial upload, and the verified '\
+                "temp/rename path uses sftp",
+                key="resume",
+                table="settings",
+                topic="recipes",
+            )
+        if values["direction"] != "push":
+            collector.add(
+                'resume = true needs direction = "push": the tree watcher does not report a sha256 for a pull, '
+                "so a resumed download cannot be verified; `settle` defers a file still being written on the "
+                "source instead",
+                key="resume",
+                table="settings",
+                topic="recipes",
+            )
     if recipe == "push":
         if values["resume"]:
             if values["protocol"] != "sftp":

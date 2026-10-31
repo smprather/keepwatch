@@ -18,6 +18,7 @@ from watchglass.transfer import (
     pull,
     push,
     tcp_open,
+    upload,
 )
 
 pytestmark = pytest.mark.skipif(shutil.which("scp") is None, reason="needs OpenSSH scp")
@@ -65,6 +66,32 @@ def key_options(server, ssh_config, **extra):
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def test_upload_resumes_a_partial_remote_file(tmp_path, server, ssh_config):
+    """The mirror's resumable push: sftp reput starts where the temp file stopped, not at byte zero."""
+    data = bytes(range(256)) * 4000  # 1 MiB
+    (server.root / "part.bin").write_bytes(data[:300_000])
+    local = tmp_path / "part.bin"
+    local.write_bytes(data)
+    upload(local, REMOTE + "part.bin", options=key_options(server, ssh_config, protocol="sftp"), resume=True)
+    assert (server.root / "part.bin").read_bytes() == data
+    assert server.writes and server.writes[0] == 300_000
+
+
+def test_upload_without_resume_starts_over(tmp_path, server, ssh_config):
+    local = tmp_path / "part.bin"
+    local.write_bytes(b"new content")
+    (server.root / "part.bin").write_bytes(b"old content that is longer")
+    upload(local, REMOTE + "part.bin", options=key_options(server, ssh_config, protocol="sftp"))
+    assert (server.root / "part.bin").read_bytes() == b"new content"
+
+
+def test_upload_resume_needs_sftp(tmp_path, server, ssh_config):
+    local = tmp_path / "part.bin"
+    local.write_bytes(b"x")
+    with pytest.raises(ValueError, match="sftp"):
+        upload(local, REMOTE + "part.bin", options=key_options(server, ssh_config), resume=True)
 
 
 def test_push_with_a_password_writes_the_file_and_its_marker(tmp_path, server, ssh_config, monkeypatch):
