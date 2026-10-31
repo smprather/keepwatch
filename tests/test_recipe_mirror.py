@@ -562,20 +562,62 @@ def test_a_resumable_push_finalizes_a_complete_temp_without_uploading(tmp_path, 
     assert finals
 
 
-def test_a_resumable_push_discards_an_upload_that_does_not_verify(tmp_path, monkeypatch):
+def test_a_resumable_push_keeps_an_upload_that_does_not_match_the_snapshot(tmp_path, monkeypatch):
+    """A temp that is not the pre-upload snapshot may be a valid grown prefix; the next poll decides."""
     data = b"payload"
     tree(tmp_path, "a.txt", data=data)
     ctx = FakeCtx(tmp_path, settings(tmp_path, resume=True, protocol="sftp"))
     source = tmp_path / "tree" / "a.txt"
     answers = iter([None, (6, hashlib.sha256(b"wrong!").hexdigest())])
     monkeypatch.setattr(mirror, "_remote_hash", lambda *args, **kwargs: next(answers))
-    removed = []
-    monkeypatch.setattr(mirror, "_remote_finalize", lambda *args: None)
+    removed, finals = [], []
+    monkeypatch.setattr(mirror, "_remote_finalize", lambda *args: finals.append(args))
     monkeypatch.setattr(mirror, "_remote_remove", lambda *args: removed.append(args))
-    with pytest.raises(TransferFailed, match="did not verify"):
-        mirror._resumable_push(ctx, ctx.settings, source, "a.txt", mirror.transfer_options(ctx.settings), 60.0, source.stat())
-    assert removed
+    before = source.stat()
+    assert mirror._resumable_push(
+        ctx, ctx.settings, source, "a.txt", mirror.transfer_options(ctx.settings), 60.0, before
+    ) is False
+    assert not removed and not finals
     assert ctx.transfer.uploads and ctx.transfer.uploads[0][2] is False
+
+
+def test_a_temp_matching_the_grown_file_is_finalized_next_poll_without_reupload(tmp_path, monkeypatch):
+    """The upload read past the pre-upload snapshot: the temp is complete for the grown file; finalize it."""
+    data = b"payload"
+    grown = data + b" more"
+    tree(tmp_path, "a.txt", data=data)
+    ctx = FakeCtx(tmp_path, settings(tmp_path, resume=True, protocol="sftp"))
+    source = tmp_path / "tree" / "a.txt"
+    answers = iter([
+        None, (len(grown), hashlib.sha256(grown).hexdigest()),
+        (len(grown), hashlib.sha256(grown).hexdigest()),
+    ])
+    monkeypatch.setattr(mirror, "_remote_hash", lambda *args, **kwargs: next(answers))
+    finals, removed = [], []
+    monkeypatch.setattr(
+        mirror, "_remote_finalize", lambda ctx, settings, temp, final: finals.append((temp, final))
+    )
+    monkeypatch.setattr(mirror, "_remote_remove", lambda *args: removed.append(args))
+    uploads = []
+    original = ctx.transfer.upload
+
+    def upload(path, remote, *, resume=False, **options):
+        uploads.append(resume)
+        original(path, remote, resume=resume, **options)
+        Path(path).write_bytes(grown)  # the writer appends while the first upload runs
+
+    monkeypatch.setattr(ctx.transfer, "upload", upload)
+    before = source.stat()
+    assert mirror._resumable_push(
+        ctx, ctx.settings, source, "a.txt", mirror.transfer_options(ctx.settings), 60.0, before
+    ) is False
+    assert not finals and not removed
+    before = source.stat()
+    assert mirror._resumable_push(
+        ctx, ctx.settings, source, "a.txt", mirror.transfer_options(ctx.settings), 60.0, before
+    ) is True
+    assert uploads == [False]
+    assert finals and not removed
 
 
 def test_uploading_path_is_a_hidden_temp_beside_the_target():

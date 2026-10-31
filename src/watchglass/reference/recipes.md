@@ -109,8 +109,9 @@ blocks rsync).
   watchglass asks the destination for the temp's size and sha256 and compares that with the local prefix. A
   temp that is not a prefix (the writer rewrote or truncated the file) is discarded and the file is sent whole,
   so `reput` never appends to a different version. When the whole file verifies, the temp is renamed onto the
-  real name with `os.replace` (never a partial final). Large files are hashed on both sides, so raise
-  `action_timeout` when needed.
+  real name with `os.replace` (never a partial final). If the writer appends while the upload runs, the temp
+  may be longer than the pre-upload snapshot; it is kept and checked against the next poll's file, then
+  finalized or discarded. Large files are hashed on both sides, so raise `action_timeout` when needed.
 - **`settle` is the cheaper way to handle a growing file.** A file modified less than `settle` ago
   (default `0`, which copies it immediately, even mid-download) is **deferred**: it is neither copied nor
   treated as deleted, and the next poll looks again. Set it a little longer than the pause between writes —

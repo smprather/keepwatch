@@ -501,14 +501,17 @@ def _resumable_push(
         **options,
     )
     check = _remote_hash(ctx, settings, temp)
+    if check is None:
+        raise TransferFailed(f"{relative}: the uploaded temp disappeared before it could be verified; it will be retried")
     if check != (local_size, full_hash):
-        if check is not None:
-            _remote_remove(ctx, settings, temp)
-        shown = "missing" if check is None else f"{check[0]} bytes/{check[1][:12]}…"
-        raise TransferFailed(
-            f"{relative}: the uploaded copy did not verify "
-            f"({shown} vs {local_size}/{full_hash[:12]}…); it will be retried"
+        # The upload may have read past the pre-upload snapshot (the writer appended while it ran), or the
+        # bytes may be wrong. Keep the temp: the next poll hashes it against the then-current local prefix and
+        # either continues/finalizes it or discards it. Deleting it here would throw away a valid prefix.
+        ctx.log.warning(
+            "%s changed while it was being uploaded (%d bytes on the destination); keeping the temp for the "
+            "next poll to verify", relative, check[0],
         )
+        return False
     try:
         after = source.stat()
     except OSError:
