@@ -457,7 +457,7 @@ wheels = [
 
 [[package]]
 name = "watchglass"
-version = "2026.10.28"
+version = "2026.10.31"
 source = { editable = "." }
 dependencies = [
     { name = "pywinpty", marker = "sys_platform == 'win32'" },

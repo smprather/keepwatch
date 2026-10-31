@@ -1,6 +1,6 @@
 [project]
 name = "watchglass"
-version = "2026.10.28"
+version = "2026.10.31"
 description = "Poll conditions and run actions, from login onward."
 readme = "README.md"
 requires-python = ">=3.12"
